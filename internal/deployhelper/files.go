@@ -2,13 +2,10 @@ package deployhelper
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"syscall"
 )
 
@@ -42,8 +39,8 @@ func (h *Helper) checkDir(dir string) error {
 
 // openChecked открывает обычный файл без следования симлинкам и проверяет
 // владельца root и отсутствие записи для группы/прочих (по fstat открытого файла).
-func (h *Helper) openChecked(path string) (*os.File, error) {
-	f, err := h.openRegular(path, maxDebSize)
+func (h *Helper) openChecked(path string, limit int64) (*os.File, error) {
+	f, err := h.openRegular(path, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -80,53 +77,14 @@ func (h *Helper) openRegular(path string, limit int64) (*os.File, error) {
 	return f, nil
 }
 
-// SHA256Verifier сверяет sha256 файла с <path>.sha256 ("<hex>" или "<hex>  имя").
-type SHA256Verifier struct {
-	Owner func(os.FileInfo) (uint32, bool)
-}
-
-// Verify реализует Verifier.
-func (v SHA256Verifier) Verify(path string, f *os.File) error {
-	h := &Helper{Owner: v.Owner}
-	sf, err := h.openRegular(path+".sha256", 4096)
+// readChecked читает небольшой root-owned файл целиком (openChecked + лимит).
+func (h *Helper) readChecked(path string, limit int64) ([]byte, error) {
+	f, err := h.openChecked(path, limit)
 	if err != nil {
-		return fmt.Errorf("нет файла контрольной суммы: %w", err)
+		return nil, err
 	}
-	defer func() { _ = sf.Close() }()
-	if fi, err := sf.Stat(); err != nil || !h.rootOwned(fi) || fi.Mode().Perm()&0o022 != 0 {
-		return errors.New("файл контрольной суммы: владелец должен быть root, запись для группы/прочих запрещена")
-	}
-	want, err := readSum(sf)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-	hs := sha256.New()
-	if _, err := io.Copy(hs, f); err != nil {
-		return err
-	}
-	if got := hex.EncodeToString(hs.Sum(nil)); got != want {
-		return errors.New("sha256 пакета не совпадает с контрольной суммой")
-	}
-	return nil
-}
-
-func readSum(r io.Reader) (string, error) {
-	b, err := io.ReadAll(io.LimitReader(r, 4096))
-	if err != nil {
-		return "", err
-	}
-	f := strings.Fields(string(b))
-	if len(f) == 0 || len(f[0]) != 64 {
-		return "", errors.New("некорректный файл контрольной суммы")
-	}
-	s := strings.ToLower(f[0])
-	if _, err := hex.DecodeString(s); err != nil {
-		return "", errors.New("некорректный файл контрольной суммы")
-	}
-	return s, nil
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(io.LimitReader(f, limit))
 }
 
 func randName() (string, error) {

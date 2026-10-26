@@ -19,7 +19,6 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/api"
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/auth"
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/screens"
-	"github.com/vasyakrg/tgproxy-server/internal/server/web/views"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
 
@@ -34,6 +33,7 @@ type webState struct {
 	users   *auth.Users
 	auth    *auth.Auth
 	handler http.Handler
+	update  *updateState // периодическая проверка обновлений (nil — не запускается)
 }
 
 // ruleRecorder дополняет метрики прокси счётчиками по правилам доступа.
@@ -161,19 +161,19 @@ func (s *Server) wireWeb(cfg *config.ServerConfig) error {
 	svc := api.NewAccessService(s.st.AccessRules(), s.st.Audit(), s.logger, nil)
 	env := accessEnv{s}
 	screens.MountAccess(accessRouter{rt, refresh}, screens.AccessDeps{
-		Auth: a, Service: svc, Env: env, Bots: s.obs.top, ClientIP: s.checker.ClientIP, Logger: s.logger})
+		Auth: a, Service: svc, Env: env, Bots: s.obs.top, ClientIP: s.checker.ClientIP, Logger: s.logger,
+	})
 	rt.SetOverview(protected(screens.NewOverview(screens.OverviewDeps{
 		Shell: rt, Stats: s.obs.hq, Agents: s.reg, Events: outboxEvents{s.st.Outbox()}, Live: liveInflight{s.obs.inflight},
-		ServerVersion: buildinfo.Version, Log: s.logger})))
+		ServerVersion: buildinfo.Version, Log: s.logger,
+	})))
 	rt.Mount("GET /errors", protected(screens.NewErrors(screens.ErrorsDeps{
-		Shell: rt, Source: s.obs.hq, Agents: s.reg, Log: s.logger})))
+		Shell: rt, Source: s.obs.hq, Agents: s.reg, Log: s.logger,
+	})))
 	agentsAPI := s.mountAgents(rt, a, cfg)
-	for _, st := range []struct{ path, title, nav, when string }{
-		{"/system", "Система", views.NavSystem, "M6"},
-	} {
-		rt.Mount("GET "+st.path, protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rt.Render(w, r, http.StatusOK, rt.Meta(r, st.title, st.nav), views.ComingSoon(st.title, "", st.when))
-		})))
+	sysAPI, sysState, err := s.mountSystem(rt, a, users, cfg)
+	if err != nil {
+		return err
 	}
 
 	apiMux := http.NewServeMux()
@@ -183,9 +183,10 @@ func (s *Server) wireWeb(cfg *config.ServerConfig) error {
 	(&api.StatsAPI{Stats: s.obs.hq, Agents: s.reg, Live: liveInflight{s.obs.inflight}, Log: s.logger}).Routes(apiMux, protected)
 	(&api.ErrorsAPI{Source: s.obs.hq, Log: s.logger}).Routes(apiMux, protected)
 	agentsAPI(apiMux, protected)
+	sysAPI(apiMux, protected)
 	rt.Mount("/api/v1/", apiMux)
 
-	s.web = &webState{users: users, auth: a, handler: rt}
+	s.web = &webState{users: users, auth: a, handler: rt, update: sysState}
 	return nil
 }
 
@@ -210,7 +211,11 @@ func (s *Server) runWeb(ctx context.Context) (wait func()) {
 		return func() {}
 	}
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		s.web.update.run(ctx, s)
+	}()
 	go func() {
 		defer wg.Done()
 		if err := s.web.users.Watch(ctx); err != nil {
@@ -286,7 +291,10 @@ func (s *Server) mountAgents(rt *web.Router, a *auth.Auth, cfg *config.ServerCon
 	acfg := api.AgentsConfig{
 		Agents: s.reg, Drainer: s.reg, Weight: s.reg, Audit: s.st.Audit(), Logger: s.logger,
 	}
-	deps := screens.AgentsDeps{Auth: a, ServerVersion: buildinfo.Version, ClientIP: s.checker.ClientIP, Logger: s.logger}
+	deps := screens.AgentsDeps{
+		Auth: a, ServerVersion: buildinfo.Version, ClientIP: s.checker.ClientIP, Logger: s.logger,
+		Rollout: func() *screens.RolloutHandle { return s.rolloutUI.Load() },
+	}
 	if p := s.pki; p != nil {
 		acfg.Rotator, acfg.Remover, acfg.Reverse = p.rotator, p.remover, p.pool
 		acfg.Mode = api.TransportModeSetter{Agents: s.st.Agents(), Refs: s.reg, Transport: s.tr, Refresh: s.reg.Refresh}
@@ -315,4 +323,39 @@ func (s *Server) mountAgents(rt *web.Router, a *auth.Auth, cfg *config.ServerCon
 			(&api.EnrollAPI{Service: deps.Enroll, ClientIP: s.checker.ClientIP, Log: s.logger}).Routes(mux, w)
 		}
 	}
+}
+
+// botIDOf — публичная часть токена бота (до «:»); сам токен в UI не попадает.
+func botIDOf(token string) string {
+	id, _, _ := strings.Cut(token, ":")
+	return id
+}
+
+// mountSystem подключает экран «Система» (обновление сервера и уведомления) и возвращает
+// функцию монтирования его JSON API.
+func (s *Server) mountSystem(rt *web.Router, a *auth.Auth, users *auth.Users, cfg *config.ServerConfig) (
+	func(*http.ServeMux, func(http.Handler) http.Handler), *updateState, error,
+) {
+	upd, err := s.wireUpdate(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	ncfg := api.NotificationsConfig{
+		Toggles: s.obs.toggles, Admins: users, Audit: s.st.Audit(), Outbox: s.st.Outbox(), Logger: s.logger,
+	}
+	if s.obs.notifier != nil {
+		ncfg.Sender, ncfg.BotID = s.obs.notifier, botIDOf(cfg.Notify.BotToken.Reveal())
+		if s.obs.deliv != nil {
+			ncfg.Wake = s.obs.deliv.Wake
+		}
+	}
+	nsvc := api.NewNotificationsService(ncfg)
+	screens.MountSystem(rt, screens.SystemDeps{
+		Auth: a, Update: upd.svc, Notify: nsvc, ClientIP: s.checker.ClientIP, Logger: s.logger,
+	})
+	return func(mux *http.ServeMux, wrap func(http.Handler) http.Handler) {
+		w := api.Wrap(wrap)
+		(&api.SystemAPI{Service: upd.svc, ClientIP: s.checker.ClientIP, Log: s.logger}).Routes(mux, w)
+		(&api.NotificationsAPI{Service: nsvc, ClientIP: s.checker.ClientIP, Log: s.logger}).Routes(mux, w)
+	}, upd, nil
 }

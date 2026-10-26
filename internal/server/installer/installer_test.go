@@ -2,6 +2,7 @@ package installer
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
@@ -13,9 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"aead.dev/minisign"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/vasyakrg/tgproxy-server/internal/config"
+	"github.com/vasyakrg/tgproxy-server/internal/release/verify"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
 
@@ -26,11 +29,16 @@ func successCommands(sudo string) []string {
 		"[admin] /usr/bin/sha256sum TMP",
 		"[admin] /usr/bin/dpkg-query -W '-f=${db:Status-Abbrev}' tgproxy",
 		"[admin] " + s("/usr/bin/dpkg -i TMP"),
-		"[admin] /usr/bin/rm -f TMP",
 		"[admin] /usr/bin/id -u tgproxy-deploy",
 		"[admin] " + s("/usr/sbin/useradd --system --create-home --home-dir /var/lib/tgproxy-deploy --shell /bin/sh --user-group --password '*' tgproxy-deploy"),
-		"[admin] " + s("/usr/bin/install -d -m 0755 -o root -g root /var/lib/tgproxy/packages"),
+		"[admin] " + s("/usr/bin/install -d -m 0755 -o root -g root /var/cache/tgproxy/packages"),
 		"[admin] " + s("/usr/bin/install -d -m 0730 -o root -g tgproxy-deploy /var/lib/tgproxy-incoming"),
+		// Копия релиза в доверенный кэш хоста: три файла в incoming + deploy-helper stage.
+		"[admin] " + s("/usr/bin/install -D -m 0600 -o root -g root TMP INC"),
+		"[admin] " + s("/usr/bin/install -D -m 0600 -o root -g root TMP INC.checksums"),
+		"[admin] " + s("/usr/bin/install -D -m 0600 -o root -g root TMP INC.minisig"),
+		"[admin] " + s("/usr/bin/tgproxy deploy-helper stage INC 1.4.1"),
+		"[admin] /usr/bin/rm -f TMP TMP TMP",
 		"[admin] " + s("/usr/bin/install -d -m 0700 -o tgproxy-deploy -g tgproxy-deploy /var/lib/tgproxy-deploy/.ssh"),
 		"[admin] " + s("/usr/bin/install -D -m 0600 -o tgproxy-deploy -g tgproxy-deploy TMP /var/lib/tgproxy-deploy/.ssh/authorized_keys"),
 		"[admin] /usr/bin/rm -f TMP",
@@ -47,6 +55,7 @@ func successCommands(sudo string) []string {
 		"[admin] /usr/bin/rm -f TMP",
 		"[admin] " + s("/usr/bin/tgproxy config validate --mode agent -c /etc/tgproxy/agent.yaml"),
 		"[tgproxy-deploy] sudo -n /usr/bin/tgproxy deploy-helper unit enable",
+		"[tgproxy-deploy] sudo -n /usr/bin/tgproxy deploy-helper unit enable-update",
 		"[tgproxy-deploy] sudo -n /usr/bin/tgproxy deploy-helper unit is-active",
 	}
 }
@@ -217,7 +226,7 @@ func TestRollbackOnCertStepFailure(t *testing.T) {
 	if st.State != store.InstallRolledBack || !strings.Contains(st.Error, "boom") {
 		t.Fatalf("status %+v", st)
 	}
-	want := successCommands("sudo -n ")[:17] // до csr включительно
+	want := successCommands("sudo -n ")[:21] // до csr включительно
 	want = append(want,
 		"[admin] sudo -n /usr/bin/rm -f /etc/tgproxy/tls/agent.key /etc/tgproxy/tls/agent.crt /etc/tgproxy/tls/ca.crt", // шаг 4
 		"[admin] sudo -n /usr/bin/rm -f /etc/sudoers.d/tgproxy-deploy",                                                 // шаг 3
@@ -511,17 +520,48 @@ func TestUnsafeStateAfterWrongAdminAuth(t *testing.T) {
 	}
 }
 
-func TestSHA256MismatchFailsUpload(t *testing.T) {
-	t.Run("подписанный список", func(t *testing.T) {
-		e := newEnv(t, func(c *Config) {
-			c.ExpectedSHA256 = func(string) (string, bool) { return strings.Repeat("a", 64), true }
-		})
+func TestSignatureAndSHA256Checks(t *testing.T) {
+	t.Run("чужая подпись — на хост ничего не уходит", func(t *testing.T) {
+		e := newEnv(t)
+		_, other, _ := minisign.GenerateKey(rand.Reader)
+		writeRelease(t, e.pkgDir, "1.5.0", other, map[string]string{"amd64": "deb-body-1.5.0"})
 		_, st := e.install(e.request())
-		if st.State != store.InstallRolledBack || !strings.Contains(st.Error, "sha256") {
+		if st.State != store.InstallRolledBack || !strings.Contains(st.Error, "подпись") {
 			t.Fatalf("status %+v", st)
 		}
 		if len(e.host.commands()) != 1 { // только dpkg --print-architecture
 			t.Fatalf("cmds %v", e.cmdLines())
+		}
+	})
+	t.Run("изменён 1 байт deb", func(t *testing.T) {
+		e := newEnv(t)
+		p := filepath.Join(e.pkgDir, "1.4.1", "tgproxy_1.4.1_amd64.deb")
+		if err := os.WriteFile(p, []byte("deb-body-1.4.2"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, st := e.install(e.request())
+		if st.State != store.InstallRolledBack || !strings.Contains(st.Error, "sha256") {
+			t.Fatalf("status %+v", st)
+		}
+		if len(e.host.commands()) != 1 {
+			t.Fatalf("cmds %v", e.cmdLines())
+		}
+	})
+	t.Run("нет подписи в кэше", func(t *testing.T) {
+		e := newEnv(t)
+		_ = os.Remove(filepath.Join(e.pkgDir, "1.4.1", "checksums.txt.minisig"))
+		_, st := e.install(e.request())
+		if st.State != store.InstallRolledBack || !strings.Contains(st.Error, "minisig") {
+			t.Fatalf("status %+v", st)
+		}
+	})
+	t.Run("версия ниже min_version", func(t *testing.T) {
+		e := newEnv(t, func(c *Config) {
+			c.Verifier = verify.Verifier{Keys: c.Verifier.(verify.Verifier).Keys, MinVersion: "2.0.0"}
+		})
+		_, st := e.install(e.request())
+		if st.State != store.InstallRolledBack || !strings.Contains(st.Error, "min_version") && !strings.Contains(st.Error, "ниже") {
+			t.Fatalf("status %+v", st)
 		}
 	})
 	t.Run("на хосте", func(t *testing.T) {
@@ -532,16 +572,19 @@ func TestSHA256MismatchFailsUpload(t *testing.T) {
 			t.Fatalf("status %+v", st)
 		}
 	})
-	t.Run("известный хеш принят", func(t *testing.T) {
-		sum, _ := hashFile(filepath.Join(newEnv(t).pkgDir, "tgproxy_1.4.1_amd64.deb"))
-		e := newEnv(t, func(c *Config) {
-			c.ExpectedSHA256 = func(string) (string, bool) { return sum, true }
-		})
-		_, st := e.install(e.request())
-		if st.State != store.InstallDone {
-			t.Fatalf("status %+v", st)
-		}
-	})
+}
+
+func TestStageFailureRollsBackAndCleansIncoming(t *testing.T) {
+	e := newEnv(t)
+	e.host.failOn = map[string]string{"deploy-helper stage": "stage failed"}
+	_, st := e.install(e.request())
+	if st.State != store.InstallRolledBack || !strings.Contains(st.Error, "stage failed") {
+		t.Fatalf("status %+v", st)
+	}
+	lines := strings.Join(e.cmdLines(), "\n")
+	if !strings.Contains(lines, "rm -f INC INC.checksums INC.minisig") {
+		t.Fatalf("incoming не вычищен:\n%s", lines)
+	}
 }
 
 func TestNoPackageForArch(t *testing.T) {
@@ -689,7 +732,7 @@ func TestSlowSubscriberDropped(t *testing.T) {
 
 func TestNewValidatesConfig(t *testing.T) {
 	e := newEnv(t)
-	base := Config{Store: e.st, CA: e.ca, Health: e.health, ServerKey: e.serverKey, PackagesDir: e.pkgDir}
+	base := Config{Store: e.st, CA: e.ca, Health: e.health, ServerKey: e.serverKey, PackagesDir: e.pkgDir, Verifier: e.verifier}
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("пустой конфиг принят")
 	}
@@ -697,6 +740,11 @@ func TestNewValidatesConfig(t *testing.T) {
 	c.PackagesDir = ""
 	if _, err := New(c); err == nil {
 		t.Fatal("без PackagesDir принят")
+	}
+	c = base
+	c.Verifier = nil
+	if _, err := New(c); err == nil {
+		t.Fatal("без Verifier принят")
 	}
 	c = base
 	c.RemoteTmpDir = "tmp/../x"

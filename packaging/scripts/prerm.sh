@@ -7,8 +7,8 @@ systemd_running() { [ -d /run/systemd/system ] && command -v systemctl >/dev/nul
 case "$1" in
 remove|deconfigure)
     if systemd_running; then
-        systemctl disable --now tgproxy-update.path tgproxy-server.service tgproxy-agent.service >/dev/null 2>&1 || true
-        systemctl stop tgproxy-update.service >/dev/null 2>&1 || true
+        systemctl disable --now tgproxy-update-server.path tgproxy-update-agent.path tgproxy-server.service tgproxy-agent.service >/dev/null 2>&1 || true
+        systemctl stop tgproxy-update-server.service tgproxy-update-agent.service >/dev/null 2>&1 || true
     fi
     ;;
 upgrade|failed-upgrade) ;;

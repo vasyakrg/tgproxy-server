@@ -39,6 +39,7 @@ type Agent struct {
 	mgr      *manager
 	connOpts []ConnectorOption
 	saveConn func(path string, mode config.AgentMode, serverURL string) error
+	upd      selfUpdater // самообновление (selfupdate.go)
 
 	transport *http.Transport
 	proxy     *proxy

@@ -23,6 +23,8 @@ type Store interface {
 	Enrollments() EnrollmentRepo
 	Errors() ErrorEventRepo
 	InstallJobs() InstallJobRepo
+	Settings() SettingsRepo
+	Rollouts() RolloutRepo
 	Close() error
 }
 
@@ -162,4 +164,13 @@ type InstallJobRepo interface {
 	AppendEvent(ctx context.Context, e InstallJobEvent) (InstallJobEvent, error)
 	// Events — события с ID > afterID по возрастанию.
 	Events(ctx context.Context, jobID string, afterID int64) ([]InstallJobEvent, error)
+}
+
+// SettingsRepo — настройки, меняемые из UI (ключ → значение), например переключатели уведомлений.
+type SettingsRepo interface {
+	// Get — ErrNotFound, если ключа нет.
+	Get(ctx context.Context, key string) (string, error)
+	Set(ctx context.Context, key, value string) error
+	// List — все пары ключ-значение.
+	List(ctx context.Context) (map[string]string, error)
 }

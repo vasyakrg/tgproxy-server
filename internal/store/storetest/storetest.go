@@ -39,6 +39,8 @@ func Run(t *testing.T, factory Factory) {
 		{"Enrollments", testEnrollments},
 		{"ErrorEvents", testErrorEvents},
 		{"InstallJobs", testInstallJobs},
+		{"Settings", testSettings},
+		{"Rollouts", testRollouts},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {
@@ -889,5 +891,91 @@ func testInstallJobs(t *testing.T, s store.Store) {
 	none, _ := r.Events(ctx, "other", 0)
 	if len(none) != 0 {
 		t.Fatalf("other %+v", none)
+	}
+}
+
+func testSettings(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	r := s.Settings()
+	_, err := r.Get(ctx, "notify.events")
+	is(t, err, store.ErrNotFound)
+	ok(t, r.Set(ctx, "notify.events", "a"))
+	ok(t, r.Set(ctx, "other", "x"))
+	ok(t, r.Set(ctx, "notify.events", "b"))
+	v, err := r.Get(ctx, "notify.events")
+	ok(t, err)
+	if v != "b" {
+		t.Fatalf("value = %q, want b", v)
+	}
+	all, err := r.List(ctx)
+	ok(t, err)
+	if len(all) != 2 || all["other"] != "x" || all["notify.events"] != "b" {
+		t.Fatalf("list = %v", all)
+	}
+	is(t, r.Set(ctx, "", "v"), store.ErrInvalid)
+}
+
+func testRollouts(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	r := s.Rollouts()
+	_, err := r.Active(ctx)
+	is(t, err, store.ErrNotFound)
+	_, err = r.Latest(ctx)
+	is(t, err, store.ErrNotFound)
+	_, err = r.Get(ctx, "r1")
+	is(t, err, store.ErrNotFound)
+	is(t, r.Create(ctx, store.Rollout{ID: "r1"}, nil), store.ErrInvalid)
+
+	o := store.Rollout{ID: "r1", Version: "1.2.0", BatchSize: 2, Canary: 1, State: store.RolloutRunning, Actor: "admin"}
+	steps := []store.RolloutStep{
+		{AgentID: "b", Seq: 2, Phase: store.PhaseBatch, State: store.StepPending},
+		{AgentID: "a", Seq: 1, Phase: store.PhaseCanary, State: store.StepPending},
+	}
+	is(t, r.Create(ctx, o, []store.RolloutStep{{AgentID: "a", State: store.StepPending}}), store.ErrInvalid)
+	ok(t, r.Create(ctx, o, steps))
+	is(t, r.Create(ctx, o, nil), store.ErrConflict)
+	other := o
+	other.ID = "r2"
+	is(t, r.Create(ctx, other, nil), store.ErrConflict) // уже есть активная
+
+	got, err := r.Active(ctx)
+	ok(t, err)
+	if got.ID != "r1" || got.Version != "1.2.0" || got.BatchSize != 2 || got.Canary != 1 || got.CreatedAt.IsZero() || got.FinishedAt != nil || got.Actor != "admin" {
+		t.Fatalf("active %+v", got)
+	}
+	st, err := r.Steps(ctx, "r1")
+	ok(t, err)
+	if len(st) != 2 || st[0].AgentID != "a" || st[1].AgentID != "b" || st[0].Phase != store.PhaseCanary {
+		t.Fatalf("steps %+v", st)
+	}
+	ok(t, r.SetStep(ctx, "r1", "a", store.StepRunning, "1.1.0", ""))
+	ok(t, r.SetStep(ctx, "r1", "a", store.StepFailed, "", "boom"))
+	is(t, r.SetStep(ctx, "r1", "ghost", store.StepDone, "", ""), store.ErrNotFound)
+	is(t, r.SetStep(ctx, "r1", "a", "", "", ""), store.ErrInvalid)
+	st, _ = r.Steps(ctx, "r1")
+	if st[0].State != store.StepFailed || st[0].FromVersion != "1.1.0" || st[0].Error != "boom" || st[1].State != store.StepPending {
+		t.Fatalf("steps after update %+v", st)
+	}
+
+	ok(t, r.SetState(ctx, "r1", store.RolloutStopping, ""))
+	got, _ = r.Active(ctx)
+	if got.State != store.RolloutStopping || got.FinishedAt != nil {
+		t.Fatalf("stopping %+v", got)
+	}
+	ok(t, r.SetState(ctx, "r1", store.RolloutFailed, "canary a"))
+	is(t, r.SetState(ctx, "nope", store.RolloutDone, ""), store.ErrNotFound)
+	is(t, r.SetState(ctx, "r1", "", ""), store.ErrInvalid)
+	_, err = r.Active(ctx)
+	is(t, err, store.ErrNotFound)
+	got, _ = r.Get(ctx, "r1")
+	if got.State != store.RolloutFailed || got.Error != "canary a" || got.FinishedAt == nil {
+		t.Fatalf("failed %+v", got)
+	}
+
+	ok(t, r.Create(ctx, other, nil)) // после завершения можно новую
+	latest, err := r.Latest(ctx)
+	ok(t, err)
+	if latest.ID != "r2" {
+		t.Fatalf("latest %+v", latest)
 	}
 }

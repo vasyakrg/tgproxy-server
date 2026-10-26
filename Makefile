@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build generate test test-race lint vuln snapshot deb dev-certs dev-setup run-server run-agent run-agent2 redis-up dev-target-up dev-target-down dev-packages vendor-verify deploy
+.PHONY: help build generate test test-race lint vuln snapshot deb dev-certs dev-setup run-server run-agent run-agent2 redis-up dev-target-up dev-target-down dev-keys build-dev dev-packages vendor-verify deploy release-dry
 
 help: ## Список целей
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -37,6 +37,10 @@ snapshot: ## goreleaser snapshot (архивы + deb в dist/, без подпи
 
 deb: ## Только deb (linux/amd64) в dist/, без архивов и подписи
 	goreleaser release --snapshot --clean --skip=sign,archive
+
+release-dry: ## Полный dry-run релиза без подписи/публикации + smoke deb (нужен docker)
+	goreleaser release --snapshot --clean --skip=publish,sign
+	@if [ "$$(docker info --format '{{.Architecture}}')" = x86_64 ]; then packaging/ci/smoke.sh dist/tgproxy_*_amd64.deb; else echo "arm64-хост: smoke на нативно собранном deb (amd64-deb из dist не установить)"; packaging/ci/smoke.sh; fi
 
 dev-certs: build ## CA в dev/data/tgproxy.db (KEK + `pki init`) и сертификаты dev-агентов local, local2 в dev/tls (идемпотентно)
 	@mkdir -p dev/data dev/tls
@@ -70,9 +74,16 @@ dev-target-up: bin/tgproxy-linux ## Поднять sshd-debian (debian:12+system
 dev-target-down: ## Остановить sshd-debian и nat-agent
 	docker compose -f dev/docker-compose.yml rm -sf sshd-debian nat-agent
 
-dev-packages: ## Собрать deb под архитектуру docker и положить в dev/data/packages (кэш установщика)
-	@mkdir -p dev/data/packages
-	cp "$$(packaging/ci/native-deb.sh)" dev/data/packages/
+dev-keys: ## Dev-ключ minisign в dev/data/minisign.{key,pub} (gitignored, идемпотентно); НЕ для релиза
+	@go run ./scripts/devsign keygen --dir dev/data
+
+build-dev: dev-keys ## Как build, но с вшитым dev-pubkey (release.pubKeysCSV) — только для локального стенда
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS) -X $(MODULE)/internal/release.pubKeysCSV=$$(go run ./scripts/devsign pubkey --dir dev/data)" -o bin/tgproxy ./cmd/tgproxy
+
+dev-packages: dev-keys ## Собрать deb (с dev-pubkey) под архитектуру docker, подписать dev-ключом → dev/data/packages/<v>/ (кэш установщика)
+	@rm -rf dev/data/packages && mkdir -p dev/data/packages
+	@deb="$$(TGPROXY_PUBKEYS="$$(go run ./scripts/devsign pubkey --dir dev/data)" packaging/ci/native-deb.sh)" && \
+		go run ./scripts/devsign sign --key dev/data/minisign.key --out dev/data/packages "$$deb"
 
 vendor-verify: ## Проверить sha256 вендорных ассетов
 	@cd web/static/vendor && \

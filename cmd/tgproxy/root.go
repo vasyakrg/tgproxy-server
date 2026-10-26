@@ -28,6 +28,7 @@ func newRootCmd() *cobra.Command {
 		newTOTPCmd(),
 		newVersionCmd(),
 		newDeployHelperCmd(),
+		newUpdateCmd(),
 	)
 	return root
 }

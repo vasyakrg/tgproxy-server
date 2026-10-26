@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release # required reviewers + секреты MINISIGN_SECRET_KEY, MINISIGN_PASSWORD
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Проверка публичного ключа (ОВ-4)
+        run: |
+          if ! grep -Eq '^RW[A-Za-z0-9+/=]{50,}$' packaging/minisign.pub; then
+            echo "::error file=packaging/minisign.pub::ОВ-4: в packaging/minisign.pub заглушка, а не публичный minisign-ключ. Сгенерируйте ключ (docs/release.md) и закоммитьте .pub."
+            exit 1
+          fi
+          # Публичный ключ вшивается в бинарь (release.pubKeysCSV): им проверяют релизы
+          # deploy-helper и `tgproxy update apply`.
+          echo "TGPROXY_PUBKEYS=$(grep -E '^RW[A-Za-z0-9+/=]{50,}$' packaging/minisign.pub | head -n1)" >> "$GITHUB_ENV"
+
+      - name: Установка minisign
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+
+      - run: go test -race ./...
+
+      - name: Приватный ключ во временный файл
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          [ -n "$MINISIGN_SECRET_KEY" ] || { echo "::error::секрет MINISIGN_SECRET_KEY пуст"; exit 1; }
+          umask 077
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
+          echo "MINISIGN_KEY_FILE=$RUNNER_TEMP/minisign.key" >> "$GITHUB_ENV"
+
+      # Сборка + подпись, БЕЗ публикации: сначала smoke deb.
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --skip=publish
+        env:
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+
+      - name: Удалить приватный ключ
+        if: always()
+        run: rm -f "$RUNNER_TEMP/minisign.key"
+
+      - name: Проверка подписи checksums.txt
+        run: minisign -Vm dist/checksums.txt -p packaging/minisign.pub -x dist/checksums.txt.minisig
+
+      - name: Проверка sha256 артефактов
+        working-directory: dist
+        run: sha256sum --check --ignore-missing checksums.txt
+
+      - name: Smoke deb (debian:12 + systemd)
+        run: packaging/ci/smoke.sh dist/tgproxy_*_amd64.deb
+
+      # OSS goreleaser не имеет `publish`; публикуем проверенные артефакты через gh.
+      - name: Публикация в GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes \
+            dist/*.deb dist/*.tar.gz dist/checksums.txt dist/checksums.txt.minisig

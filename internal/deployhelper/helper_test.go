@@ -3,6 +3,7 @@ package deployhelper
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -13,6 +14,10 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"aead.dev/minisign"
+
+	"github.com/vasyakrg/tgproxy-server/internal/release/verify"
 )
 
 type fixture struct {
@@ -25,12 +30,19 @@ type fixture struct {
 	arch     string
 	runErr   error
 	foreign  map[string]bool // пути, владелец которых «не root»
+	key      minisign.PrivateKey
+	other    minisign.PrivateKey
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	d := t.TempDir()
 	f := &fixture{t: t, pkgs: filepath.Join(d, "packages"), incoming: filepath.Join(d, "incoming"), arch: "amd64", foreign: map[string]bool{}}
+	pub, priv, err := minisign.GenerateKey(rand.Reader)
+	must(t, err)
+	_, other, err := minisign.GenerateKey(rand.Reader)
+	must(t, err)
+	f.key, f.other = priv, other
 	for _, p := range []string{f.pkgs, f.incoming} {
 		if err := os.Mkdir(p, 0o755); err != nil {
 			t.Fatal(err)
@@ -45,7 +57,7 @@ func newFixture(t *testing.T) *fixture {
 		}
 		return 0, true
 	}
-	h.Verifier = SHA256Verifier{Owner: h.Owner}
+	h.Verifier = verify.Verifier{Keys: []verify.PublicKey{pub}, MinVersion: "1.0.0"}
 	h.Run = func(_ context.Context, stdout, _ io.Writer, name string, args ...string) error {
 		f.calls = append(f.calls, name+" "+strings.Join(args, " "))
 		if name == dpkgPath && len(args) == 1 {
@@ -61,16 +73,6 @@ func (f *fixture) main(args ...string) int { return f.h.Main(context.Background(
 
 func sum(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
 
-func (f *fixture) writeIncoming(name string, body []byte, sha string) string {
-	f.t.Helper()
-	p := filepath.Join(f.incoming, name)
-	must(f.t, os.WriteFile(p, body, 0o600))
-	if sha != "" {
-		must(f.t, os.WriteFile(p+".sha256", []byte(sha+"  "+name+"\n"), 0o600))
-	}
-	return p
-}
-
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
@@ -78,14 +80,44 @@ func must(t *testing.T, err error) {
 	}
 }
 
-func (f *fixture) debFile(v string) string { return filepath.Join(f.pkgs, "tgproxy_"+v+"_amd64.deb") }
+func signWith(k minisign.PrivateKey, msg []byte) []byte {
+	r := minisign.NewReader(bytes.NewReader(msg))
+	_, _ = io.Copy(io.Discard, r)
+	return r.SignWithComments(k, "timestamp:1 file:checksums.txt", "t")
+}
 
-func (f *fixture) installed(v string, body []byte, sha string) {
+// relFiles — подписанный релиз версии v с телом deb.
+type relFiles struct {
+	deb, sums, sig []byte
+}
+
+func (f *fixture) release(v string, deb []byte) relFiles {
+	sums := []byte(sum(deb) + "  tgproxy_" + v + "_amd64.deb\n")
+	return relFiles{deb: deb, sums: sums, sig: signWith(f.key, sums)}
+}
+
+// writeIncoming кладёт три файла релиза в incoming и возвращает путь deb.
+func (f *fixture) writeIncoming(name string, r relFiles) string {
 	f.t.Helper()
-	must(f.t, os.WriteFile(f.debFile(v), body, 0o644))
-	if sha != "" {
-		must(f.t, os.WriteFile(f.debFile(v)+".sha256", []byte(sha+"  x\n"), 0o644))
-	}
+	p := filepath.Join(f.incoming, name)
+	must(f.t, os.WriteFile(p, r.deb, 0o600))
+	must(f.t, os.WriteFile(p+ChecksumsSuffix, r.sums, 0o600))
+	must(f.t, os.WriteFile(p+SigSuffix, r.sig, 0o600))
+	return p
+}
+
+func (f *fixture) verDir(v string) string { return filepath.Join(f.pkgs, v) }
+func (f *fixture) debFile(v string) string {
+	return filepath.Join(f.verDir(v), "tgproxy_"+v+"_amd64.deb")
+}
+
+// installed раскладывает релиз прямо в доверенный кэш (как после stage).
+func (f *fixture) installed(v string, r relFiles) {
+	f.t.Helper()
+	must(f.t, os.MkdirAll(f.verDir(v), 0o755))
+	must(f.t, os.WriteFile(f.debFile(v), r.deb, 0o644))
+	must(f.t, os.WriteFile(filepath.Join(f.verDir(v), "checksums.txt"), r.sums, 0o644))
+	must(f.t, os.WriteFile(filepath.Join(f.verDir(v), "checksums.txt.minisig"), r.sig, 0o644))
 }
 
 func TestNotRoot(t *testing.T) {
@@ -100,7 +132,7 @@ func TestUsageRejected(t *testing.T) {
 	f := newFixture(t)
 	bad := [][]string{
 		nil, {"bogus"}, {"install"}, {"install", "1.0.0", "x"}, {"stage", "a"}, {"stage", "a", "b", "c"},
-		{"unit"}, {"unit", "start", "x"}, {"unit", "link"}, {"unit", "mask"}, {"unit", "edit"}, {"unit", "START"}, {"unit", ""},
+		{"unit"}, {"unit", "start", "x"}, {"unit", "link"}, {"unit", "mask"}, {"unit", "edit"}, {"unit", "START"}, {"unit", ""}, {"unit", "enable-update", "x"}, {"unit", "disable-update"}, {"unit", "enable-update;"},
 		{"install", "1.0.0 /tmp/evil.deb"}, {"install", "../1.0.0"}, {"install", "1.0"}, {"install", "01.0.0"},
 		{"install", "1.0.0/../../x"}, {"install", "1.0.0;id"}, {"install", "1.0.0+build"}, {"install", "$(id)"},
 		{"install", "1.0.0-"}, {"install", "1.0.0-a b"}, {"install", ""}, {"install", "v1.0.0"},
@@ -122,6 +154,7 @@ func TestUnitVerbs(t *testing.T) {
 		"restart": "/usr/bin/systemctl restart tgproxy-agent", "status": "/usr/bin/systemctl status tgproxy-agent",
 		"is-active": "/usr/bin/systemctl is-active tgproxy-agent",
 		"enable":    "/usr/bin/systemctl enable --now tgproxy-agent", "disable": "/usr/bin/systemctl disable --now tgproxy-agent",
+		"enable-update": "/usr/bin/systemctl enable --now tgproxy-update-agent.path", "is-active-update": "/usr/bin/systemctl is-active tgproxy-update-agent.path",
 	}
 	for verb, cmd := range want {
 		f.calls = nil
@@ -137,8 +170,7 @@ func TestUnitVerbs(t *testing.T) {
 
 func TestInstallOK(t *testing.T) {
 	f := newFixture(t)
-	body := []byte("deb")
-	f.installed("1.4.1", body, sum(body))
+	f.installed("1.4.1", f.release("1.4.1", []byte("deb")))
 	if c := f.main("install", "1.4.1"); c != 0 {
 		t.Fatalf("code %d: %s", c, f.err.String())
 	}
@@ -146,61 +178,101 @@ func TestInstallOK(t *testing.T) {
 	if len(f.calls) != 2 || f.calls[1] != want {
 		t.Fatalf("calls %v", f.calls)
 	}
-	// prerelease тоже допустим
-	f.installed("0.0.1-snapshot", body, sum(body))
+	// prerelease выше нижней границы тоже допустим
+	f.h.Verifier = verify.Verifier{Keys: f.h.Verifier.(verify.Verifier).Keys}
+	f.installed("0.0.1-snapshot", f.release("0.0.1-snapshot", []byte("deb")))
 	if c := f.main("install", "0.0.1-snapshot"); c != 0 {
 		t.Fatalf("snapshot: %d %s", c, f.err.String())
 	}
 }
 
 func TestInstallRefusals(t *testing.T) {
-	body := []byte("deb")
 	cases := map[string]func(f *fixture){
-		"нет файла":      func(_ *fixture) {},
-		"нет sha256":     func(f *fixture) { f.installed("1.0.0", body, "") },
-		"чужой sha256":   func(f *fixture) { f.installed("1.0.0", body, sum([]byte("other"))) },
-		"мусор в sha256": func(f *fixture) { f.installed("1.0.0", body, "zz") },
-		"hex не hex": func(f *fixture) {
-			f.installed("1.0.0", body, strings.Repeat("g", 64))
+		"нет файла": func(_ *fixture) {},
+		"чужая подпись": func(f *fixture) {
+			r := f.release("1.0.0", []byte("deb"))
+			r.sig = signWith(f.other, r.sums)
+			f.installed("1.0.0", r)
+		},
+		"изменён 1 байт deb": func(f *fixture) {
+			r := f.release("1.0.0", []byte("deb"))
+			r.deb = []byte("dEb")
+			f.installed("1.0.0", r)
+		},
+		"checksums подменены под новый deb": func(f *fixture) {
+			r := f.release("1.0.0", []byte("deb"))
+			r.deb = []byte("evil")
+			r.sums = []byte(sum(r.deb) + "  tgproxy_1.0.0_amd64.deb\n")
+			f.installed("1.0.0", r)
+		},
+		"даунгрейд ниже установленной": func(f *fixture) {
+			f.h.Verifier = verify.Verifier{Keys: f.h.Verifier.(verify.Verifier).Keys, MinVersion: "2.0.0"}
+			f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
+		},
+		"нет подписи": func(f *fixture) {
+			f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
+			must(f.t, os.Remove(filepath.Join(f.verDir("1.0.0"), "checksums.txt.minisig")))
+		},
+		"нет checksums": func(f *fixture) {
+			f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
+			must(f.t, os.Remove(filepath.Join(f.verDir("1.0.0"), "checksums.txt")))
+		},
+		"deb не в checksums": func(f *fixture) {
+			r := f.release("1.0.0", []byte("deb"))
+			r.sums = []byte(sum(r.deb) + "  other.deb\n")
+			r.sig = signWith(f.key, r.sums)
+			f.installed("1.0.0", r)
+		},
+		"мусорная подпись": func(f *fixture) {
+			r := f.release("1.0.0", []byte("deb"))
+			r.sig = []byte("junk")
+			f.installed("1.0.0", r)
 		},
 		"симлинк": func(f *fixture) {
+			r := f.release("1.0.0", []byte("deb"))
+			f.installed("1.0.0", r)
 			realFile := filepath.Join(filepath.Dir(f.pkgs), "realFile.deb")
-			must(f.t, os.WriteFile(realFile, body, 0o644))
+			must(f.t, os.WriteFile(realFile, r.deb, 0o644))
+			must(f.t, os.Remove(f.debFile("1.0.0")))
 			must(f.t, os.Symlink(realFile, f.debFile("1.0.0")))
-			must(f.t, os.WriteFile(f.debFile("1.0.0")+".sha256", []byte(sum(body)), 0o644))
 		},
-		"не root владелец": func(f *fixture) {
-			f.installed("1.0.0", body, sum(body))
+		"не root владелец deb": func(f *fixture) {
+			f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
 			f.foreign[filepath.Base(f.debFile("1.0.0"))] = true
 		},
-		"sha256 не root": func(f *fixture) {
-			f.installed("1.0.0", body, sum(body))
-			f.foreign[filepath.Base(f.debFile("1.0.0"))+".sha256"] = true
+		"checksums не root": func(f *fixture) {
+			f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
+			f.foreign["checksums.txt"] = true
+		},
+		"подпись не root": func(f *fixture) {
+			f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
+			f.foreign["checksums.txt.minisig"] = true
 		},
 		"group-writable": func(f *fixture) {
-			f.installed("1.0.0", body, sum(body))
+			f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
 			must(f.t, os.Chmod(f.debFile("1.0.0"), 0o664))
 		},
-		"sha256 writable": func(f *fixture) {
-			f.installed("1.0.0", body, sum(body))
-			must(f.t, os.Chmod(f.debFile("1.0.0")+".sha256", 0o666))
-		},
 		"каталог — файл": func(f *fixture) {
-			must(f.t, os.Mkdir(f.debFile("1.0.0"), 0o755))
+			must(f.t, os.MkdirAll(f.debFile("1.0.0"), 0o755))
 		},
 		"fifo": func(f *fixture) {
+			must(f.t, os.MkdirAll(f.verDir("1.0.0"), 0o755))
 			must(f.t, syscall.Mkfifo(f.debFile("1.0.0"), 0o644))
 		},
 		"packages writable прочими": func(f *fixture) {
-			f.installed("1.0.0", body, sum(body))
+			f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
 			must(f.t, os.Chmod(f.pkgs, 0o777))
 		},
+		"каталог версии writable прочими": func(f *fixture) {
+			f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
+			must(f.t, os.Chmod(f.verDir("1.0.0"), 0o777))
+		},
 		"packages не root": func(f *fixture) {
-			f.installed("1.0.0", body, sum(body))
+			f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
 			f.foreign["packages"] = true
 		},
 		"packages симлинк": func(f *fixture) {
-			f.installed("1.0.0", body, sum(body))
+			f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
 			link := f.pkgs + "-link"
 			must(f.t, os.Symlink(f.pkgs, link))
 			f.h.PackagesDir = link
@@ -238,8 +310,7 @@ func TestInstallArchErrors(t *testing.T) {
 
 func TestInstallDpkgFailure(t *testing.T) {
 	f := newFixture(t)
-	body := []byte("deb")
-	f.installed("1.0.0", body, sum(body))
+	f.installed("1.0.0", f.release("1.0.0", []byte("deb")))
 	f.h.Run = func(_ context.Context, stdout, _ io.Writer, _ string, args ...string) error {
 		if len(args) == 1 {
 			_, _ = io.WriteString(stdout, "amd64")
@@ -255,7 +326,8 @@ func TestInstallDpkgFailure(t *testing.T) {
 func TestStageOK(t *testing.T) {
 	f := newFixture(t)
 	body := []byte("new-deb-body")
-	p := f.writeIncoming("up-1.deb", body, sum(body))
+	r := f.release("1.4.1", body)
+	p := f.writeIncoming("up-1.deb", r)
 	if c := f.main("stage", p, "1.4.1"); c != 0 {
 		t.Fatalf("code %d: %s", c, f.err.String())
 	}
@@ -263,78 +335,102 @@ func TestStageOK(t *testing.T) {
 	if err != nil || !bytes.Equal(got, body) {
 		t.Fatalf("deb: %q %v", got, err)
 	}
+	for n, want := range map[string][]byte{"checksums.txt": r.sums, "checksums.txt.minisig": r.sig} {
+		if b, err := os.ReadFile(filepath.Join(f.verDir("1.4.1"), n)); err != nil || !bytes.Equal(b, want) {
+			t.Fatalf("%s: %q %v", n, b, err)
+		}
+	}
 	if fi, _ := os.Stat(f.debFile("1.4.1")); fi.Mode().Perm() != 0o644 {
 		t.Fatalf("mode %v", fi.Mode())
 	}
-	if _, err := os.Stat(p); !os.IsNotExist(err) {
-		t.Fatal("входной файл не удалён")
-	}
-	ents, _ := os.ReadDir(f.pkgs)
-	for _, e := range ents {
-		if strings.HasPrefix(e.Name(), ".stage-") || strings.HasSuffix(e.Name(), ".new") {
-			t.Fatalf("мусор в packages: %s", e.Name())
+	for _, x := range []string{p, p + ChecksumsSuffix, p + SigSuffix} {
+		if _, err := os.Stat(x); !os.IsNotExist(err) {
+			t.Fatalf("входной файл %s не удалён", x)
 		}
 	}
-	// после stage install проходит проверку sha256
+	ents, _ := os.ReadDir(f.verDir("1.4.1"))
+	if len(ents) != 3 {
+		t.Fatalf("в каталоге версии лишнее: %v", ents)
+	}
+	// после stage install проходит повторную проверку
 	f.calls = nil
 	if c := f.main("install", "1.4.1"); c != 0 {
 		t.Fatalf("install после stage: %d %s", c, f.err.String())
+	}
+	// повторный stage той же версии идемпотентен
+	p = f.writeIncoming("up-2.deb", r)
+	if c := f.main("stage", p, "1.4.1"); c != 0 {
+		t.Fatalf("повторный stage: %d %s", c, f.err.String())
 	}
 }
 
 func TestStageRefusals(t *testing.T) {
 	body := []byte("body")
-	good := sum(body)
 	cases := map[string]func(f *fixture) []string{
 		"вне incoming": func(f *fixture) []string {
 			p := filepath.Join(f.pkgs, "x.deb")
 			must(f.t, os.WriteFile(p, body, 0o600))
-			must(f.t, os.WriteFile(p+".sha256", []byte(good), 0o600))
 			return []string{p, "1.0.0"}
 		},
-		"подкаталог": func(f *fixture) []string {
-			return []string{f.incoming + "/sub/x.deb", "1.0.0"}
-		},
+		"подкаталог": func(f *fixture) []string { return []string{f.incoming + "/sub/x.deb", "1.0.0"} },
 		"..": func(f *fixture) []string {
-			f.writeIncoming("x.deb", body, good)
+			f.writeIncoming("x.deb", f.release("1.0.0", body))
 			return []string{f.incoming + "/../incoming/x.deb", "1.0.0"}
 		},
 		"относительный": func(_ *fixture) []string { return []string{"x.deb", "1.0.0"} },
-		"плохое имя": func(f *fixture) []string {
-			return []string{f.incoming + "/a b.deb", "1.0.0"}
-		},
+		"плохое имя":    func(f *fixture) []string { return []string{f.incoming + "/a b.deb", "1.0.0"} },
 		"плохая версия": func(f *fixture) []string {
-			p := f.writeIncoming("x.deb", body, good)
-			return []string{p, "1.0.0/../x"}
+			return []string{f.writeIncoming("x.deb", f.release("1.0.0", body)), "1.0.0/../x"}
+		},
+		"чужая подпись": func(f *fixture) []string {
+			r := f.release("1.0.0", body)
+			r.sig = signWith(f.other, r.sums)
+			return []string{f.writeIncoming("x.deb", r), "1.0.0"}
+		},
+		"даунгрейд": func(f *fixture) []string {
+			f.h.Verifier = verify.Verifier{Keys: f.h.Verifier.(verify.Verifier).Keys, MinVersion: "3.0.0"}
+			return []string{f.writeIncoming("x.deb", f.release("1.0.0", body)), "1.0.0"}
+		},
+		"несовпадение sha256": func(f *fixture) []string {
+			r := f.release("1.0.0", body)
+			r.deb = []byte("bodz") // 1 байт
+			return []string{f.writeIncoming("x.deb", r), "1.0.0"}
+		},
+		"подписанный checksums другой версии": func(f *fixture) []string {
+			return []string{f.writeIncoming("x.deb", f.release("2.0.0", body)), "1.0.0"}
 		},
 		"симлинк": func(f *fixture) []string {
 			secret := filepath.Join(filepath.Dir(f.incoming), "secret")
 			must(f.t, os.WriteFile(secret, body, 0o600))
-			p := filepath.Join(f.incoming, "x.deb")
+			r := f.release("1.0.0", body)
+			p := f.writeIncoming("x.deb", r)
+			must(f.t, os.Remove(p))
 			must(f.t, os.Symlink(secret, p))
-			must(f.t, os.WriteFile(p+".sha256", []byte(good), 0o600))
 			return []string{p, "1.0.0"}
 		},
-		"симлинк sha256": func(f *fixture) []string {
-			p := f.writeIncoming("x.deb", body, "")
-			realFile := filepath.Join(filepath.Dir(f.incoming), "realFile.sha")
-			must(f.t, os.WriteFile(realFile, []byte(good), 0o600))
-			must(f.t, os.Symlink(realFile, p+".sha256"))
+		"симлинк checksums": func(f *fixture) []string {
+			r := f.release("1.0.0", body)
+			p := f.writeIncoming("x.deb", r)
+			realFile := filepath.Join(filepath.Dir(f.incoming), "realFile.sums")
+			must(f.t, os.WriteFile(realFile, r.sums, 0o600))
+			must(f.t, os.Remove(p+ChecksumsSuffix))
+			must(f.t, os.Symlink(realFile, p+ChecksumsSuffix))
 			return []string{p, "1.0.0"}
 		},
-		"нет sha256": func(f *fixture) []string {
-			return []string{f.writeIncoming("x.deb", body, ""), "1.0.0"}
+		"нет checksums": func(f *fixture) []string {
+			p := f.writeIncoming("x.deb", f.release("1.0.0", body))
+			must(f.t, os.Remove(p+ChecksumsSuffix))
+			return []string{p, "1.0.0"}
 		},
-		"неверная сумма": func(f *fixture) []string {
-			return []string{f.writeIncoming("x.deb", body, sum([]byte("other"))), "1.0.0"}
-		},
-		"мусорная сумма": func(f *fixture) []string {
-			return []string{f.writeIncoming("x.deb", body, "abc"), "1.0.0"}
+		"нет подписи": func(f *fixture) []string {
+			p := f.writeIncoming("x.deb", f.release("1.0.0", body))
+			must(f.t, os.Remove(p+SigSuffix))
+			return []string{p, "1.0.0"}
 		},
 		"нет файла": func(f *fixture) []string { return []string{f.incoming + "/none.deb", "1.0.0"} },
 		"incoming не root": func(f *fixture) []string {
 			f.foreign["incoming"] = true
-			return []string{f.writeIncoming("x.deb", body, good), "1.0.0"}
+			return []string{f.writeIncoming("x.deb", f.release("1.0.0", body)), "1.0.0"}
 		},
 		"incoming симлинк": func(f *fixture) []string {
 			link := f.incoming + "-link"
@@ -343,12 +439,12 @@ func TestStageRefusals(t *testing.T) {
 			return []string{link + "/x.deb", "1.0.0"}
 		},
 		"incoming writable прочими": func(f *fixture) []string {
-			p := f.writeIncoming("x.deb", body, good)
+			p := f.writeIncoming("x.deb", f.release("1.0.0", body))
 			must(f.t, os.Chmod(f.incoming, 0o777))
 			return []string{p, "1.0.0"}
 		},
 		"packages отсутствует": func(f *fixture) []string {
-			p := f.writeIncoming("x.deb", body, good)
+			p := f.writeIncoming("x.deb", f.release("1.0.0", body))
 			must(f.t, os.Remove(f.pkgs))
 			return []string{p, "1.0.0"}
 		},
@@ -365,36 +461,44 @@ func TestStageRefusals(t *testing.T) {
 				if strings.HasPrefix(e.Name(), "tgproxy_") || strings.HasPrefix(e.Name(), ".stage-") {
 					t.Fatalf("в packages появился %s", e.Name())
 				}
+				if e.IsDir() {
+					if sub, _ := os.ReadDir(filepath.Join(f.pkgs, e.Name())); len(sub) != 0 {
+						t.Fatalf("в кэше остались файлы %v", sub)
+					}
+				}
 			}
 		})
 	}
 }
 
-func TestStageOversizeAndArchFailure(t *testing.T) {
+func TestStageArchFailure(t *testing.T) {
 	f := newFixture(t)
-	body := []byte("x")
-	p := f.writeIncoming("x.deb", body, sum(body))
+	p := f.writeIncoming("x.deb", f.release("1.0.0", []byte("x")))
 	f.runErr = errors.New("no dpkg")
 	if c := f.main("stage", p, "1.0.0"); c != 1 {
 		t.Fatalf("code %d", c)
 	}
 }
 
-func TestStageSumFileWriteFailure(t *testing.T) {
+func TestStageDebRenameFailureCleansMetadata(t *testing.T) {
 	f := newFixture(t)
-	body := []byte("x")
-	p := f.writeIncoming("x.deb", body, sum(body))
-	// на месте итогового .sha256 лежит каталог: rename не пройдёт, deb не должен появиться
-	must(t, os.Mkdir(f.debFile("1.0.0")+".sha256", 0o755))
-	must(t, os.WriteFile(filepath.Join(f.debFile("1.0.0")+".sha256", "keep"), nil, 0o644))
+	p := f.writeIncoming("x.deb", f.release("1.0.0", []byte("x")))
+	// на месте итогового deb лежит непустой каталог: rename не пройдёт, метаданные не остаются
+	must(t, os.MkdirAll(filepath.Join(f.debFile("1.0.0"), "keep"), 0o755))
 	if c := f.main("stage", p, "1.0.0"); c == 0 {
 		t.Fatal("ожидалась ошибка")
 	}
-	if _, err := os.Stat(f.debFile("1.0.0")); err == nil {
-		t.Fatal("deb появился без контрольной суммы")
-	}
 	if _, err := os.Stat(f.debFile("1.0.0") + ".new"); err == nil {
 		t.Fatal(".new не убран")
+	}
+}
+
+func TestStageVersionDirNotCreatable(t *testing.T) {
+	f := newFixture(t)
+	p := f.writeIncoming("x.deb", f.release("1.0.0", []byte("x")))
+	must(t, os.WriteFile(f.verDir("1.0.0"), nil, 0o644)) // на месте каталога — файл
+	if c := f.main("stage", p, "1.0.0"); c == 0 {
+		t.Fatal("ожидалась ошибка")
 	}
 }
 
@@ -418,7 +522,7 @@ func TestWriteAtomicErrors(t *testing.T) {
 func TestDefaultsAndExecRun(t *testing.T) {
 	var o, e bytes.Buffer
 	h := New(&o, &e)
-	if h.PackagesDir != "/var/lib/tgproxy/packages" || h.IncomingDir != "/var/lib/tgproxy-incoming" {
+	if h.PackagesDir != "/var/cache/tgproxy/packages" || h.IncomingDir != "/var/lib/tgproxy-incoming" {
 		t.Fatal("пути по умолчанию")
 	}
 	if _, ok := h.Owner(mustStat(t, t.TempDir())); !ok {
@@ -451,32 +555,17 @@ func mustStat(t *testing.T, p string) os.FileInfo {
 	return fi
 }
 
-func TestReadSum(t *testing.T) {
-	for _, in := range []string{"", "   ", "short", strings.Repeat("z", 64)} {
-		if _, err := readSum(strings.NewReader(in)); err == nil {
-			t.Errorf("%q принят", in)
-		}
+func TestEmbeddedVerifier(t *testing.T) {
+	// Боевой Verifier строится из вшитых ключей: чужая подпись отвергается.
+	v := embeddedVerifier()
+	if _, ok := v.(verify.Verifier); !ok {
+		t.Fatalf("%T", v)
 	}
-	h := strings.Repeat("AB", 32)
-	got, err := readSum(strings.NewReader(h + "  file\n"))
-	if err != nil || got != strings.ToLower(h) {
-		t.Fatalf("%q %v", got, err)
+	if err := v.Verify([]byte("x"), []byte("junk")); err == nil {
+		t.Fatal("мусорная подпись принята")
 	}
-}
-
-func TestVerifierOwnerUnknown(t *testing.T) {
-	d := t.TempDir()
-	p := filepath.Join(d, "a.deb")
-	must(t, os.WriteFile(p, []byte("x"), 0o644))
-	must(t, os.WriteFile(p+".sha256", []byte(sum([]byte("x"))), 0o644))
-	f, _ := os.Open(p)
-	defer func() { _ = f.Close() }()
-	v := SHA256Verifier{Owner: func(os.FileInfo) (uint32, bool) { return 0, false }}
-	if err := v.Verify(p, f); err == nil {
-		t.Fatal("владелец неизвестен — должен быть отказ")
-	}
-	v = SHA256Verifier{Owner: func(os.FileInfo) (uint32, bool) { return 0, true }}
-	if err := v.Verify(p, f); err != nil {
-		t.Fatal(err)
+	fv := failVerifier{errors.New("bad keys")}
+	if fv.Verify(nil, nil) == nil || fv.CheckFile(nil, "", nil) == nil || fv.CheckVersion("1.0.0") == nil {
+		t.Fatal("failVerifier должен отказывать всегда")
 	}
 }

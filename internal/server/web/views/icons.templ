@@ -1,7 +1,7 @@
 package views
 
 // Icon — inline SVG по имени (stroke=currentColor). Неизвестное имя — пусто.
-// Имена: pulse servers shield alert gear logout chevron plus trash edit copy close more drain undrain refresh swap check.
+// Имена: pulse servers shield alert gear logout chevron plus trash edit copy close more drain undrain refresh swap check send upload.
 templ Icon(name string, size int) {
 	switch name {
 		case "pulse":
@@ -32,6 +32,10 @@ templ Icon(name string, size int) {
 			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h.01M12 12h.01M19 12h.01"></path></svg>
 		case "drain":
 			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path></svg>
+		case "download":
+			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path></svg>
+		case "stop":
+			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
 		case "undrain":
 			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M7 8l5-5 5 5M5 21h14"></path></svg>
 		case "swap":
@@ -40,5 +44,9 @@ templ Icon(name string, size int) {
 			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"></path></svg>
 		case "check":
 			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"></path></svg>
+		case "send":
+			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"></path></svg>
+		case "upload":
+			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"></path></svg>
 	}
 }

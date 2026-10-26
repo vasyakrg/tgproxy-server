@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -111,12 +112,15 @@ type Config struct {
 	Alerter   HostKeyAlerter // nil — без алертов
 	ServerKey ssh.Signer     // LoadOrCreateServerKey
 
-	PackagesDir      string // локальный кэш deb: tgproxy_<версия>_<arch>.deb
+	// PackagesDir — кэш загрузок сервера (<data_dir>/updates/downloads; в dev — dev/data/packages):
+	// <версия>/{tgproxy_<версия>_<arch>.deb, checksums.txt, checksums.txt.minisig}.
+	PackagesDir      string
 	AllowedClientSAN string // allowed_client_san агента; по умолчанию tgproxy-server
 	RemoteTmpDir     string // временные файлы на хосте; по умолчанию /tmp
 
-	// ExpectedSHA256 — ожидаемый sha256 пакета (из подписанных checksums, M6); nil — не проверять.
-	ExpectedSHA256 func(filename string) (hexSum string, ok bool)
+	// Verifier — проверка пакета на сервере ПЕРЕД загрузкой на хост: minisign по
+	// ключам сервера, sha256 из подписанного checksums.txt, min_version. Обязателен.
+	Verifier Verifier
 
 	StepTimeout    time.Duration // 0 → 10m
 	DialTimeout    time.Duration // 0 → DefaultDialTimeout
@@ -124,6 +128,13 @@ type Config struct {
 	HealthInterval time.Duration // 0 → 1s
 
 	Logger *slog.Logger
+}
+
+// Verifier проверяет подлинность релиза (internal/release/verify.Verifier).
+type Verifier interface {
+	Verify(checksums, sig []byte) error
+	CheckFile(checksums []byte, name string, r io.Reader) error
+	CheckVersion(version string) error
 }
 
 // Installer — менеджер задач установки.
@@ -147,6 +158,8 @@ func New(cfg Config) (*Installer, error) {
 		return nil, errors.New("installer: Store, CA, Health и ServerKey обязательны")
 	case cfg.PackagesDir == "":
 		return nil, errors.New("installer: PackagesDir обязателен")
+	case cfg.Verifier == nil:
+		return nil, errors.New("installer: Verifier обязателен (пакет без проверки подписи не загружается)")
 	}
 	if cfg.AllowedClientSAN == "" {
 		cfg.AllowedClientSAN = "tgproxy-server"

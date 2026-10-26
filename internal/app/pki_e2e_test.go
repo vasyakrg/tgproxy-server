@@ -81,6 +81,7 @@ func newPKIEnv(t *testing.T) *pkiEnv {
 	scfg.PKI.KEKFile = filepath.Join(e.dir, "kek")
 	scfg.Server.PublicBaseURL = "http://127.0.0.1:8080"
 	scfg.Metrics.Bearer = config.Secret(pkiMetricsBearer)
+	scfg.Update.StagingDir = filepath.Join(e.dir, "updates") // кэш загрузок для раскатки агентов
 	tokFile := filepath.Join(e.dir, "notify-token")
 	if err := os.WriteFile(tokFile, []byte(notifyToken), 0o600); err != nil {
 		t.Fatal(err)

@@ -47,7 +47,7 @@ func TestAgentsEnrollToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"TGP_ENROLL_TOKEN=", "tgproxy agent enroll --server https://127.0.0.1:8444", "--ca-fingerprint " + fp} {
+	for _, want := range []string{"TGP_ENROLL_TOKEN=", "tgproxy agent enroll --server https://host.docker.internal:8444", "--ca-fingerprint " + fp} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in %q", want, out)
 		}

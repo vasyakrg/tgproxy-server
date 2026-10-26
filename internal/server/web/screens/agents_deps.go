@@ -32,6 +32,9 @@ type AgentsDeps struct {
 	ClientIP      func(*http.Request) string // nil — хост из RemoteAddr
 	Logger        *slog.Logger               // nil — slog.Default()
 	Now           func() time.Time           // nil — time.Now
+	// Rollout отдаёт раскатку агентов; вызывается на каждый запрос (менеджер создаётся позже экрана).
+	// nil или nil-результат — раскатка не настроена: кнопок обновления и баннера нет.
+	Rollout func() *RolloutHandle
 }
 
 // StatusOpt — вариант фильтра по статусу.
@@ -59,6 +62,7 @@ type AgentRowVM struct {
 	Seen           string
 	SeenMuted      bool
 	Draining       bool
+	CanUpdate      bool // отстаёт, доступен и релиз есть в кэше
 }
 
 // AgentsVM — модель страницы «Агенты».
@@ -71,6 +75,11 @@ type AgentsVM struct {
 	StatusOpts    []StatusOpt
 	Can           api.Can
 	PollSec       int
+	// Раскатка: баннер активной раскатки, кнопка «Обновить отстающие».
+	Rollout      *RolloutVM
+	UpdateTo     string // версия сервера с «v», куда обновляем
+	Lagging      int    // агентов с версией ≠ серверной
+	CanUpdateAll bool
 }
 
 // Summary — «N агентов · M в работе · версия сервера vX».
@@ -137,7 +146,8 @@ type ConfirmVM struct {
 	Action            string // URL POST
 	Label             string // подпись кнопки
 	Danger            bool
-	Target            string // CSS-селектор hx-target; пусто — #agent-modal-body
+	Hidden            [][2]string // скрытые поля формы (имя, значение)
+	Target            string      // CSS-селектор hx-target; пусто — #agent-modal-body
 }
 
 func (c ConfirmVM) target() string {

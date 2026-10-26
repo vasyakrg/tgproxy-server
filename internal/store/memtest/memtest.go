@@ -44,9 +44,14 @@ type Store struct {
 
 	enrolls map[string]store.Enrollment
 
+	settings map[string]string
+
 	jobs      map[string]store.InstallJob
 	jobEvents []store.InstallJobEvent
 	jobEvID   int64
+
+	rollouts     []store.Rollout
+	rolloutSteps []store.RolloutStep
 
 	errs  []store.ErrorEvent
 	errID int64
@@ -71,6 +76,7 @@ func New() *Store {
 		denied:   map[string]store.DeniedCert{},
 		enrolls:  map[string]store.Enrollment{},
 		jobs:     map[string]store.InstallJob{},
+		settings: map[string]string{},
 	}
 }
 
@@ -109,6 +115,12 @@ func (s *Store) Enrollments() store.EnrollmentRepo { return enrollRepo{s} }
 
 // InstallJobs — доступ к репозиторию/ресурсу хранилища (store.Store).
 func (s *Store) InstallJobs() store.InstallJobRepo { return jobRepo{s} }
+
+// Settings — доступ к репозиторию/ресурсу хранилища (store.Store).
+func (s *Store) Settings() store.SettingsRepo { return settingsRepo{s} }
+
+// Rollouts — доступ к репозиторию/ресурсу хранилища (store.Store).
+func (s *Store) Rollouts() store.RolloutRepo { return rolloutRepo{s} }
 
 // Errors — доступ к репозиторию/ресурсу хранилища (store.Store).
 func (s *Store) Errors() store.ErrorEventRepo { return errRepo{s} }

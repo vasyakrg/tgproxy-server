@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/vasyakrg/tgproxy-server/internal/release/verify"
 )
 
 var (
@@ -106,6 +108,7 @@ func ValidateServer(c *ServerConfig) error {
 	v.addr("listen.agent_gateway", c.Listen.AgentGateway)
 
 	v.publicBaseURL(c.Server.PublicBaseURL)
+	v.agentGatewayURL(c.Server.AgentGatewayURL)
 	v.serverTLS(c)
 
 	for i, p := range c.TrustedProxies {
@@ -315,6 +318,27 @@ func (v *validator) update(u UpdateConfig) {
 		v.add("update.repo", "want owner/name, got %q", u.Repo)
 	}
 	v.positive("update.check_interval", u.CheckInterval)
+	switch u.Source {
+	case UpdateSourceGitHub, UpdateSourceUpload:
+	case UpdateSourceProxy:
+		if u.HTTPProxy == "" {
+			v.add("update.http_proxy", "required when update.source=proxy")
+		}
+	case UpdateSourceAgent:
+		if !idRe.MatchString(u.ViaAgent) {
+			v.add("update.via_agent", "required agent id when update.source=agent, got %q", u.ViaAgent)
+		}
+	default:
+		v.add("update.source", "must be github|proxy|agent|upload, got %q", u.Source)
+	}
+	if len(u.PubKeys) > 2 {
+		v.add("update.pubkeys", "at most 2 keys (primary + rotation), got %d", len(u.PubKeys))
+	}
+	for i, k := range u.PubKeys {
+		if _, err := verify.ParsePublicKey(k); err != nil {
+			v.add(fmt.Sprintf("update.pubkeys[%d]", i), "invalid minisign public key: %v", err)
+		}
+	}
 	if u.StagingDir == "" {
 		v.add("update.staging_dir", "required when update.enabled")
 	}
@@ -403,6 +427,18 @@ func (v *validator) publicBaseURL(raw string) {
 		}
 	default:
 		v.add(path, "scheme must be https (or http on loopback), got %q", u.Scheme)
+	}
+}
+
+// agentGatewayURL: https://host[:port] без пути, query и userinfo.
+func (v *validator) agentGatewayURL(raw string) {
+	if raw == "" {
+		return
+	}
+	const path = "server.agent_gateway_url"
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		v.add(path, "want https://host[:port] without path, query or credentials, got %q", raw)
 	}
 }
 

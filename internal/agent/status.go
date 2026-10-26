@@ -27,7 +27,7 @@ func (a *Agent) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	mode, _, conns, state := a.mgr.snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(statusResponse{
-		Version:       buildinfo.Version,
+		Version:       a.currentVersion(),
 		Commit:        buildinfo.Commit,
 		UptimeS:       int64(a.now().Sub(a.started).Seconds()),
 		Inflight:      a.stats.inflight.Load(),

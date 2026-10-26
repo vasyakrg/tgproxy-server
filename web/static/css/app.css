@@ -563,3 +563,47 @@ html.sb-collapsed { --sb-w: var(--sb-w-collapsed); }
 .job-log:empty::before { content: "Ожидаем события…"; color: var(--muted); }
 .log-warn { color: var(--warn); }
 .log-error { color: var(--danger-text); }
+
+/* screens: system */
+.sys-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; align-items: start; }
+.sys-head-actions { margin-left: auto; display: inline-flex; gap: 4px; }
+.sys-versions { display: flex; flex-wrap: wrap; gap: 8px 28px; }
+.sys-ver { display: flex; flex-direction: column; gap: 4px; }
+.sys-ver-label { font-size: 12px; color: var(--muted); }
+.sys-ver-value { font-size: 20px; }
+.sys-ver-when { font-size: 14px; padding-top: 4px; }
+.tone-accent { color: var(--accent); }
+.sys-legend { font-size: 12px; color: var(--muted); padding: 0 0 6px; }
+.sys-source { min-height: 30px; font-size: 13px; cursor: default; }
+.sys-source input { width: 16px; height: 16px; }
+.sys-checks {
+  background: var(--sidebar-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; font-size: 13px; gap: 4px;
+}
+.sys-install { display: flex; flex-wrap: wrap; gap: 10px; }
+.sys-notes { font-size: 13px; }
+.sys-notes summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; color: var(--link); }
+.sys-notes-body {
+  margin-top: 6px; padding: 10px 12px; border-radius: 8px; background: var(--sidebar-bg);
+  border: 1px solid var(--border); max-height: 260px; overflow: auto; overflow-wrap: anywhere;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--nav-text);
+}
+.sys-notes-body div:empty::after { content: "\00a0"; }
+.sys-events { display: flex; flex-direction: column; gap: 8px; }
+.sys-events-grid {
+  margin: 0; padding: 0; border: 0; min-width: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 2px 16px;
+}
+.sys-event { font-size: 13px; }
+.sys-event input { width: 16px; height: 16px; flex: none; }
+
+/* rollout banner */
+.ro-banner { margin: 16px; border-color: #2D4A47; }
+.ro-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.ro-head .icon-btn { margin-left: auto; }
+.ro-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.ro-step { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--sidebar-bg); }
+.ro-state { margin-left: auto; font-size: 12px; color: var(--muted); }
+.ro-step[data-state="running"] .ro-state { color: var(--warn); }
+.ro-step[data-state="done"] .ro-state { color: var(--ok); }
+.ro-step[data-state="failed"] .ro-state { color: var(--err); }

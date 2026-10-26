@@ -26,10 +26,12 @@ import (
 	"testing"
 	"time"
 
+	"aead.dev/minisign"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
+	"github.com/vasyakrg/tgproxy-server/internal/release/verify"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 	"github.com/vasyakrg/tgproxy-server/internal/store/memtest"
 )
@@ -344,6 +346,8 @@ type env struct {
 	inst      *Installer
 	ca        *pki.Authority
 	pkgDir    string
+	signer    minisign.PrivateKey
+	verifier  verify.Verifier
 	rtmp      string
 	health    *fakeHealth
 	alerts    *fakeAlerter
@@ -383,8 +387,13 @@ func newEnv(t *testing.T, opts ...envOpt) *env {
 			t.Fatal(err)
 		}
 	}
-	writePkg(t, e.pkgDir, "tgproxy_1.4.1_amd64.deb", "deb-body-1.4.1")
-	writePkg(t, e.pkgDir, "tgproxy_1.3.0_amd64.deb", "deb-body-1.3.0")
+	pub, priv, err := minisign.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.signer, e.verifier = priv, verify.Verifier{Keys: []verify.PublicKey{pub}}
+	writeRelease(t, e.pkgDir, "1.4.1", priv, map[string]string{"amd64": "deb-body-1.4.1"})
+	writeRelease(t, e.pkgDir, "1.3.0", priv, map[string]string{"amd64": "deb-body-1.3.0"})
 
 	kekPath := filepath.Join(dir, "kek")
 	if err := pki.GenerateKEK(kekPath); err != nil {
@@ -401,7 +410,7 @@ func newEnv(t *testing.T, opts ...envOpt) *env {
 
 	cfg := Config{
 		Store: e.st, CA: e.ca, Health: e.health, Alerter: e.alerts, ServerKey: e.serverKey,
-		PackagesDir: e.pkgDir, RemoteTmpDir: e.rtmp,
+		PackagesDir: e.pkgDir, Verifier: e.verifier, RemoteTmpDir: e.rtmp,
 		DialTimeout: 5 * time.Second, StepTimeout: 30 * time.Second,
 		HealthTimeout: 300 * time.Millisecond, HealthInterval: 20 * time.Millisecond,
 		Logger: slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
@@ -417,9 +426,30 @@ func newEnv(t *testing.T, opts ...envOpt) *env {
 	return e
 }
 
-func writePkg(t *testing.T, dir, name, body string) {
+// writeRelease кладёт подписанный релиз в кэш загрузок:
+// <dir>/<v>/{tgproxy_<v>_<arch>.deb, checksums.txt, checksums.txt.minisig}.
+func writeRelease(t *testing.T, dir, version string, key minisign.PrivateKey, debs map[string]string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+	vd := filepath.Join(dir, version)
+	if err := os.MkdirAll(vd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var sums strings.Builder
+	for arch, body := range debs {
+		name := "tgproxy_" + version + "_" + arch + ".deb"
+		if err := os.WriteFile(filepath.Join(vd, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		h := sha256.Sum256([]byte(body))
+		sums.WriteString(hex.EncodeToString(h[:]) + "  " + name + "\n")
+	}
+	if err := os.WriteFile(filepath.Join(vd, "checksums.txt"), []byte(sums.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := minisign.NewReader(strings.NewReader(sums.String()))
+	_, _ = io.Copy(io.Discard, r)
+	sig := r.SignWithComments(key, "timestamp:1 file:checksums.txt", "t")
+	if err := os.WriteFile(filepath.Join(vd, "checksums.txt.minisig"), sig, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -465,12 +495,15 @@ func (e *env) install(req Request) (string, JobStatus) {
 	return id, st
 }
 
-var tmpRe = regexp.MustCompile(`/[A-Za-z0-9._/-]*/rtmp/tgproxy-[0-9a-f]{16}`)
+var (
+	tmpRe = regexp.MustCompile(`/[A-Za-z0-9._/-]*/rtmp/tgproxy-[0-9a-f]{16}`)
+	incRe = regexp.MustCompile(`/var/lib/tgproxy-incoming/tgproxy-[0-9a-f]{16}`)
+)
 
 func (e *env) cmdLines() []string {
 	var out []string
 	for _, c := range e.host.commands() {
-		out = append(out, tmpRe.ReplaceAllString(c.String(), "TMP"))
+		out = append(out, incRe.ReplaceAllString(tmpRe.ReplaceAllString(c.String(), "TMP"), "INC"))
 	}
 	return out
 }

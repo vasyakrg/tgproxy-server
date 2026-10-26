@@ -3,6 +3,11 @@
 server:
   # Публичный base URL прокси: подставляется в UI «Доступ» (https; http — только loopback).
   public_base_url: "http://127.0.0.1:8080"
+  # URL agent_gateway ГЛАЗАМИ АГЕНТОВ: его печатает команда enrollment и по нему dial-агенты в контейнерах
+  # (sshd-debian, nat-agent) качают релизы при раскатке. Нужен только им: агенты-процессы на хосте
+  # либо dial без обновлений, либо reverse со своим server_url. Сертификат gateway проверяется по CA
+  # и SAN server, не по имени хоста, поэтому host.docker.internal подходит.
+  agent_gateway_url: "https://host.docker.internal:8444"
 
 listen:
   proxy: "127.0.0.1:8080"          # прокси для ботов
@@ -15,7 +20,7 @@ tls:
 
 # agent_tls не задан: сервер берёт CA из БД под KEK (`make dev-setup` = kek-init + pki init) и сам
 # выпускает себе mTLS-сертификат; agent_gateway (:8444) принимает reverse-агентов и /enroll.
-# Публичный URL gateway для команды enrollment: хост server.public_base_url + порт listen.agent_gateway.
+# URL gateway для команды enrollment и раскатки: server.agent_gateway_url.
 pki:
   kek_file: ./dev/data/kek
 
@@ -35,6 +40,7 @@ store:
 update:
   enabled: false                   # в dev самообновление не нужно
   staging_dir: ./dev/data/updates
+  downloads_dir: ./dev/data/packages   # подписанный dev-набор: make dev-packages (кэш установщика агентов)
 
 # /metrics на loopback доступен без bearer; на не-loopback bearer обязателен (старт иначе откажет).
 metrics:

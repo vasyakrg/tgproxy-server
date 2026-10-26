@@ -111,8 +111,9 @@ func TestE2EAdminUI(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(body, "Обзор") || !strings.Contains(body, "admin") {
 		t.Fatalf("GET /: %d\n%.400s", resp.StatusCode, body)
 	}
-	if resp, body = c.do("GET", "/system", nil, nil); resp.StatusCode != 200 || !strings.Contains(body, "Будет в") {
-		t.Fatalf("stub /system: %d", resp.StatusCode)
+	if resp, body = c.do("GET", "/system", nil, nil); resp.StatusCode != 200 || strings.Contains(body, "Будет в") ||
+		!strings.Contains(body, "Обновление сервера") || !strings.Contains(body, "Уведомления в Telegram") {
+		t.Fatalf("/system: %d\n%.400s", resp.StatusCode, body)
 	}
 	if resp, body = c.do("GET", "/agents", nil, nil); resp.StatusCode != 200 || strings.Contains(body, "Будет в") || !strings.Contains(body, "local") {
 		t.Fatalf("/agents: %d\n%.400s", resp.StatusCode, body)

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
@@ -27,6 +28,8 @@ type Options struct {
 	MaxPerMinute   int           // глобальный лимит сообщений; 0 → 20
 	Clock          Clock
 	Logger         *slog.Logger
+	// Enabled — фильтр типов: false → алерт этого типа не ставится в очередь. nil → все включены.
+	Enabled func(ctx context.Context, t AlertType) bool
 }
 
 // Notifier применяет правила дедупа/лимитов и пишет алерты в outbox.
@@ -40,6 +43,8 @@ type Notifier struct {
 	maxPM   int
 	clock   Clock
 	log     *slog.Logger
+	enabled func(ctx context.Context, t AlertType) bool
+	testSeq atomic.Int64
 	mu      sync.Mutex
 	sentAt  []time.Time // моменты постановки сообщений в окне лимита
 	overrun []string    // строки сводки
@@ -47,7 +52,7 @@ type Notifier struct {
 
 // NewNotifier создаёт Notifier.
 func NewNotifier(outbox store.OutboxRepo, o Options) *Notifier {
-	n := &Notifier{outbox: outbox, repeat: o.RepeatInterval, maxPM: o.MaxPerMinute, clock: o.Clock, log: o.Logger}
+	n := &Notifier{outbox: outbox, repeat: o.RepeatInterval, maxPM: o.MaxPerMinute, clock: o.Clock, log: o.Logger, enabled: o.Enabled}
 	if n.repeat <= 0 {
 		n.repeat = defaultRepeat
 	}
@@ -66,6 +71,9 @@ func NewNotifier(outbox store.OutboxRepo, o Options) *Notifier {
 // Fire ставит алерт в очередь. Повтор того же ключа допускается не чаще
 // RepeatInterval; после resolved ключ снова «свободен».
 func (n *Notifier) Fire(ctx context.Context, a Alert) error {
+	if n.enabled != nil && !n.enabled(ctx, a.Type) {
+		return nil
+	}
 	key := a.key()
 	now := n.clock()
 	n.mu.Lock()
@@ -101,6 +109,9 @@ func (n *Notifier) Resolve(ctx context.Context, key string) error {
 		return fmt.Errorf("notify: last by key: %w", err)
 	}
 	if last.State != store.OutboxFiring {
+		return nil
+	}
+	if n.enabled != nil && !n.enabled(ctx, AlertType(last.Type)) {
 		return nil
 	}
 	title := resolvedTitle(AlertType(last.Type), last.AgentID)
@@ -171,5 +182,23 @@ func (n *Notifier) flushLocked(ctx context.Context, now time.Time) error {
 	}
 	n.sentAt = append(n.sentAt, now)
 	n.overrun = nil
+	return nil
+}
+
+// SendTest ставит в очередь тестовое сообщение администраторам (мимо дедупа, лимита и фильтра типов).
+// actor — имя администратора, нажавшего «Отправить тест».
+func (n *Notifier) SendTest(ctx context.Context, actor string) error {
+	now := n.clock()
+	text := "🔔 <b>Тест уведомлений tgproxy</b>\nСообщение отправлено из админки"
+	if actor != "" {
+		text += ": " + escapeHTML(redact.String(actor))
+	}
+	_, err := n.outbox.Enqueue(ctx, store.OutboxItem{
+		DedupKey: fmt.Sprintf("%s:%d:%d", TestType, now.UnixNano(), n.testSeq.Add(1)), Type: TestType,
+		State: store.OutboxFiring, Text: text, CreatedAt: now,
+	})
+	if err != nil {
+		return fmt.Errorf("notify: enqueue test: %w", err)
+	}
 	return nil
 }

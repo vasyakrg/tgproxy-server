@@ -284,6 +284,15 @@ func (e *Evaluator) AgentEnrolled(ctx context.Context, agentID string) {
 	})
 }
 
+// RolloutFailed — раскатка версии остановлена из-за провала обновления агента (M6-T4).
+func (e *Evaluator) RolloutFailed(ctx context.Context, agentID, version, reason string) {
+	e.fire(ctx, Alert{
+		Type: RolloutFailed, AgentID: agentID, Severity: SeverityCritical,
+		Title: fmt.Sprintf("Раскатка %s остановлена на агенте %s", version, agentID),
+		Text:  fmt.Sprintf("Обновление агента не прошло: %s. Остальные агенты не тронуты; агент откатывается на прежнюю версию сам.", reason),
+	})
+}
+
 func humanLeft(d time.Duration) string {
 	if d <= 0 {
 		return "уже истёк"

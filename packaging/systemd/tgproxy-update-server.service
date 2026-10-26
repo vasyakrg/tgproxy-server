@@ -1,0 +1,28 @@
+[Unit]
+Description=tgproxy: применение подписанного обновления: server (root oneshot)
+Documentation=https://github.com/vasyakrg/tgproxy-server
+# Не запускается вручную: стартует из tgproxy-update-server.path, когда процесс tgproxy
+# положил пакет в updates/staged и создал updates/staged/request.
+ConditionPathExists=/var/lib/tgproxy/updates/staged/request
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/tgproxy update apply --data-dir /var/lib/tgproxy --component server --work-dir /run/tgproxy-update-server
+TimeoutStartSec=300s
+UMask=0077
+# root-only каталог для проверенной копии deb (подмена после проверки невозможна).
+RuntimeDirectory=tgproxy-update-server
+RuntimeDirectoryMode=0700
+
+# dpkg и maintainer-скрипты требуют записи в /usr, /etc, /var и права root:
+# ProtectSystem/NoNewPrivileges/CapabilityBoundingSet здесь недопустимы.
+PrivateTmp=yes
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native

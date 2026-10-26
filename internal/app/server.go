@@ -24,7 +24,9 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/server/balancer"
 	"github.com/vasyakrg/tgproxy-server/internal/server/gateway"
 	"github.com/vasyakrg/tgproxy-server/internal/server/proxy"
+	"github.com/vasyakrg/tgproxy-server/internal/server/rollout"
 	"github.com/vasyakrg/tgproxy-server/internal/server/router"
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/screens"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 	"github.com/vasyakrg/tgproxy-server/internal/tlsin"
 	"github.com/vasyakrg/tgproxy-server/internal/transport"
@@ -92,8 +94,10 @@ type Server struct {
 	windows    *router.Windows
 	obs        *obs
 	rstats     *ruleStats
-	web        *webState // nil — веб-UI не поднят
-	pki        *pkiState // nil — статические agent_tls (без reverse и enrollment)
+	web        *webState                             // nil — веб-UI не поднят
+	pki        *pkiState                             // nil — статические agent_tls (без reverse и enrollment)
+	rollout    *rollout.Manager                      // nil — раскатка агентов не настроена (rolloutwire.go)
+	rolloutUI  atomic.Pointer[screens.RolloutHandle] // для экрана «Агенты»; выставляется после создания Manager
 	cur        atomic.Pointer[snapshot]
 	closed     sync.Once
 }
@@ -138,6 +142,10 @@ func NewServer(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logge
 	}
 	s.cur.Store(snap)
 	if err := s.wireWeb(cfg); err != nil { //nolint:contextcheck // колбэк users.OnChange живёт вне запроса
+		s.Close()
+		return nil, err
+	}
+	if err := s.wireRollout(ctx, cfg); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -189,7 +197,8 @@ func (s *Server) wire(ctx context.Context, cfg *config.ServerConfig, distributed
 }
 
 func (s *Server) build(cfg *config.ServerConfig) (*snapshot, error) {
-	rt := router.New(cfg, s.up, s.logger,
+	rt := router.New(
+		cfg, s.up, s.logger,
 		router.WithBalancer(s.bal),
 		router.WithWindows(s.windows),
 		router.WithBufferConfig(cfg.Buffer),
@@ -207,6 +216,9 @@ func (s *Server) build(cfg *config.ServerConfig) (*snapshot, error) {
 // Close освобождает ресурсы (Checker, транспорт, хранилище); идемпотентен.
 func (s *Server) Close() {
 	s.closed.Do(func() {
+		if s.rollout != nil {
+			s.rollout.Close()
+		}
 		if s.pki != nil && s.pki.inst != nil {
 			s.pki.inst.Close()
 		}

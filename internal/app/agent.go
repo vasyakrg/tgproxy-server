@@ -106,6 +106,8 @@ func startAgentMetrics(ctx context.Context, addr, bearer string, reg *prometheus
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", h)
+	// Живость процесса для health-проверки `update apply` (root-oneshot ходит без bearer на loopback).
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	m := &agentMetricsServer{
 		srv:    &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second},
 		logger: logger,

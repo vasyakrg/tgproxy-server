@@ -11,6 +11,11 @@ var agentHeaders = []string{"Агент", "Связь", "Статус", "Вес"
 // AgentsPage — экран «Агенты».
 templ AgentsPage(vm AgentsVM) {
 	@views.PageHeader("Агенты", vm.Summary()) {
+		if vm.CanUpdateAll {
+			@views.IconButton("Обновить отстающие до "+vm.UpdateTo, "download", false, templ.Attributes{
+				"hx-get": "/agents/rollout/start", "hx-target": "#agent-modal-body", "hx-swap": "innerHTML", "data-modal-open": "agent-modal",
+			})
+		}
 		<a class="btn btn-primary" href="/agents/new">+ Добавить агента</a>
 	}
 	<section class="card card-flush" aria-label="Агенты">
@@ -55,6 +60,9 @@ templ AgentsBody(vm AgentsVM, oob bool) {
 			hx-swap-oob="true"
 		}
 	>
+		if vm.Rollout != nil {
+			@RolloutBanner(*vm.Rollout)
+		}
 		if len(vm.Rows) == 0 {
 			if vm.Total == 0 {
 				@views.EmptyState("Агентов пока нет", "Добавьте первый агент, чтобы проксировать трафик ботов.") {
@@ -119,6 +127,9 @@ templ agentRow(r AgentRowVM, vm AgentsVM) {
 				if vm.Can.Weight {
 					@views.IconButton("Изменить вес: "+r.Name, "edit", false, modalOpen("/agents/"+r.ID+"/weight"))
 				}
+				if r.CanUpdate {
+					@views.IconButton("Обновить до "+vm.UpdateTo+": "+r.Name, "download", false, modalOpen("/agents/"+r.ID+"/update"))
+				}
 				@views.IconButton("Ещё действия: "+r.Name, "more", false, modalOpen("/agents/"+r.ID+"/more"))
 			</div>
 		</td>
@@ -164,6 +175,9 @@ templ ConfirmDialog(c ConfirmVM) {
 		hx-disabled-elt="find button[type=submit]"
 	>
 		<input type="hidden" name="confirm" value="yes"/>
+		for _, h := range c.Hidden {
+			<input type="hidden" name={ h[0] } value={ h[1] }/>
+		}
 		<h3 class="form-title">{ c.Title }</h3>
 		<p>{ c.Text }</p>
 		if c.Note != "" {
@@ -305,4 +319,67 @@ templ ModalError(msg string) {
 			<button type="button" class="btn" data-modal-close>Закрыть</button>
 		</div>
 	</div>
+}
+
+// RolloutBanner — баннер активной раскатки; обновляется вместе с таблицей.
+templ RolloutBanner(v RolloutVM) {
+	<section class="card ro-banner" aria-label="Обновление агентов">
+		<div class="ro-head">
+			<h2 class="card-title">Раскатка { v.Version } · { v.Plan }</h2>
+			<span class="muted small">
+				if v.Stopping {
+					останавливается
+				} else {
+					{ strconv.Itoa(v.Done) } / { strconv.Itoa(v.Total) }
+				}
+			</span>
+			if !v.Stopping {
+				@views.IconButton("Остановить раскатку", "stop", true, templ.Attributes{
+					"hx-get": "/agents/rollout/stop", "hx-target": "#agent-modal-body", "hx-swap": "innerHTML", "data-modal-open": "agent-modal",
+				})
+			}
+		</div>
+		<ol class="ro-steps">
+			for _, s := range v.Steps {
+				<li class="ro-step" data-state={ s.State }>
+					<span class="mono">{ s.Agent }</span>
+					<span class="muted small">{ s.Phase }</span>
+					<span class="ro-state">{ s.StateLabel }</span>
+					if s.Error != "" {
+						<span class="small tone-err">{ s.Error }</span>
+					}
+				</li>
+			}
+		</ol>
+	</section>
+}
+
+// RolloutForm — запуск раскатки на отстающих агентов.
+templ RolloutForm(f RolloutFormVM) {
+	<form
+		class="stack"
+		method="post"
+		action="/agents/rollout/start"
+		hx-post="/agents/rollout/start"
+		hx-target="#agent-modal-body"
+		hx-swap="innerHTML"
+		novalidate
+	>
+		<h3 class="form-title">Обновить отстающие до { f.Version }</h3>
+		<p>Агентов с другой версией: <strong>{ strconv.Itoa(f.Lagging) }</strong>. Сначала обновится одна канарейка, затем батчи.</p>
+		@views.Field(views.FieldProps{
+			ID: "ro-batch", Name: "batch_size", Label: "Размер батча", Value: f.Batch, Error: f.Errors["batch_size"],
+			Hint:  "Сколько агентов обновляются одновременно после канарейки",
+			Attrs: templ.Attributes{"inputmode": "numeric", "maxlength": "2", "autocomplete": "off"},
+		})
+		<label class="check">
+			<input type="checkbox" name="allow_downtime" value="1" checked?={ f.AllowDowntime }/>
+			<span>Разрешить простой</span>
+		</label>
+		<p class="form-note">Без этой галочки сервер не выведет из балансировки последнего работающего агента. С галочкой возможен перерыв в проксировании.</p>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-primary">Далее</button>
+		</div>
+	</form>
 }

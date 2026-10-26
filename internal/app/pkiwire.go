@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/config"
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
+	"github.com/vasyakrg/tgproxy-server/internal/release/verify"
 	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
 	"github.com/vasyakrg/tgproxy-server/internal/server/enroll"
 	"github.com/vasyakrg/tgproxy-server/internal/server/gateway"
@@ -224,11 +226,14 @@ func (h agentHealth) Check(ctx context.Context, agentURL, agentID string) error 
 }
 
 // gatewayURL — публичный https-URL agent_gateway для команды enrollment:
-// явный ServerOptions.GatewayURL, иначе хост server.public_base_url (или
+// явный ServerOptions.GatewayURL, затем server.agent_gateway_url, иначе хост server.public_base_url (или
 // не-wildcard хост listen.agent_gateway) + порт listen.agent_gateway.
 func gatewayURL(cfg *config.ServerConfig, override string) (string, bool) {
 	if override != "" {
 		return override, true
+	}
+	if u := strings.TrimRight(cfg.Server.AgentGatewayURL, "/"); u != "" {
+		return u, true
 	}
 	lhost, port, err := net.SplitHostPort(cfg.Listen.AgentGateway)
 	if err != nil || port == "" {
@@ -254,6 +259,9 @@ func (s *Server) wirePKI(cfg *config.ServerConfig) error {
 		return nil
 	}
 	gwOpts := []gateway.Option{gateway.WithChecks(p.deny.Check), gateway.WithLogger(s.logger)}
+	if d := cfg.Update.Downloads(); d != "" { // раздача релиза агентам при раскатке (M6-T4)
+		gwOpts = append(gwOpts, gateway.WithPackagesHandler(gateway.PackagesHandler(d, s.logger)))
+	}
 	if gwURL, ok := gatewayURL(cfg, s.opts.GatewayURL); ok {
 		svc, err := enroll.New(enroll.Config{
 			Enrollments: s.st.Enrollments(), Agents: s.st.Agents(), Audit: s.st.Audit(), CA: p.auth,
@@ -295,9 +303,16 @@ func (s *Server) wireInstaller(cfg *config.ServerConfig) error {
 	if err != nil {
 		return fmt.Errorf("app: installer key: %w", err)
 	}
+	// Пакеты для агентов — из непривилегированного кэша загрузок (updates/downloads); подпись
+	// проверяется на сервере теми же ключами, что и обновление самого сервера.
+	keys, err := updatePubKeys(cfg.Update)
+	if err != nil {
+		return fmt.Errorf("app: installer pubkeys: %w", err)
+	}
 	icfg := installer.Config{
 		Store: s.st, CA: s.pki.auth, Health: agentHealth{s.tr}, ServerKey: key,
-		PackagesDir: filepath.Join(dataDir, "packages"), Logger: s.logger,
+		PackagesDir: cfg.Update.Downloads(), Verifier: verify.Verifier{Keys: keys, MinVersion: cfg.Update.MinVersion},
+		Logger: s.logger,
 	}
 	if s.obs.eval != nil {
 		icfg.Alerter = s.obs.eval

@@ -15,6 +15,10 @@ builds:
       - -X github.com/vasyakrg/tgproxy-server/internal/buildinfo.Version={{.Version}}
       - -X github.com/vasyakrg/tgproxy-server/internal/buildinfo.Commit={{.ShortCommit}}
       - -X github.com/vasyakrg/tgproxy-server/internal/buildinfo.Date={{.CommitDate}}
+      # Доверенные minisign-ключи (base64, через запятую) вшиваются в бинарь: по ним
+      # deploy-helper и `update apply` проверяют релизы. Релиз: из packaging/minisign.pub
+      # (release.yml), dev: ключ dev/data (make dev-packages). Не задано — заглушка fail-closed.
+      - '{{ if index .Env "TGPROXY_PUBKEYS" }}-X github.com/vasyakrg/tgproxy-server/internal/release.pubKeysCSV={{ index .Env "TGPROXY_PUBKEYS" }}{{ end }}'
     goos:
       - linux
       - darwin
@@ -62,11 +66,17 @@ nfpms:
       - src: packaging/systemd/tgproxy-agent.service
         dst: /lib/systemd/system/tgproxy-agent.service
         file_info: {mode: 0644}
-      - src: packaging/systemd/tgproxy-update.path
-        dst: /lib/systemd/system/tgproxy-update.path
+      - src: packaging/systemd/tgproxy-update-server.path
+        dst: /lib/systemd/system/tgproxy-update-server.path
         file_info: {mode: 0644}
-      - src: packaging/systemd/tgproxy-update.service
-        dst: /lib/systemd/system/tgproxy-update.service
+      - src: packaging/systemd/tgproxy-update-server.service
+        dst: /lib/systemd/system/tgproxy-update-server.service
+        file_info: {mode: 0644}
+      - src: packaging/systemd/tgproxy-update-agent.path
+        dst: /lib/systemd/system/tgproxy-update-agent.path
+        file_info: {mode: 0644}
+      - src: packaging/systemd/tgproxy-update-agent.service
+        dst: /lib/systemd/system/tgproxy-update-agent.service
         file_info: {mode: 0644}
       # Конфиги: dpkg спрашивает/сохраняет локальные правки при upgrade
       - dst: /etc/tgproxy
@@ -90,12 +100,20 @@ nfpms:
       preremove: packaging/scripts/prerm.sh
       postremove: packaging/scripts/postrm.sh
 
-# Подпись checksums.txt (minisign) подключается в M6: ключ хранится в защищённом
-# environment CI. Пока блок закомментирован, `goreleaser check` и snapshot работают без ключа.
-# signs:
-#   - id: minisign
-#     artifacts: checksum
-#     cmd: minisign
-#     args: ["-S", "-s", "{{ .Env.MINISIGN_KEY_FILE }}", "-m", "${artifact}", "-x", "${signature}"]
-#     signature: "${artifact}.minisig"
-#     stdin: "{{ .Env.MINISIGN_PASSWORD }}"
+# Подпись checksums.txt (minisign). Ключ — файл по пути из MINISIGN_KEY_FILE, пароль — из
+# MINISIGN_PASSWORD через stdin (не попадает в argv/логи). Локально и в CI-проверках
+# (goreleaser-check, deb-smoke, make snapshot/deb/release-dry) подпись отключается --skip=sign.
+signs:
+  - id: minisign
+    artifacts: checksum
+    cmd: minisign
+    args:
+      - -S
+      - -s
+      - "{{ .Env.MINISIGN_KEY_FILE }}"
+      - -m
+      - "${artifact}"
+      - -x
+      - "${signature}"
+    signature: "${artifact}.minisig"
+    stdin: "{{ .Env.MINISIGN_PASSWORD }}\n"

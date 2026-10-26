@@ -1,0 +1,9 @@
+[Unit]
+Description=tgproxy: ожидание запроса на самообновление (server)
+
+[Path]
+PathExists=/var/lib/tgproxy/updates/staged/request
+Unit=tgproxy-update-server.service
+
+[Install]
+WantedBy=multi-user.target

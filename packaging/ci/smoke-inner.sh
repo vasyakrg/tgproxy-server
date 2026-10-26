@@ -22,6 +22,8 @@ getent passwd tgproxy >/dev/null || fail "пользователь tgproxy не 
 [ "$(stat -c '%U:%G %a' /etc/tgproxy)" = "root:tgproxy 750" ] || fail "права /etc/tgproxy: $(stat -c '%U:%G %a' /etc/tgproxy)"
 [ "$(stat -c '%U:%G %a' /etc/tgproxy/server.yaml)" = "root:tgproxy 640" ] || fail "права server.yaml"
 [ "$(stat -c '%U:%G %a' /var/lib/tgproxy)" = "tgproxy:tgproxy 750" ] || fail "права /var/lib/tgproxy"
+[ "$(stat -c '%U:%G %a' /var/cache/tgproxy/packages)" = "root:root 755" ] || fail "доверенный кэш пакетов: права $(stat -c '%U:%G %a' /var/cache/tgproxy/packages)"
+[ ! -e /var/lib/tgproxy/packages ] || fail "устаревший /var/lib/tgproxy/packages остался"
 systemctl is-enabled tgproxy-server.service >/dev/null 2>&1 && fail "server включён после установки"
 systemctl is-active tgproxy-server.service >/dev/null 2>&1 && fail "server запущен после установки"
 tgproxy version
@@ -67,7 +69,7 @@ runuser -u tgproxy -- tgproxy pki init -c /etc/tgproxy/server.yaml
 tgproxy config validate --mode server -c /etc/tgproxy/server.yaml
 
 step "systemd-analyze verify"
-systemd-analyze verify tgproxy-server.service tgproxy-agent.service tgproxy-update.path tgproxy-update.service || fail "verify"
+systemd-analyze verify tgproxy-server.service tgproxy-agent.service tgproxy-update-server.path tgproxy-update-server.service tgproxy-update-agent.path tgproxy-update-agent.service || fail "verify"
 
 step "start + healthz"
 systemctl start tgproxy-server.service || fail "start"
@@ -105,6 +107,7 @@ pgrep -x tgproxy >/dev/null && fail "процесс tgproxy жив"
 step "purge: данные и пользователь удалены"
 "${APT[@]}" purge tgproxy >/dev/null
 [ ! -e /etc/tgproxy ] || fail "/etc/tgproxy остался"
+[ ! -e /var/cache/tgproxy ] || fail "/var/cache/tgproxy остался после purge"
 [ ! -e /var/lib/tgproxy ] || fail "/var/lib/tgproxy остался"
 getent passwd tgproxy >/dev/null && fail "пользователь остался"
 getent group tgproxy >/dev/null && fail "группа осталась"

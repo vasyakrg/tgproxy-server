@@ -24,6 +24,7 @@ const (
 	HostKeyMismatch     AlertType = "hostkey_mismatch"
 	AgentEnrolled       AlertType = "agent_enrolled"
 	AllAgentsDown       AlertType = "all_agents_down"
+	RolloutFailed       AlertType = "rollout_failed"
 )
 
 // Severity — важность алерта.

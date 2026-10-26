@@ -45,6 +45,7 @@ func DefaultServer() *ServerConfig {
 		},
 		Update: UpdateConfig{
 			Enabled:       true,
+			Source:        UpdateSourceGitHub,
 			Repo:          "vasyakrg/tgproxy-server",
 			CheckInterval: 6 * time.Hour,
 			StagingDir:    "/var/lib/tgproxy/updates",

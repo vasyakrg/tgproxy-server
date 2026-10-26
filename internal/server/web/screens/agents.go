@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -69,6 +70,7 @@ func MountAgents(rt AgentsRouter, d AgentsDeps) {
 	m("GET /agents/{id}/more", s.more)
 	m("GET /agents/{id}/delete", s.deleteConfirm)
 	m("POST /agents/{id}/delete", s.remove)
+	s.mountRollout(m)
 	s.mountWizard(m)
 }
 
@@ -91,12 +93,13 @@ func (s *agentsScreen) serverError(w http.ResponseWriter, r *http.Request, err e
 
 // ---------- модель ----------
 
-func (s *agentsScreen) rows(filterQ, filterStatus string) AgentsVM {
+func (s *agentsScreen) rows(ctx context.Context, filterQ, filterStatus string) AgentsVM {
 	vm := AgentsVM{
 		ServerVersion: s.d.ServerVersion, Query: filterQ, Status: filterStatus, StatusOpts: statusOpts,
 		Can: s.d.Service.Capabilities(), PollSec: int(AgentsPollInterval / time.Second),
 	}
 	now := s.now()
+	ro := s.rolloutInfo(ctx, &vm)
 	q := strings.ToLower(strings.TrimSpace(filterQ))
 	for _, v := range s.d.Service.List() {
 		vm.Total++
@@ -104,6 +107,10 @@ func (s *agentsScreen) rows(filterQ, filterStatus string) AgentsVM {
 			vm.Up++
 		}
 		row := makeAgentRow(v, s.d.ServerVersion, now)
+		if lagging(v.State, s.d.ServerVersion) {
+			vm.Lagging++
+			row.CanUpdate = ro.canUpdate && v.State.Up
+		}
 		if filterStatus != "" && api.StatusOf(v.State) != filterStatus {
 			continue
 		}
@@ -112,6 +119,7 @@ func (s *agentsScreen) rows(filterQ, filterStatus string) AgentsVM {
 		}
 		vm.Rows = append(vm.Rows, row)
 	}
+	vm.CanUpdateAll = ro.canUpdate && vm.Lagging > 0
 	return vm
 }
 
@@ -199,7 +207,7 @@ func (s *agentsScreen) page(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q, status := s.filters(r)
-	vm := s.rows(q, status)
+	vm := s.rows(r.Context(), q, status)
 	if isFragment(r) {
 		renderFragment(w, r, http.StatusOK, AgentsBody(vm, false)) //nolint:contextcheck // templ
 		return
@@ -213,14 +221,14 @@ func (s *agentsScreen) refresh(w http.ResponseWriter, r *http.Request, kind, mes
 	if message != "" {
 		toast(w, kind, message)
 	}
-	renderFragment(w, r, http.StatusOK, AgentsBody(s.rows(q, status), false)) //nolint:contextcheck // templ
+	renderFragment(w, r, http.StatusOK, AgentsBody(s.rows(r.Context(), q, status), false)) //nolint:contextcheck // templ
 }
 
 // closeAndRefresh закрывает диалог и подменяет таблицу (OOB).
 func (s *agentsScreen) closeAndRefresh(w http.ResponseWriter, r *http.Request, message string) {
 	q, status := s.filters(r)
 	toast(w, "ok", message)
-	renderFragment(w, r, http.StatusOK, templ.Join(AgentModal(true), AgentsBody(s.rows(q, status), true))) //nolint:contextcheck // templ
+	renderFragment(w, r, http.StatusOK, templ.Join(AgentModal(true), AgentsBody(s.rows(r.Context(), q, status), true))) //nolint:contextcheck // templ
 }
 
 // failToast превращает ошибку действия в тост и свежую таблицу.
@@ -503,6 +511,6 @@ func (s *agentsScreen) remove(w http.ResponseWriter, r *http.Request) {
 	toast(w, "ok", "Агент «"+row.Name+"» удалён")
 	renderFragment(w, r, http.StatusOK, templ.Join( //nolint:contextcheck // templ
 		RemovedPanel(RemovedVM{Name: row.Name, Revoked: res.Revoked, DrainTimedOut: res.DrainTimedOut, DrainUnchecked: res.DrainUnchecked}),
-		AgentsBody(s.rows(q, status), true), //nolint:contextcheck // templ-компонент получает ctx в Render
+		AgentsBody(s.rows(r.Context(), q, status), true), //nolint:contextcheck // templ-компонент получает ctx в Render
 	))
 }

@@ -14,7 +14,7 @@ purge)
     if systemd_running; then
         systemctl daemon-reload || true
     fi
-    rm -rf /var/lib/tgproxy /var/lib/tgproxy-incoming /etc/tgproxy
+    rm -rf /var/lib/tgproxy /var/lib/tgproxy-incoming /var/cache/tgproxy /etc/tgproxy
     if getent passwd tgproxy >/dev/null 2>&1; then
         deluser --system tgproxy >/dev/null 2>&1 || userdel tgproxy >/dev/null 2>&1 || true
     fi

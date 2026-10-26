@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
@@ -11,11 +12,15 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/vasyakrg/tgproxy-server/internal/deployhelper"
+	"github.com/vasyakrg/tgproxy-server/internal/release"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
 
@@ -75,7 +80,10 @@ type run struct {
 	curStep string
 
 	// Что реально сделано — для отката.
-	debTmp            string
+	debTmp            string // временные файлы релиза на хосте (SFTP, 0600)
+	sumTmp            string
+	sigTmp            string
+	incomingBase      string // имена в incoming (stage), пока не удалены хелпером
 	pkgWasInstalled   bool
 	pkgInstallStarted bool
 	userCreated       bool
@@ -279,19 +287,6 @@ func (r *run) undoSSH(_ context.Context) (bool, error) { return false, nil }
 
 // ---- шаг 2: загрузка пакета ----
 
-func hashFile(path string) (string, error) {
-	f, err := os.Open(path) // #nosec G304 -- файл из кэша пакетов, имя прошло pkgNameRe
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 func (r *run) doUpload(ctx context.Context) error {
 	out, err := r.exec(ctx, r.admin, cmdDpkgArch())
 	if err != nil {
@@ -301,22 +296,27 @@ func (r *run) doUpload(ctx context.Context) error {
 	if !archRe.MatchString(arch) {
 		return fmt.Errorf("неожиданная архитектура хоста %q", arch)
 	}
-	local, name, ok := r.pkgs.path(r.cfg().PackagesDir, arch)
+	local, name, ok := r.pkgs.path(arch)
 	if !ok {
 		return fmt.Errorf("в кэше нет пакета tgproxy %s для архитектуры %s", r.pkgs.version, arch)
 	}
-	want, err := hashFile(local)
+	// Подпись проверяется НА СЕРВЕРЕ до любой отправки на хост.
+	checksums, sig, err := r.readSigned()
 	if err != nil {
-		return fmt.Errorf("чтение пакета: %w", err)
+		return err
 	}
-	if f := r.cfg().ExpectedSHA256; f != nil {
-		exp, known := f(name)
-		if !known || !strings.EqualFold(exp, want) {
-			return fmt.Errorf("sha256 пакета %s не совпадает с подписанным списком", name)
-		}
+	if err := r.cfg().Verifier.Verify(checksums, sig); err != nil {
+		return fmt.Errorf("подпись пакета %s: %w", name, err)
 	}
-	r.logf("info", "Пакет %s, sha256 %s", name, want)
-	src, err := os.Open(local) // #nosec G304
+	if err := r.cfg().Verifier.CheckVersion(r.pkgs.version); err != nil {
+		return fmt.Errorf("версия пакета %s: %w", name, err)
+	}
+	want, err := r.verifiedSum(local, name, checksums)
+	if err != nil {
+		return err
+	}
+	r.logf("info", "Пакет %s: подпись minisign и sha256 %s проверены", name, want)
+	src, err := os.Open(local) // #nosec G304 -- файл из кэша загрузок, имя прошло pkgNameRe
 	if err != nil {
 		return err
 	}
@@ -327,7 +327,13 @@ func (r *run) doUpload(ctx context.Context) error {
 	}
 	r.debTmp = tmp
 	if sum != want {
-		return errors.New("пакет изменился во время загрузки")
+		return errors.New("пакет изменился после проверки подписи")
+	}
+	if r.sumTmp, _, err = r.admin.Upload(ctx, bytes.NewReader(checksums)); err != nil {
+		return err
+	}
+	if r.sigTmp, _, err = r.admin.Upload(ctx, bytes.NewReader(sig)); err != nil {
+		return err
 	}
 	out, err = r.exec(ctx, r.admin, cmdSHA256(tmp))
 	if err != nil {
@@ -336,22 +342,93 @@ func (r *run) doUpload(ctx context.Context) error {
 	if got, _, _ := strings.Cut(strings.TrimSpace(out), " "); got != want {
 		return fmt.Errorf("sha256 на хосте %q не совпадает с локальным %q", got, want)
 	}
-	r.logf("info", "Пакет загружен на хост, sha256 совпал")
+	r.logf("info", "Релиз загружен на хост (deb, checksums.txt, .minisig), sha256 совпал")
 	return nil
+}
+
+const maxSignedMeta = 1 << 20
+
+// readSigned читает checksums.txt и .minisig релиза из кэша загрузок.
+func (r *run) readSigned() (checksums, sig []byte, err error) {
+	read := func(name string) ([]byte, error) {
+		f, err := os.Open(filepath.Join(r.pkgs.dir, name)) // #nosec G304 -- каталог версии из findPackages, имена фиксированы
+		if err != nil {
+			return nil, fmt.Errorf("в кэше нет %s версии %s: %w", name, r.pkgs.version, err)
+		}
+		defer func() { _ = f.Close() }()
+		b, err := io.ReadAll(io.LimitReader(f, maxSignedMeta+1))
+		if err != nil || len(b) > maxSignedMeta {
+			return nil, fmt.Errorf("%s: нечитаем или слишком велик", name)
+		}
+		return b, nil
+	}
+	if checksums, err = read(release.ChecksumsName); err != nil {
+		return nil, nil, err
+	}
+	if sig, err = read(release.SigName); err != nil {
+		return nil, nil, err
+	}
+	return checksums, sig, nil
+}
+
+// verifiedSum сверяет deb с подписанным checksums.txt и возвращает его sha256,
+// посчитанный за тот же проход (подмена файла между проверкой и загрузкой видна).
+func (r *run) verifiedSum(path, name string, checksums []byte) (string, error) {
+	f, err := os.Open(path) // #nosec G304 -- файл из кэша загрузок
+	if err != nil {
+		return "", fmt.Errorf("чтение пакета: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if err := r.cfg().Verifier.CheckFile(checksums, name, io.TeeReader(f, h)); err != nil {
+		return "", fmt.Errorf("sha256 пакета %s не совпадает с подписанным списком: %w", name, err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (r *run) undoUpload(ctx context.Context) (bool, error) {
 	return r.removeDebTmp(ctx)
 }
 
+// removeDebTmp удаляет временные файлы релиза на хосте (три файла одним rm).
 func (r *run) removeDebTmp(ctx context.Context) (bool, error) {
-	if r.debTmp == "" || r.admin == nil {
+	if r.admin == nil {
 		return false, nil
 	}
-	tmp := r.debTmp
-	r.debTmp = ""
-	_, err := r.admin.Run(context.WithoutCancel(ctx), cmdRemoveTmp(tmp))
+	var paths []string
+	for _, p := range []string{r.debTmp, r.sumTmp, r.sigTmp} {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	if len(paths) == 0 {
+		return false, nil
+	}
+	r.debTmp, r.sumTmp, r.sigTmp = "", "", ""
+	_, err := r.admin.Run(context.WithoutCancel(ctx), cmdRemoveTmp(paths...))
 	return err == nil, err
+}
+
+// stageToTrustedCache кладёт копию релиза в доверенный кэш хоста для будущих
+// откатов: файлы → incoming (root), затем `deploy-helper stage` (он сам проверяет
+// minisign встроенными ключами только что установленного пакета).
+func (r *run) stageToTrustedCache(ctx context.Context) error {
+	a := r.admin
+	base := path.Base(r.debTmp)
+	deb := incomingDir + "/" + base
+	r.incomingBase = deb
+	for _, f := range []struct{ src, dst string }{
+		{r.debTmp, deb}, {r.sumTmp, deb + deployhelper.ChecksumsSuffix}, {r.sigTmp, deb + deployhelper.SigSuffix},
+	} {
+		if _, err := r.exec(ctx, a, cmdInstallFile("0600", "root", "root", f.src, f.dst)); err != nil {
+			return err
+		}
+	}
+	if _, err := r.exec(ctx, a, cmdHelperStage(deb, r.pkgs.version)); err != nil {
+		return err
+	}
+	r.incomingBase = "" // хелпер удалил свои входные файлы
+	return nil
 }
 
 // ---- шаг 3: пакет и пользователи ----
@@ -373,11 +450,11 @@ func (r *run) doInstall(ctx context.Context) error {
 		return err
 	}
 	r.pkgInstallStarted = true
-	// Первичная установка: хелпера ещё нет, пакет ставит администратор (он уже доверенный root).
+	// Первичная установка: хелпера ещё нет, пакет ставит администратор (он уже доверенный root);
+	// подпись проверена на сервере в шаге «Загрузка».
 	if _, err := r.exec(ctx, a, cmdDpkgInstall(r.debTmp)); err != nil {
 		return err
 	}
-	_, _ = r.removeDebTmp(ctx)
 	switch _, err := r.exec(ctx, a, cmdIDUser()); {
 	case err == nil:
 		r.logf("info", "Пользователь %s уже существует", deployUser)
@@ -396,6 +473,10 @@ func (r *run) doInstall(ctx context.Context) error {
 	if _, err := r.exec(ctx, a, cmdInstallDir("0730", "root", deployUser, incomingDir)); err != nil {
 		return err
 	}
+	if err := r.stageToTrustedCache(ctx); err != nil {
+		return err
+	}
+	_, _ = r.removeDebTmp(ctx)
 	sshDir := deployHome + "/.ssh"
 	if _, err := r.exec(ctx, a, cmdInstallDir("0700", deployUser, deployUser, sshDir)); err != nil {
 		return err
@@ -419,7 +500,7 @@ func (r *run) put(ctx context.Context, rem *Remote, data []byte, mode, owner, gr
 }
 
 func (r *run) undoInstall(ctx context.Context) (bool, error) {
-	if !r.pkgInstallStarted && !r.keyWritten && !r.sudoersWritten {
+	if !r.pkgInstallStarted && !r.keyWritten && !r.sudoersWritten && r.incomingBase == "" {
 		return false, nil
 	}
 	if r.admin == nil {
@@ -440,6 +521,10 @@ func (r *run) undoInstall(ctx context.Context) (bool, error) {
 		if _, err := r.exec(ctx, r.admin, c); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if r.incomingBase != "" {
+		step(cmdRemoveRoot(r.incomingBase, r.incomingBase+deployhelper.ChecksumsSuffix, r.incomingBase+deployhelper.SigSuffix))
+		r.incomingBase = ""
 	}
 	if r.sudoersWritten {
 		step(cmdRemoveRoot(sudoersPath))
@@ -535,6 +620,10 @@ func (r *run) doStart(ctx context.Context) error {
 	r.deploy = newRemote(cl, deployUser, Auth{Signer: r.cfg().ServerKey}, r.cfg().RemoteTmpDir)
 	r.unitEnabled = true
 	if _, err := r.exec(ctx, r.deploy, cmdHelperUnit("enable")); err != nil {
+		return err
+	}
+	// Без path-юнита самообновления раскатка зависла бы: request никто не применит.
+	if _, err := r.exec(ctx, r.deploy, cmdHelperUnit("enable-update")); err != nil {
 		return err
 	}
 	return r.poll(ctx, "юнит "+agentUnit+" не active", func() error {

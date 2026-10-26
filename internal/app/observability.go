@@ -32,6 +32,7 @@ type obs struct {
 
 	metricsHandler http.Handler // nil — листенер метрик не поднимается
 
+	toggles  *notify.Toggles  // переключатели типов событий (всегда есть)
 	notifier *notify.Notifier // nil — уведомления выключены
 	deliv    *notify.Deliverer
 	eval     *notify.Evaluator
@@ -87,6 +88,7 @@ func (s *Server) wireObs(cfg *config.ServerConfig) error {
 		}
 		o.metricsHandler = h
 	}
+	o.toggles = notify.NewToggles(s.st.Settings())
 	s.obs = o
 
 	token := cfg.Notify.BotToken.Reveal()
@@ -95,7 +97,8 @@ func (s *Server) wireObs(cfg *config.ServerConfig) error {
 		return nil
 	}
 	o.notifier = notify.NewNotifier(s.st.Outbox(), notify.Options{
-		RepeatInterval: cfg.Notify.RepeatInterval, MaxPerMinute: cfg.Notify.MaxPerMinute, Logger: s.logger})
+		RepeatInterval: cfg.Notify.RepeatInterval, MaxPerMinute: cfg.Notify.MaxPerMinute, Logger: s.logger,
+		Enabled: o.toggles.Enabled})
 	o.deliv = notify.NewDeliverer(notify.DeliverOptions{
 		Outbox: s.st.Outbox(), Sender: routerSender{s}, Token: token, Metrics: o.m, Logger: s.logger,
 		Timeout: cfg.Notify.DeliveryTimeout, Poll: s.opts.NotifyPoll,

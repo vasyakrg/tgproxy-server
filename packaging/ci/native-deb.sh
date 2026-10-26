@@ -7,7 +7,8 @@ cd "$(dirname "$0")/../.."
 
 case "$(docker info --format '{{.Architecture}}')" in
   x86_64)
-    [ -n "$(ls dist/tgproxy_*_amd64.deb 2>/dev/null)" ] || goreleaser release --snapshot --clean --skip=sign,archive >/dev/null
+    # С TGPROXY_PUBKEYS (dev-ключ) deb пересобирается: ключ вшит в бинарь.
+    [ -z "${TGPROXY_PUBKEYS:-}" ] && [ -n "$(ls dist/tgproxy_*_amd64.deb 2>/dev/null)" ] || goreleaser release --snapshot --clean --skip=sign,archive >/dev/null
     DEB="$(ls dist/tgproxy_*_amd64.deb | head -n1)"
     ;;
   aarch64|arm64)

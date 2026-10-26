@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"aead.dev/minisign"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/vasyakrg/tgproxy-server/internal/store"
@@ -282,24 +283,29 @@ func TestPackages(t *testing.T) {
 	if _, err := findPackages(dir, ""); err == nil {
 		t.Fatal("пустой кэш")
 	}
-	for _, n := range []string{
-		"tgproxy_1.9.0_amd64.deb", "tgproxy_1.10.0_amd64.deb", "tgproxy_1.10.0-rc1_amd64.deb", "tgproxy_1.10.0_arm64.deb",
-		"tgproxy_0.0.1-snapshot_amd64.deb", "other_1.0_amd64.deb", "tgproxy_bad.deb", "prev.deb",
-	} {
-		writePkg(t, dir, n, "x")
-	}
-	_ = os.Mkdir(filepath.Join(dir, "tgproxy_99.0.0_amd64.deb"), 0o755)
+	_, key, _ := minisign.GenerateKey(rand.Reader)
+	writeRelease(t, dir, "1.9.0", key, map[string]string{"amd64": "x"})
+	writeRelease(t, dir, "1.10.0", key, map[string]string{"amd64": "x", "arm64": "y"})
+	writeRelease(t, dir, "1.10.0-rc1", key, map[string]string{"amd64": "x"})
+	writeRelease(t, dir, "0.0.1-snapshot", key, map[string]string{"amd64": "x"})
+	// мусор: плоский файл, каталог с плохой версией, чужие имена, deb не той версии
+	writeRelease(t, dir, "v2.0.0", key, map[string]string{"amd64": "x"})
+	_ = os.WriteFile(filepath.Join(dir, "tgproxy_3.0.0_amd64.deb"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "prev.deb"), []byte("x"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "4.0.0", "tgproxy_4.0.0_amd64.deb"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "1.9.0", "other_1.0_amd64.deb"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "1.9.0", "tgproxy_5.0.0_amd64.deb"), []byte("x"), 0o644)
 	p, err := findPackages(dir, "")
-	if err != nil || p.version != "1.10.0" || len(p.files) != 2 {
+	if err != nil || p.version != "1.10.0" || len(p.files) != 2 || p.dir != filepath.Join(dir, "1.10.0") {
 		t.Fatalf("%+v %v", p, err)
 	}
-	if path, name, ok := p.path(dir, "arm64"); !ok || name != "tgproxy_1.10.0_arm64.deb" || filepath.Dir(path) != dir {
+	if path, name, ok := p.path("arm64"); !ok || name != "tgproxy_1.10.0_arm64.deb" || filepath.Dir(path) != p.dir {
 		t.Fatal(path, name, ok)
 	}
-	if _, _, ok := p.path(dir, "mips"); ok {
+	if _, _, ok := p.path("mips"); ok {
 		t.Fatal("несуществующая архитектура")
 	}
-	if p, err := findPackages(dir, "1.9.0"); err != nil || p.version != "1.9.0" {
+	if p, err := findPackages(dir, "1.9.0"); err != nil || p.version != "1.9.0" || len(p.files) != 1 {
 		t.Fatalf("%+v %v", p, err)
 	}
 	if _, err := findPackages(dir, "2.0.0"); err == nil {

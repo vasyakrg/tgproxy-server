@@ -3,6 +3,7 @@ package memtest
 import (
 	"cmp"
 	"context"
+	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -644,4 +645,160 @@ func (r jobRepo) Events(_ context.Context, jobID string, afterID int64) ([]store
 		}
 	}
 	return out, nil
+}
+
+// ---- settings ----
+
+type settingsRepo struct{ s *Store }
+
+func (r settingsRepo) Get(_ context.Context, key string) (string, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	v, ok := r.s.settings[key]
+	if !ok {
+		return "", store.ErrNotFound
+	}
+	return v, nil
+}
+
+func (r settingsRepo) Set(_ context.Context, key, value string) error {
+	if key == "" {
+		return store.ErrInvalid
+	}
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	r.s.settings[key] = value
+	return nil
+}
+
+func (r settingsRepo) List(context.Context) (map[string]string, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	return maps.Clone(r.s.settings), nil
+}
+
+// ---- rollouts ----
+
+type rolloutRepo struct{ s *Store }
+
+func (r rolloutRepo) Create(_ context.Context, o store.Rollout, steps []store.RolloutStep) error {
+	if err := o.Validate(); err != nil {
+		return err
+	}
+	for _, st := range steps {
+		if err := st.Validate(); err != nil {
+			return err
+		}
+	}
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	for _, ex := range r.s.rollouts {
+		if ex.ID == o.ID || (o.Active() && ex.Active()) {
+			return store.ErrConflict
+		}
+	}
+	if o.CreatedAt.IsZero() {
+		o.CreatedAt = time.Now()
+	}
+	o.CreatedAt = trunc(o.CreatedAt)
+	r.s.rollouts = append(r.s.rollouts, o)
+	now := nowMS()
+	seen := map[string]bool{}
+	for _, st := range steps {
+		if seen[st.AgentID] {
+			return store.ErrConflict
+		}
+		seen[st.AgentID] = true
+		st.RolloutID, st.UpdatedAt = o.ID, now
+		r.s.rolloutSteps = append(r.s.rolloutSteps, st)
+	}
+	return nil
+}
+
+func (r rolloutRepo) find(id string) int {
+	return slices.IndexFunc(r.s.rollouts, func(o store.Rollout) bool { return o.ID == id })
+}
+
+func (r rolloutRepo) Get(_ context.Context, id string) (store.Rollout, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	i := r.find(id)
+	if i < 0 {
+		return store.Rollout{}, store.ErrNotFound
+	}
+	return r.s.rollouts[i], nil
+}
+
+func (r rolloutRepo) Active(_ context.Context) (store.Rollout, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	for i := len(r.s.rollouts) - 1; i >= 0; i-- {
+		if r.s.rollouts[i].Active() {
+			return r.s.rollouts[i], nil
+		}
+	}
+	return store.Rollout{}, store.ErrNotFound
+}
+
+func (r rolloutRepo) Latest(_ context.Context) (store.Rollout, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if len(r.s.rollouts) == 0 {
+		return store.Rollout{}, store.ErrNotFound
+	}
+	return r.s.rollouts[len(r.s.rollouts)-1], nil
+}
+
+func (r rolloutRepo) SetState(_ context.Context, id, state, errMsg string) error {
+	if state == "" {
+		return store.ErrInvalid
+	}
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	i := r.find(id)
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	o := r.s.rollouts[i]
+	o.State, o.Error = state, errMsg
+	if o.Active() {
+		o.FinishedAt = nil
+	} else {
+		t := nowMS()
+		o.FinishedAt = &t
+	}
+	r.s.rollouts[i] = o
+	return nil
+}
+
+func (r rolloutRepo) Steps(_ context.Context, id string) ([]store.RolloutStep, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	var out []store.RolloutStep
+	for _, st := range r.s.rolloutSteps {
+		if st.RolloutID == id {
+			out = append(out, st)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b store.RolloutStep) int { return cmp.Compare(a.Seq, b.Seq) })
+	return out, nil
+}
+
+func (r rolloutRepo) SetStep(_ context.Context, id, agentID, state, fromVersion, errMsg string) error {
+	if state == "" {
+		return store.ErrInvalid
+	}
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	for i, st := range r.s.rolloutSteps {
+		if st.RolloutID == id && st.AgentID == agentID {
+			st.State, st.Error, st.UpdatedAt = state, errMsg, nowMS()
+			if fromVersion != "" {
+				st.FromVersion = fromVersion
+			}
+			r.s.rolloutSteps[i] = st
+			return nil
+		}
+	}
+	return store.ErrNotFound
 }

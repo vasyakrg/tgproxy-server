@@ -1,0 +1,327 @@
+package screens
+
+import "strconv"
+import "github.com/vasyakrg/tgproxy-server/internal/server/web/views"
+
+// SystemPage — экран «Система».
+templ SystemPage(v SystemVM) {
+	@views.PageHeader("Система", "Обновление сервера и уведомления администраторам.")
+	<div class="sys-grid">
+		@UpdateCard(v.Update, false)
+		@NotifyCard(v.Notify)
+	</div>
+	@SysModal(false)
+}
+
+// SysModal — диалог экрана (тело подгружается htmx). С oob=true заменяет открытый диалог закрытым.
+templ SysModal(oob bool) {
+	<div
+		id="sys-modal-wrap"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		@views.Modal("sys-modal", "Система") {
+			<div id="sys-modal-body"></div>
+		}
+	</div>
+}
+
+// UpdateCard — карточка «Обновление сервера». С oob=true подменяет карточку на странице.
+templ UpdateCard(u UpdateVM, oob bool) {
+	<section
+		id="sys-update"
+		class="card"
+		aria-label="Обновление сервера"
+		if oob {
+			hx-swap-oob="true"
+		}
+		if u.Poll {
+			hx-get="/system/update"
+			hx-trigger={ "every " + strconv.Itoa(u.PollSec) + "s" }
+			hx-swap="outerHTML"
+		}
+	>
+		<div class="card-head">
+			<h2 class="card-title">Обновление сервера</h2>
+			if u.Enabled {
+				<span class="sys-head-actions">
+					@views.IconButton("Загрузить файл обновления", "upload", false, templ.Attributes{
+						"hx-get": "/system/upload", "hx-target": "#sys-modal-body", "hx-swap": "innerHTML", "data-modal-open": "sys-modal",
+					})
+					@views.IconButton("Проверить сейчас", "refresh", false, templ.Attributes{
+						"hx-post": "/system/check", "hx-target": "#sys-update", "hx-swap": "outerHTML", "hx-disabled-elt": "this",
+					})
+				</span>
+			}
+		</div>
+		if !u.Enabled {
+			@views.EmptyState("Обновления выключены в конфиге", "В конфигурации сервера задано update.enabled: false. Обновляйте пакет вручную.")
+		} else {
+			<div class="sys-versions">
+				<div class="sys-ver">
+					<span class="sys-ver-label">Установлено</span>
+					<span class="mono sys-ver-value">{ u.Current }</span>
+				</div>
+				<div class="sys-ver">
+					<span class="sys-ver-label">Доступно</span>
+					if u.Available != "" {
+						<span class="mono sys-ver-value tone-accent">{ u.Available }</span>
+					} else {
+						<span class="mono sys-ver-value muted">
+							if u.Checked == "" {
+								—
+							} else {
+								нет новее
+							}
+						</span>
+					}
+				</div>
+				<div class="sys-ver">
+					<span class="sys-ver-label">Проверено</span>
+					<span class="sys-ver-when">
+						if u.Checked == "" {
+							ещё не проверялось
+						} else {
+							{ u.Checked }
+						}
+					</span>
+				</div>
+			</div>
+			<fieldset class="radio-group" disabled>
+				<legend class="sys-legend">Откуда скачать (задаётся в конфиге: update.source)</legend>
+				for _, s := range u.Sources {
+					<label class="check sys-source">
+						<input type="radio" name="src" checked?={ s.On } disabled/>
+						<span>{ s.Label }</span>
+						<span class="muted small">{ s.Hint }</span>
+					</label>
+				}
+			</fieldset>
+			if u.LastError != "" && u.Available == "" {
+				<div class="alert alert-err" role="alert">{ u.LastError }</div>
+			}
+			if len(u.Checks) > 0 {
+				<ul class="job-steps sys-checks" aria-label="Проверка пакета">
+					for _, c := range u.Checks {
+						<li class="job-step" data-status={ c.Status }>
+							<span class="job-mark" aria-hidden="true"></span>
+							<span>{ c.Text }</span>
+						</li>
+					}
+				</ul>
+			}
+			if u.Staged != "" {
+				<div class="alert alert-warn" role="status">
+					{ u.Staged } проверена и ожидает установки. Её выполнит отдельная служба tgproxy-update с правами root, сервер на несколько секунд перезапустится.
+				</div>
+			}
+			if u.Result != nil {
+				<div class={ "alert", resultClass(u.Result) } role="status">
+					{ u.Result.Text }
+					if u.Result.Err != "" {
+						<div class="mono small">{ u.Result.Err }</div>
+					}
+				</div>
+			}
+			<p class="form-note">
+				Пакет ставит отдельная служба tgproxy-update с правами root. Если /healthz не ответит за 30 с, будет откат на { u.Current }. Агенты обновляются отдельно, на странице «Агенты».
+			</p>
+			if u.CanInstall {
+				<div class="sys-install">
+					<button
+						type="button"
+						class="btn btn-primary"
+						data-modal-open="sys-modal"
+						hx-get="/system/install"
+						hx-target="#sys-modal-body"
+						hx-swap="innerHTML"
+					>Установить { u.Target }</button>
+				</div>
+			}
+			if u.Uploaded != "" {
+				<p class="form-note">{ u.Uploaded } загружена вручную и проверена, источник обновлений остался прежним.</p>
+			}
+			if u.Notes != "" {
+				<details class="sys-notes" id="changelog">
+					<summary>Что нового в { u.Available }</summary>
+					<div class="sys-notes-body">
+						for _, l := range noteLines(u.Notes) {
+							<div>{ l }</div>
+						}
+					</div>
+				</details>
+			}
+		}
+	</section>
+}
+
+func resultClass(r *ResultVM) string {
+	switch r.Tone {
+	case views.ToneOK:
+		return "alert-ok"
+	case views.ToneWarn:
+		return "alert-warn"
+	}
+	return "alert-err"
+}
+
+// InstallConfirm — подтверждение установки.
+templ InstallConfirm(c ConfirmInstallVM) {
+	<form
+		class="stack"
+		method="post"
+		action="/system/install"
+		hx-post="/system/install"
+		hx-target="#sys-modal-body"
+		hx-swap="innerHTML"
+		hx-disabled-elt="find button[type=submit]"
+	>
+		<input type="hidden" name="confirm" value="yes"/>
+		<input type="hidden" name="version" value={ c.Version }/>
+		<h3 class="form-title">Установить { c.Version }?</h3>
+		<p>Пакет будет проверен (подпись minisign, sha256) и поставлен в очередь. Затем служба tgproxy-update остановит сервер, поставит пакет и запустит его снова: админка и прокси будут недоступны несколько секунд.</p>
+		<p class="muted">Если /healthz не ответит за 30 с, произойдёт откат на { c.Current }.</p>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-primary">Установить { c.Version }</button>
+		</div>
+	</form>
+}
+
+// UploadForm — загрузка файлов обновления вручную. errMsg — причина отказа прошлой попытки.
+templ UploadForm(max, errMsg string) {
+	<form
+		class="stack"
+		method="post"
+		action="/system/upload"
+		enctype="multipart/form-data"
+		hx-post="/system/upload"
+		hx-encoding="multipart/form-data"
+		hx-target="#sys-modal-body"
+		hx-swap="innerHTML"
+		hx-disabled-elt="find button[type=submit]"
+	>
+		<h3 class="form-title">Загрузить файл обновления</h3>
+		<p class="form-note">Нужны все три файла одного релиза. Подпись и sha256 проверяются до сохранения, пакет до { max }.</p>
+		if errMsg != "" {
+			<div class="alert alert-err" role="alert">{ errMsg }</div>
+		}
+		<div class="field">
+			<label class="field-label" for="up-deb">Пакет tgproxy_&lt;версия&gt;_amd64.deb</label>
+			<input class="input" id="up-deb" name="deb" type="file" accept=".deb" required/>
+		</div>
+		<div class="field">
+			<label class="field-label" for="up-sums">checksums.txt</label>
+			<input class="input" id="up-sums" name="checksums" type="file" required/>
+		</div>
+		<div class="field">
+			<label class="field-label" for="up-sig">checksums.txt.minisig</label>
+			<input class="input" id="up-sig" name="signature" type="file" accept=".minisig" required/>
+		</div>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-primary">Загрузить и проверить</button>
+		</div>
+	</form>
+}
+
+// NotifyCard — карточка «Уведомления в Telegram».
+templ NotifyCard(n NotifyVM) {
+	<section id="sys-notify" class="card" aria-label="Уведомления в Telegram">
+		<div class="card-head">
+			<h2 class="card-title">Уведомления в Telegram</h2>
+			if n.Configured {
+				<span class="sys-head-actions">
+					@views.IconButton("Отправить тест", "send", false, templ.Attributes{
+						"hx-post": "/system/notify/test", "hx-swap": "none", "hx-disabled-elt": "this",
+					})
+				</span>
+			}
+		</div>
+		if n.Error != "" {
+			<div class="alert alert-err" role="alert">{ n.Error }</div>
+		}
+		<div class="chips">
+			if n.Configured {
+				<span class="chip chip-ok">{ botLabel(n.BotID) }</span>
+				<span class="chip">отправка через пул агентов</span>
+				if n.Pending > 0 {
+					<span class="chip chip-warn">в очереди: { strconv.Itoa(n.Pending) }</span>
+				}
+			} else {
+				<span class="chip chip-warn">выключены: не задан notify.bot_token_file</span>
+			}
+		</div>
+		if len(n.Admins) == 0 {
+			<p class="muted">В users-файле нет администраторов.</p>
+		} else {
+			@views.Table("Администраторы", []string{"Администратор", "telegram_id", "2FA", "Последний вход"}) {
+				for _, a := range n.Admins {
+					<tr>
+						<td class="cell-name">
+							{ a.Name }
+							if a.Disabled {
+								@views.Chip("отключён", views.ToneWarn)
+							}
+						</td>
+						<td class="mono">
+							if a.NoTelegram {
+								<span class="tone-warn">не задан</span>
+							} else {
+								{ a.Telegram }
+							}
+						</td>
+						<td>
+							if a.TOTP {
+								<span class="tone-ok">включена</span>
+							} else {
+								<span class="tone-warn">нет</span>
+							}
+						</td>
+						<td class="mono muted">{ a.LastLogin }</td>
+					</tr>
+				}
+			}
+		}
+		<p class="form-note">Список берётся из users-файла и перечитывается при его изменении. Алерты получают администраторы с заданным telegram_id.</p>
+		@EventsForm(n.Events, n.Configured)
+	</section>
+}
+
+// EventsForm — переключатели «Какие события отправлять»; каждое изменение сохраняется сразу.
+templ EventsForm(events []NotifyEventRow, configured bool) {
+	<form
+		id="sys-events"
+		class="sys-events"
+		method="post"
+		action="/system/notify/events"
+		hx-post="/system/notify/events"
+		hx-trigger="change"
+		hx-swap="none"
+	>
+		<input type="hidden" name="present" value="1"/>
+		<fieldset class="sys-events-grid">
+			<legend class="sys-legend">Какие события отправлять</legend>
+			for _, e := range events {
+				<label class="check sys-event" title={ e.Hint }>
+					<input type="checkbox" name="event" value={ e.Type } checked?={ e.On }/>
+					<span>{ e.Title }</span>
+				</label>
+			}
+		</fieldset>
+		<noscript>
+			<button type="submit" class="btn">Сохранить</button>
+		</noscript>
+		if !configured {
+			<p class="form-note">Пока бот не настроен, события только копятся в журнале.</p>
+		}
+	</form>
+}
+
+func botLabel(id string) string {
+	if id == "" {
+		return "бот подключён"
+	}
+	return "бот " + id + " подключён"
+}

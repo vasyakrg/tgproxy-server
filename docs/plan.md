@@ -271,22 +271,25 @@
 - [x] **M6-T1 · goreleaser + nfpm** (сделано в рамках M5: deb, юниты с hardening 1.2, smoke, CI `deb-smoke`) (S-pkg)
   - Файлы: `.goreleaser.yaml` (`version: 2`; builds linux/amd64, darwin/arm64, darwin/amd64, `CGO_ENABLED=0`, `-trimpath`, ldflags buildinfo; archives tar.gz; `nfpms` deb: `contents` — бинарь `/usr/bin/tgproxy`, юниты `/lib/systemd/system/`, `/etc/tgproxy/server.yaml` и `agent.yaml` с `type: "config|noreplace"`, `/var/lib/tgproxy` (dir, owner tgproxy, 0750); `scripts` preinstall/postinstall/preremove/postremove; `checksum`; `signs` — minisign), `packaging/systemd/{tgproxy-server.service,tgproxy-agent.service,tgproxy-update.path,tgproxy-update.service}` (hardening из §8), `packaging/scripts/{preinst,postinst,prerm,postrm}.sh`, `packaging/etc/{server,agent}.yaml`.
   - Тесты: `goreleaser check`; CI-джоба smoke в `debian:12` (systemd-контейнер): install → `systemctl start tgproxy-server` → `/healthz`; upgrade поверх → изменённый конфиг сохранён; `remove` → юниты остановлены; `purge` → данные и юзер удалены; `systemd-analyze security tgproxy-server.service` ≤ 2.0 (парсинг вывода).
-- [ ] **M6-T2 · `updater`: источники релизов и minisign** (S-ops)
+- [x] **M6-T2 · `updater`: источники релизов и minisign** (S-ops)
   - Файлы: `internal/server/updater/source.go` (`type Source interface{ Latest(ctx) (Release, error); Fetch(ctx, asset) (io.ReadCloser, error) }`: `GitHubSource`, `ProxySource` (`update.http_proxy`), `AgentEgressSource` (через агента — **только** GET на allowlist `github.com`/`objects.githubusercontent.com` через отдельный `/_agent/egress` с жёстким allowlist хостов; добавить в контракт агента и `architecture.md`), `UploadSource`), `verify.go` (`Verify(checksums, sig, pubkeys [2]minisign.PublicKey)`, sha256 deb, `min_version`), `cache.go` (`/var/lib/tgproxy/packages/tgproxy_<v>_amd64.deb`, `prev.deb`), `stage.go` (`updates/staged` + файл `request`).
   - Тесты первыми: подпись вторым (ротационным) ключом принимается; чужим — отказ; изменённый 1 байт deb → отказ; даунгрейд ниже `min_version` → отказ; `AgentEgressSource` не ходит на хост вне allowlist (тест на агенте); частичная загрузка не попадает в `staged` (атомарный rename).
-- [ ] **M6-T3 · `tgproxy update apply` (root oneshot)** (S-ops)
+- [x] **M6-T3 · `tgproxy update apply` (root oneshot)** (S-ops)
   - Файлы: `internal/selfupdate/apply.go` (повторная проверка подписи → бэкап текущего deb → `dpkg -i` → `systemctl restart tgproxy-server` → опрос `/healthz` 30s → при провале `dpkg -i prev.deb` + restart + запись результата в `updates/result.json`), `cmd/tgproxy/update.go` (S-wire).
   - Тесты: `Executor`-интерфейс для `dpkg/systemctl` с фейком — успешный путь, провал health → откат, провал подписи → ничего не выполняется; интеграционный — в `debian:12` CI.
-- [ ] **M6-T4 · Раскатка агентов** (S-ops) · зависит от M5-T3, M6-T2
+- [x] **M6-T4 · Раскатка агентов** (S-ops) · зависит от M5-T3, M6-T2
   - Файлы: `internal/server/installer/rollout.go` (`Rollout{Canary: 1, BatchSize: N}`; на каждом агенте, независимо от режима связи: drain → `POST /_agent/update {version}` → агент сам качает пакет с `agent_gateway`/GitHub, проверяет minisign встроенными ключами и `min_version`, ставит через свой root-oneshot `tgproxy-update.service` → health 60s → иначе `prev.deb`; стоп раскатки при провале канарейки; «Остановить»), `internal/agent/selfupdate.go` (S-agent), `GET /_agent_gw/packages/<v>` в gateway (S-proxy). SSH (`tgproxy-deploy`) — только аварийный путь для `dial`-агентов.
   - Тесты: агент отвергает пакет с чужой подписью и версию ниже `min_version` даже по команде сервера; провал канарейки → остальные не трогаются; провал в батче 2 → откат именно этого агента, раскатка стоп, алерт; повторный запуск идемпотентен (агенты уже на версии пропускаются).
-- [ ] **M6-T5 · Экран Система + раскатка в Агентах** (S-web)
+- [x] **M6-T5 · Экран Система + раскатка в Агентах** (S-web)
   - По `System.dc.html`: карточка «Обновление сервера» (Установлено/Доступно/Проверено; «Откуда скачать»: GitHub Releases — напрямую, Через HTTP-прокси — `update.http_proxy`, Через агента — <агент>, Загрузить файл — deb + .minisig; чеклист проверки deb/minisign/sha256; пояснение про откат через 30 с; «Установить vX», «Что нового»); карточка «Уведомления в Telegram» (статус бота, «Отправить тест», таблица администраторов: telegram_id, 2FA, последний вход; источник `/etc/tgproxy/users.yml`); «Какие события отправлять» (переключатели типов §9). В Агентах — баннер раскатки «канарейка → батчи по N», шаги, «Остановить».
   - API: `system/{version,releases,update,upload}`, `notifications` + `test`, `agents/{id}/{update,rollback}`; upload — лимит 100 МБ, проверка подписи до сохранения в кэш.
   - Тесты: upload без `.minisig` → 422; повторное нажатие «Установить» не создаёт второй `request`.
-- [ ] **M6-T6 · Release-workflow** (S-pkg)
+- [x] **M6-T6 · Release-workflow** (S-pkg)
   - `.github/workflows/release.yml`: по тегу `v*`, environment `release` с minisign-ключом (см. ОВ-4), goreleaser release, smoke deb в `debian:12`, публикация в GitHub Releases.
   - Приёмка среза: на macOS сервер обнаруживает релиз (тестовый тег в форк-репо или локальный `ProxySource` на `httptest`-сервере с подписанными артефактами), проверяет подпись, стейджит; `update apply` и раскатка агентов проверяются в контейнере `sshd-debian`.
+
+**Срез M6:** в контейнере `sshd-debian` (systemd) агент ssh1 поставлен версией 0.0.2, обновлён командой сервера до 0.0.3 (подпись dev-ключом minisign, `tgproxy-update-agent.path` → `update apply`), релиз 0.0.4 с падающим бинарём откатан на 0.0.3 (`rolled_back=true`, агент up). Чужая подпись и даунгрейд → 422. Сервер на macOS проверяет релизы (GitHub: 0 релизов — корректно). Каталоги: непривилегированный кэш `updates/downloads`, доверенный `/var/cache/tgproxy/packages` (root). Не проверено: раскатка канарейка→батчи на нескольких systemd-агентах (стенд: один systemd-агент), реальная подпись minisign в release.yml (нужен ключ, ОВ-4).
+В M7: аварийное обновление dial-агента по SSH (`Installer.EmergencyUpdate`, нужен SSH-порт агента в БД).
 
 ---
 

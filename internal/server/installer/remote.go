@@ -20,7 +20,7 @@ import (
 const (
 	deployUser     = "tgproxy-deploy"
 	deployHome     = "/var/lib/tgproxy-deploy"
-	packagesDir    = "/var/lib/tgproxy/packages"
+	packagesDir    = "/var/cache/tgproxy/packages" // доверенный кэш, пишет только root
 	incomingDir    = "/var/lib/tgproxy-incoming"
 	tlsDir         = "/etc/tgproxy/tls"
 	agentKeyPath   = tlsDir + "/agent.key"
@@ -84,9 +84,11 @@ func cmdSHA256(path string) Command {
 	mustPath(path)
 	return fixed(false, "/usr/bin/sha256sum", path)
 }
-func cmdRemoveTmp(path string) Command {
-	mustPath(path)
-	return fixed(false, "/usr/bin/rm", "-f", path)
+func cmdRemoveTmp(paths ...string) Command {
+	for _, p := range paths {
+		mustPath(p)
+	}
+	return fixed(false, append([]string{"/usr/bin/rm", "-f"}, paths...)...)
 }
 func cmdRemoveRoot(paths ...string) Command {
 	for _, p := range paths {
@@ -118,6 +120,16 @@ func cmdInstallFile(mode, owner, group, src, dst string) Command {
 	mustPath(src)
 	mustPath(dst)
 	return fixed(true, "/usr/bin/install", "-D", "-m", mode, "-o", owner, "-g", group, src, dst)
+}
+
+// cmdHelperStage — перенос релиза из incoming в доверенный кэш хоста. Хелпер сам
+// проверяет minisign встроенными ключами пакета; вызывается администратором (root).
+func cmdHelperStage(incomingDeb, version string) Command {
+	mustPath(incomingDeb)
+	if !stageVersionRe.MatchString(version) {
+		panic("installer: unsafe version " + version)
+	}
+	return fixed(true, "/usr/bin/tgproxy", "deploy-helper", "stage", incomingDeb, version)
 }
 
 // cmdAgentCSR: ключ P-256 создаётся на агенте (0600, владелец tgproxy), в stdout уходит CSR.

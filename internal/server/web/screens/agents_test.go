@@ -84,6 +84,7 @@ func (f *agFleet) Conns(id string) int { return f.conns[id] }
 func (f *agFleet) SetWeight(_ context.Context, id string, w int) error {
 	return f.rec(fmt.Sprintf("weight:%s:%d", id, w))
 }
+
 func (f *agFleet) SetMode(_ context.Context, id string, m config.AgentMode, server, agentURL string) error {
 	return f.rec(fmt.Sprintf("mode:%s:%s:%s:%s", id, m, server, agentURL))
 }
@@ -154,6 +155,7 @@ type agFx struct {
 	issuer *agIssuer
 	logs   *bytes.Buffer
 	sid    *http.Cookie
+	rh     *screens.RolloutHandle
 	probes int
 	probe  func(installer.Target) (string, string, error)
 }
@@ -179,7 +181,7 @@ func newAgFx(t *testing.T, o agOpts) *agFx {
 	a.probe = func(_ installer.Target) (string, string, error) {
 		return "ssh-ed25519", "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", nil
 	}
-	deps := screens.AgentsDeps{Auth: f.a, ServerVersion: "v1.4.1", Logger: lg, Now: func() time.Time { return agNow }}
+	deps := screens.AgentsDeps{Rollout: func() *screens.RolloutHandle { return a.rh }, Auth: f.a, ServerVersion: "v1.4.1", Logger: lg, Now: func() time.Time { return agNow }}
 	if !o.noService {
 		deps.Service = api.NewAgentsService(api.AgentsConfig{
 			Agents: a.fleet, Drainer: a.fleet, Rotator: a.fleet, Remover: a.fleet, Mode: a.fleet, Weight: a.fleet, Reverse: a.fleet,

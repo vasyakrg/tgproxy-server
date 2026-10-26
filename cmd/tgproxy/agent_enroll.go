@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/spf13/cobra"
 
@@ -34,8 +36,9 @@ func newAgentEnrollCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "агент %q зарегистрирован; ключ и сертификаты: %s, %s, %s\nконфиг: %s (mode: reverse)\nзапуск: systemctl enable --now tgproxy-agent\n",
-				res.AgentID, res.KeyFile, res.CertFile, res.CAFile, res.ConfigPath)
+			updHint := enableUpdatePath(cmd.Context())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "агент %q зарегистрирован; ключ и сертификаты: %s, %s, %s\nконфиг: %s (mode: reverse)\nзапуск: systemctl enable --now tgproxy-agent\n%s",
+				res.AgentID, res.KeyFile, res.CertFile, res.CAFile, res.ConfigPath, updHint)
 			return nil
 		},
 	}
@@ -46,4 +49,22 @@ func newAgentEnrollCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("server")
 	_ = cmd.MarkFlagRequired("ca-fingerprint")
 	return cmd
+}
+
+const agentUpdatePath = "tgproxy-update-agent.path"
+
+// enableUpdatePath включает path-юнит самообновления агента (root + systemd) либо возвращает подсказку.
+// Юнит рассчитан на data_dir=/var/lib/tgproxy/agent (docs/operations.md).
+func enableUpdatePath(ctx context.Context) string {
+	hint := "самообновление: systemctl enable --now " + agentUpdatePath + "\n"
+	if os.Geteuid() != 0 {
+		return hint
+	}
+	if _, err := os.Stat("/run/systemd/system"); err != nil {
+		return hint
+	}
+	if err := exec.CommandContext(ctx, "systemctl", "enable", "--now", agentUpdatePath).Run(); err != nil { // #nosec G204 -- константа
+		return "самообновление не включено (" + err.Error() + "): systemctl enable --now " + agentUpdatePath + "\n"
+	}
+	return "самообновление: " + agentUpdatePath + " включён\n"
 }

@@ -3,9 +3,9 @@
 package installer
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -18,10 +18,12 @@ import (
 	"testing"
 	"time"
 
+	"aead.dev/minisign"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
+	"github.com/vasyakrg/tgproxy-server/internal/release/verify"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
 
@@ -91,14 +93,46 @@ func TestIntegrationInstallAgentInDebianSystemd(t *testing.T) {
 		arch = a
 	}
 	platform := "linux/" + arch
-	deb := os.Getenv("TGPROXY_DEB")
-	if deb == "" {
-		m, _ := filepath.Glob("../../../dist*/tgproxy_*_" + arch + ".deb")
-		if len(m) == 0 {
-			t.Skip("нет deb для " + arch + ": make deb (amd64) или goreleaser-сборка как в packaging/ci/smoke.sh, либо TGPROXY_DEB")
-		}
-		deb = m[0]
+	// Подписанный dev-набор (`make dev-packages`): deb собран с вшитым dev-pubkey, поэтому
+	// deploy-helper на хосте принимает подпись dev-ключа. Вне dev-набора stage отказал бы.
+	pkgDir := os.Getenv("TGPROXY_DEV_PACKAGES")
+	if pkgDir == "" {
+		pkgDir = "../../../dev/data/packages"
 	}
+	pubFile := os.Getenv("TGPROXY_DEV_PUBKEY")
+	if pubFile == "" {
+		pubFile = "../../../dev/data/minisign.pub"
+	}
+	pubRaw, err := os.ReadFile(pubFile)
+	if err != nil {
+		t.Skip("нет dev-ключа " + pubFile + ": make dev-packages")
+	}
+	devPub, err := verify.ParsePublicKey(string(pubRaw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := findPackages(pkgDir, "")
+	if err != nil {
+		t.Skip("нет подписанных пакетов: make dev-packages (" + err.Error() + ")")
+	}
+	debPath, _, ok := set.path(arch)
+	if !ok {
+		t.Skip("в " + pkgDir + " нет deb для " + arch + ": make dev-packages")
+	}
+	data, err := os.ReadFile(debPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksums, err := os.ReadFile(filepath.Join(set.dir, "checksums.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sigFile, err := os.ReadFile(filepath.Join(set.dir, "checksums.txt.minisig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := verify.Verifier{Keys: []verify.PublicKey{devPub}}
+	ver := set.version
 
 	image := "tgproxy-installer-it:local"
 	docker(t, "build", "-q", "--platform", platform, "-t", image, "-f", "testdata/Dockerfile.sshd-systemd", "testdata")
@@ -140,20 +174,13 @@ func TestIntegrationInstallAgentInDebianSystemd(t *testing.T) {
 		c.HealthTimeout = 40 * time.Second
 		c.StepTimeout = 5 * time.Minute
 	})
-	pkgDir := t.TempDir()
-	data, err := os.ReadFile(deb)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pkgName := "tgproxy_0.0.1-snapshot_" + arch + ".deb"
-	writePkg(t, pkgDir, pkgName, string(data))
 	hc := mtlsHealth{ca: e.ca}
 	srvKey, err := LoadOrCreateServerKey(filepath.Join(t.TempDir(), "ssh"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	inst, err := New(Config{
-		Store: e.st, CA: e.ca, Health: hc, Alerter: e.alerts, ServerKey: srvKey, PackagesDir: pkgDir,
+		Store: e.st, CA: e.ca, Health: hc, Alerter: e.alerts, ServerKey: srvKey, PackagesDir: pkgDir, Verifier: verifier,
 		HealthTimeout: 40 * time.Second, StepTimeout: 5 * time.Minute,
 	})
 	if err != nil {
@@ -203,6 +230,14 @@ func TestIntegrationInstallAgentInDebianSystemd(t *testing.T) {
 	if out := docker(t, "exec", name, "stat", "-c", "%U:%G %a", "/etc/tgproxy/tls/agent.crt"); out != "root:tgproxy 640" {
 		t.Fatalf("права сертификата: %q", out)
 	}
+	// Установщик положил подписанную копию в доверенный кэш хоста (через deploy-helper stage).
+	if out := docker(t, "exec", name, "sh", "-c", "stat -c '%U:%G %a %n' "+packagesDir+" "+packagesDir+"/"+ver+" "+packagesDir+"/"+ver+"/*"); !strings.Contains(out, "root:root 755 "+packagesDir+"\n") ||
+		!strings.Contains(out, "checksums.txt.minisig") || !strings.Contains(out, ".deb") {
+		t.Fatalf("доверенный кэш хоста:\n%s", out)
+	}
+	if out, _ := exec.CommandContext(ctx, "docker", "exec", name, "ls", "/var/lib/tgproxy/packages").CombinedOutput(); !strings.Contains(string(out), "No such file") {
+		t.Fatalf("устаревший /var/lib/tgproxy/packages существует: %s", out)
+	}
 	ag, err := e.st.Agents().Get(ctx, "it-1")
 	if err != nil || ag.Weight != 50 {
 		t.Fatalf("agent %+v %v", ag, err)
@@ -233,7 +268,6 @@ func TestIntegrationInstallAgentInDebianSystemd(t *testing.T) {
 		return code, string(out)
 	}
 	const hlp = "sudo -n /usr/bin/tgproxy deploy-helper "
-	ver := "0.0.1-snapshot"
 
 	// Разрешённый путь: unit, stage из incoming (SFTP от имени deploy), install.
 	for _, ok := range []string{hlp + "unit status", hlp + "unit restart", hlp + "unit is-active"} {
@@ -254,9 +288,12 @@ func TestIntegrationInstallAgentInDebianSystemd(t *testing.T) {
 		_, _ = f.Write(body)
 		_ = f.Close()
 	}
-	sum := sha256.Sum256(data)
-	put("up.deb", data)
-	put("up.deb.sha256", []byte(hex.EncodeToString(sum[:])+"  up.deb\n"))
+	putRelease := func(base string, body []byte) {
+		put(base, body)
+		put(base+".checksums", checksums)
+		put(base+".minisig", sigFile)
+	}
+	putRelease("up.deb", data)
 	if code, _ := run(hlp + "stage " + incomingDir + "/up.deb " + ver); code != 0 {
 		t.Fatal("stage отклонён")
 	}
@@ -284,7 +321,7 @@ func TestIntegrationInstallAgentInDebianSystemd(t *testing.T) {
 		{"sudo -n /usr/bin/systemctl link /tmp/evil.service tgproxy-agent", 1},
 		{"sudo -n /usr/bin/systemctl start ssh", 1},
 		{"sudo -n /usr/bin/systemctl restart tgproxy-agent", 1},
-		{"sudo -n /usr/bin/dpkg -i " + packagesDir + "/tgproxy_" + ver + "_" + arch + ".deb", 1},
+		{"sudo -n /usr/bin/dpkg -i " + packagesDir + "/" + ver + "/tgproxy_" + ver + "_" + arch + ".deb", 1},
 		{"sudo -n /bin/sh -c id", 1},
 		{"sudo -n /usr/bin/tgproxy agent csr --key /etc/x --id x", 1},
 	} {
@@ -292,21 +329,41 @@ func TestIntegrationInstallAgentInDebianSystemd(t *testing.T) {
 			t.Errorf("%s: код %d, ожидался %d", bad.cmd, code, bad.code)
 		}
 	}
-	// Симлинк в incoming на чужой файл и подмена суммы → stage отказывает, в packages ничего нового.
+	// Симлинк в incoming на чужой файл, подмена deb (1 байт), чужая подпись, даунгрейд/чужая версия →
+	// stage отказывает, доверенный кэш не меняется.
 	if err := sc.Symlink("/etc/shadow", incomingDir+"/ln.deb"); err != nil {
 		t.Fatal(err)
 	}
-	put("ln.deb.sha256", []byte(strings.Repeat("0", 64)))
-	if code, _ := run(hlp + "stage " + incomingDir + "/ln.deb 9.9.9"); code == 0 {
+	put("ln.deb.checksums", checksums)
+	put("ln.deb.minisig", sigFile)
+	if code, _ := run(hlp + "stage " + incomingDir + "/ln.deb " + ver); code == 0 {
 		t.Error("stage по симлинку разрешён")
 	}
-	put("bad.deb", []byte("evil"))
-	put("bad.deb.sha256", []byte(hex.EncodeToString(sum[:])))
-	if code, _ := run(hlp + "stage " + incomingDir + "/bad.deb 9.9.9"); code == 0 {
-		t.Error("stage с неверной суммой разрешён")
+	tampered := append([]byte(nil), data...)
+	tampered[len(tampered)/2] ^= 1
+	putRelease("bad.deb", tampered)
+	if code, _ := run(hlp + "stage " + incomingDir + "/bad.deb " + ver); code == 0 {
+		t.Error("stage с изменённым deb разрешён")
+	}
+	_, foreign, _ := minisign.GenerateKey(rand.Reader)
+	rd := minisign.NewReader(bytes.NewReader(checksums))
+	_, _ = io.Copy(io.Discard, rd)
+	put("alien.deb", data)
+	put("alien.deb.checksums", checksums)
+	put("alien.deb.minisig", rd.SignWithComments(foreign, "timestamp:1", "alien"))
+	if code, _ := run(hlp + "stage " + incomingDir + "/alien.deb " + ver); code == 0 {
+		t.Error("stage с чужой подписью разрешён")
+	}
+	// Подписанный checksums другой версии не подходит под запрошенную.
+	putRelease("wrongver.deb", data)
+	if code, _ := run(hlp + "stage " + incomingDir + "/wrongver.deb 9.9.9"); code == 0 {
+		t.Error("stage версии 9.9.9 с чужим deb разрешён")
 	}
 	if out := docker(t, "exec", name, "sh", "-c", "ls "+packagesDir); strings.Contains(out, "9.9.9") {
 		t.Errorf("в packages попал посторонний файл: %s", out)
+	}
+	if code, _ := run(hlp + "install " + ver); code != 0 {
+		t.Error("доверенный кэш испорчен отклонёнными stage")
 	}
 	// deploy не может писать в packages напрямую.
 	if f, err := sc.Create(packagesDir + "/tgproxy_6.6.6_" + arch + ".deb"); err == nil {
@@ -319,7 +376,7 @@ func TestIntegrationInstallAgentInDebianSystemd(t *testing.T) {
 	// откат не трогает пакет и пользователя, агент выключен.
 	hc2 := &fakeHealth{err: errors.New("telegram недоступен")}
 	inst2, err := New(Config{
-		Store: e.st, CA: e.ca, Health: hc2, Alerter: e.alerts, ServerKey: srvKey, PackagesDir: pkgDir,
+		Store: e.st, CA: e.ca, Health: hc2, Alerter: e.alerts, ServerKey: srvKey, PackagesDir: pkgDir, Verifier: verifier,
 		HealthTimeout: 2 * time.Second, HealthInterval: 500 * time.Millisecond,
 	})
 	if err != nil {

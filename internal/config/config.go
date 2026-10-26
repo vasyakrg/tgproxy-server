@@ -8,6 +8,7 @@ package config
 import (
 	"log/slog"
 	"net/netip"
+	"path/filepath"
 	"time"
 )
 
@@ -94,6 +95,10 @@ type ServerSection struct {
 	// PublicBaseURL — публичный base URL прокси для ботов (https://tg.example.com; http — только loopback).
 	// Показывается в UI «Доступ». Пусто — берётся из Host запроса.
 	PublicBaseURL string `yaml:"public_base_url"`
+	// AgentGatewayURL — URL agent_gateway, как его видят агенты (https://host[:port]): команда enrollment и
+	// загрузка релизов dial-агентами при раскатке. Пусто — хост public_base_url + порт listen.agent_gateway.
+	// Сертификат gateway агент проверяет по CA и SAN server, а не по имени хоста.
+	AgentGatewayURL string `yaml:"agent_gateway_url"`
 }
 
 // ServerListen — адреса листенеров сервера (host:port).
@@ -198,12 +203,38 @@ type StoreConfig struct {
 // UpdateConfig — самообновление (§12).
 type UpdateConfig struct {
 	Enabled       bool          `yaml:"enabled"`
-	Repo          string        `yaml:"repo"` // owner/name на GitHub
+	Source        string        `yaml:"source"` // github|proxy|agent|upload
+	Repo          string        `yaml:"repo"`   // owner/name на GitHub
 	HTTPProxy     string        `yaml:"http_proxy"`
+	ViaAgent      string        `yaml:"via_agent"` // id агента для source=agent
+	PubKeys       []string      `yaml:"pubkeys"`   // minisign: 1–2 ключа (второй — ротационный); пусто — вшитые
 	CheckInterval time.Duration `yaml:"check_interval"`
 	MinVersion    string        `yaml:"min_version"`
 	StagingDir    string        `yaml:"staging_dir"`
+	// DownloadsDir — непривилегированный кэш релизов сервера (<v>/{deb,checksums.txt,.minisig});
+	// пусто — <staging_dir>/downloads. Из него installer берёт пакеты для установки агентов;
+	// в dev указывает на dev/data/packages (make dev-packages).
+	DownloadsDir string `yaml:"downloads_dir"`
 }
+
+// Downloads возвращает каталог кэша загрузок (updates/downloads по умолчанию).
+func (u UpdateConfig) Downloads() string {
+	if u.DownloadsDir != "" {
+		return u.DownloadsDir
+	}
+	if u.StagingDir == "" {
+		return ""
+	}
+	return filepath.Join(u.StagingDir, "downloads")
+}
+
+// Источники обновлений (update.source).
+const (
+	UpdateSourceGitHub = "github"
+	UpdateSourceProxy  = "proxy"
+	UpdateSourceAgent  = "agent"
+	UpdateSourceUpload = "upload"
+)
 
 // NotifyConfig — алерты в Telegram (§9). Включены, если задан bot_token_file.
 type NotifyConfig struct {

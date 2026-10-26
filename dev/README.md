@@ -26,14 +26,15 @@ make run-server         # терминал 3: прокси 127.0.0.1:8080, admin
 ./bin/tgproxy agents enroll-token -c dev/server.yaml --name nat1     # печатает команду `tgproxy agent enroll ...` (токен один раз)
 ```
 
-Публичный URL gateway в команде = хост `server.public_base_url` + порт `listen.agent_gateway` (`https://127.0.0.1:8444`).
+URL gateway в команде = `server.agent_gateway_url` (в dev — `https://host.docker.internal:8444`; без него — хост `server.public_base_url` + порт `listen.agent_gateway`).
+Агенту на хосте (не в контейнере) замените хост в `--server` на `127.0.0.1`: `host.docker.internal` на macOS вне Docker не резолвится.
 Агент на хосте: выполнить команду (без `sudo`, с `-c <agent.yaml>`), затем `./bin/tgproxy agent -c <agent.yaml>` — он появится
 в реестре в режиме `reverse`, а `tgp_agent_reverse_conns{agent="nat1"}` на сервере станет 2.
 
 Docker-стенд (`make dev-target-up`; нужен запущенный `make run-server`):
 
 - `nat-agent` — агент в reverse-режиме без опубликованных портов. Достаёт сервер на хосте по `https://host.docker.internal:8444`
-  (в команде из UI/CLI замените хост `127.0.0.1` на `host.docker.internal`). Enrollment внутри контейнера:
+  (именно этот URL уже стоит в команде из UI/CLI — `server.agent_gateway_url`). Enrollment внутри контейнера:
   `docker compose -f dev/docker-compose.yml exec -e TGP_ENROLL_TOKEN=<токен> nat-agent tgproxy agent enroll --server https://host.docker.internal:8444 --ca-fingerprint <SHA256:...>` —
   контейнер ждёт `/etc/tgproxy/agent.yaml` и сам запускает агента. Либо передать `TGP_ENROLL_TOKEN`/`TGP_CA_FINGERPRINT` окружением при `make dev-target-up`.
 - `sshd-debian` — цель SSH-установки (образ из `internal/server/installer/testdata/Dockerfile.sshd-systemd`: debian:12, systemd, sshd,

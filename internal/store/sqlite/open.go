@@ -48,6 +48,8 @@ type Store struct {
 	enrollments enrollmentRepo
 	errors      errorRepo
 	installJobs installJobRepo
+	settings    settingsRepo
+	rollouts    rolloutRepo
 }
 
 var _ store.Store = (*Store)(nil)
@@ -142,6 +144,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	s.enrollments = enrollmentRepo{s}
 	s.errors = errorRepo{s}
 	s.installJobs = installJobRepo{s}
+	s.settings = settingsRepo{s}
+	s.rollouts = rolloutRepo{s}
 	return s, nil
 }
 
@@ -200,6 +204,12 @@ func (s *Store) Errors() store.ErrorEventRepo { return s.errors }
 
 // InstallJobs — доступ к репозиторию/ресурсу хранилища (store.Store).
 func (s *Store) InstallJobs() store.InstallJobRepo { return s.installJobs }
+
+// Settings — доступ к репозиторию/ресурсу хранилища (store.Store).
+func (s *Store) Settings() store.SettingsRepo { return s.settings }
+
+// Rollouts — доступ к репозиторию/ресурсу хранилища (store.Store).
+func (s *Store) Rollouts() store.RolloutRepo { return s.rollouts }
 
 // mapErr переводит ошибки драйвера в sentinel-ошибки store.
 func mapErr(err error) error {

@@ -5,9 +5,11 @@
 //
 // Глаголы:
 //
-//	install <version>            dpkg -i /var/lib/tgproxy/packages/tgproxy_<v>_<arch>.deb после проверки файла и подписи
-//	stage <tmpfile> <version>    перенос deb из каталога incoming в packages (sha256 по <tmpfile>.sha256)
+//	install <version>            dpkg -i /var/cache/tgproxy/packages/<v>/tgproxy_<v>_<arch>.deb после повторной проверки minisign
+//	stage <tmpfile> <version>    перенос релиза из каталога incoming в доверенный кэш; рядом с deb лежат
+//	                             <tmpfile>.checksums и <tmpfile>.minisig (подпись проверяется встроенными ключами)
 //	unit start|stop|restart|status|is-active|enable|disable   только tgproxy-agent (enable/disable = с --now)
+//	unit enable-update|is-active-update   только tgproxy-update-agent.path (самообновление агента)
 //
 // Коды выхода: 0 — успех, 1 — ошибка выполнения, 2 — недопустимый ввод.
 package deployhelper
@@ -21,18 +23,29 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+
+	"github.com/vasyakrg/tgproxy-server/internal/buildinfo"
+	"github.com/vasyakrg/tgproxy-server/internal/release"
+	"github.com/vasyakrg/tgproxy-server/internal/release/verify"
 )
 
 // Фиксированные пути.
 const (
-	DefaultPackagesDir = "/var/lib/tgproxy/packages"
+	DefaultPackagesDir = release.DefaultCacheDir // root:root 0755, пишут только root-процессы
 	// DefaultIncomingDir лежит вне /var/lib/tgproxy (0750 tgproxy:tgproxy), чтобы
 	// пользователь tgproxy-deploy мог в него дойти; родитель /var/lib принадлежит root.
 	DefaultIncomingDir = "/var/lib/tgproxy-incoming"
 	agentUnit          = "tgproxy-agent"
+	agentUpdateUnit    = "tgproxy-update-agent.path"
 	dpkgPath           = "/usr/bin/dpkg"
 	systemctlPath      = "/usr/bin/systemctl"
 	maxDebSize         = 512 << 20
+	maxChecksumsSize   = 1 << 20
+	maxSigSize         = 4 << 10
+
+	// Суффиксы сопроводительных файлов stage в incoming.
+	ChecksumsSuffix = ".checksums"
+	SigSuffix       = ".minisig"
 )
 
 var (
@@ -51,14 +64,37 @@ func (e usageError) Error() string { return e.msg }
 
 func usagef(format string, a ...any) error { return usageError{fmt.Sprintf(format, a...)} }
 
-// Verifier проверяет подлинность deb перед установкой. f открыт на чтение.
-//
-// TODO(M6): заменить на проверку minisign-подписи (docs/plan.md, M6-T2/M6-T4);
-// пока целостность проверяет только sha256 из <deb>.sha256, что не защищает от
-// подмены пары файлов. Пропуска проверки («no-op») нет и быть не должно.
+// Verifier проверяет подлинность релиза перед стейджем и установкой. В проде это
+// minisign по ключам, вшитым в бинарь (release.EmbeddedPubKeys), sha256 из
+// подписанного checksums.txt и нижняя граница версии = установленная версия.
+// Пропуска проверки («no-op») нет и быть не должно.
 type Verifier interface {
-	Verify(path string, f *os.File) error
+	// Verify проверяет minisign-подпись checksums.txt.
+	Verify(checksums, sig []byte) error
+	// CheckFile сверяет sha256 содержимого r с записью name в checksums.txt.
+	CheckFile(checksums []byte, name string, r io.Reader) error
+	// CheckVersion отвергает версию ниже установленной / невалидную.
+	CheckVersion(version string) error
 }
+
+// embeddedVerifier строит боевой Verifier. Ошибка вшитых ключей = отказ всех проверок.
+func embeddedVerifier() Verifier {
+	keys, err := release.EmbeddedPubKeys()
+	if err != nil {
+		return failVerifier{fmt.Errorf("встроенные ключи: %w", err)}
+	}
+	floor := buildinfo.Version
+	if _, err := verify.ParseVersion(floor); err != nil {
+		floor = "" // dev-сборка: нижней границы нет
+	}
+	return verify.Verifier{Keys: keys, MinVersion: floor}
+}
+
+type failVerifier struct{ err error }
+
+func (f failVerifier) Verify([]byte, []byte) error               { return f.err }
+func (f failVerifier) CheckFile([]byte, string, io.Reader) error { return f.err }
+func (f failVerifier) CheckVersion(string) error                 { return f.err }
 
 // Runner запускает фиксированную внешнюю команду; вывод идёт в stdout/stderr хелпера.
 type Runner func(ctx context.Context, stdout, stderr io.Writer, name string, args ...string) error
@@ -76,13 +112,13 @@ type Helper struct {
 	Stderr io.Writer
 }
 
-// New возвращает хелпер с боевыми путями и проверкой sha256.
+// New возвращает хелпер с боевыми путями и проверкой minisign по вшитым ключам.
 func New(stdout, stderr io.Writer) *Helper {
 	h := &Helper{
 		PackagesDir: DefaultPackagesDir, IncomingDir: DefaultIncomingDir,
 		Run: execRun, EUID: os.Geteuid, Owner: fileOwner, Stdout: stdout, Stderr: stderr,
 	}
-	h.Verifier = SHA256Verifier{Owner: h.Owner}
+	h.Verifier = embeddedVerifier()
 	return h
 }
 
@@ -130,7 +166,7 @@ func (h *Helper) dispatch(ctx context.Context, args []string) error {
 		return h.stage(ctx, args[1], args[2])
 	case "unit":
 		if len(args) != 2 {
-			return usagef("unit start|stop|restart|status|is-active|enable|disable")
+			return usagef("unit start|stop|restart|status|is-active|enable|disable|enable-update|is-active-update")
 		}
 		return h.unit(ctx, args[1])
 	}
@@ -144,6 +180,10 @@ func (h *Helper) unit(ctx context.Context, verb string) error {
 		argv = []string{verb, agentUnit}
 	case "enable", "disable":
 		argv = []string{verb, "--now", agentUnit}
+	case "enable-update": // path-юнит самообновления агента (D1): единственный дополнительный юнит в allowlist
+		argv = []string{"enable", "--now", agentUpdateUnit}
+	case "is-active-update":
+		argv = []string{"is-active", agentUpdateUnit}
 	default:
 		return usagef("недопустимый глагол unit")
 	}
@@ -162,32 +202,62 @@ func (h *Helper) arch(ctx context.Context) (string, error) {
 	return a, nil
 }
 
-func (h *Helper) debPath(ctx context.Context, version string) (string, error) {
+// relPaths возвращает каталог версии и имена файлов релиза в кэше.
+func (h *Helper) relPaths(ctx context.Context, version string) (verDir, debName string, err error) {
 	if !versionRe.MatchString(version) {
-		return "", usagef("версия должна быть semver X.Y.Z[-pre]")
+		return "", "", usagef("версия должна быть semver X.Y.Z[-pre]")
 	}
 	arch, err := h.arch(ctx)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return h.PackagesDir + "/tgproxy_" + version + "_" + arch + ".deb", nil
+	return release.VersionDir(h.PackagesDir, version), release.DebName(version, arch), nil
 }
 
 func (h *Helper) install(ctx context.Context, version string) error {
-	path, err := h.debPath(ctx, version)
+	verDir, debName, err := h.relPaths(ctx, version)
 	if err != nil {
 		return err
 	}
 	if err := h.checkDir(h.PackagesDir); err != nil {
 		return err
 	}
-	f, err := h.openChecked(path)
+	if err := h.checkDir(verDir); err != nil {
+		return err
+	}
+	debPath := verDir + "/" + debName
+	f, err := h.openChecked(debPath, maxDebSize)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if err := h.Verifier.Verify(path, f); err != nil {
+	checksums, err := h.readChecked(verDir+"/"+release.ChecksumsName, maxChecksumsSize)
+	if err != nil {
+		return err
+	}
+	sig, err := h.readChecked(verDir+"/"+release.SigName, maxSigSize)
+	if err != nil {
+		return err
+	}
+	if err := h.verifyRelease(version, debName, checksums, sig, f); err != nil {
 		return fmt.Errorf("проверка пакета: %w", err)
 	}
-	return h.Run(ctx, h.Stdout, h.Stderr, dpkgPath, "-i", path)
+	return h.Run(ctx, h.Stdout, h.Stderr, dpkgPath, "-i", debPath)
+}
+
+// verifyRelease: подпись → версия → sha256 deb по подписанному checksums.txt.
+func (h *Helper) verifyRelease(version, debName string, checksums, sig []byte, deb io.ReadSeeker) error {
+	if err := h.Verifier.Verify(checksums, sig); err != nil {
+		return fmt.Errorf("подпись: %w", err)
+	}
+	if err := h.Verifier.CheckVersion(version); err != nil {
+		return fmt.Errorf("версия: %w", err)
+	}
+	if _, err := deb.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if err := h.Verifier.CheckFile(checksums, debName, deb); err != nil {
+		return fmt.Errorf("sha256: %w", err)
+	}
+	return nil
 }
