@@ -1,0 +1,7 @@
+# ТОЛЬКО ДЛЯ РАЗРАБОТКИ. Формат Authelia. Пароль admin: dev-password
+users:
+  admin:
+    displayname: Dev Admin
+    password: '$argon2id$v=19$m=65536,t=3,p=4$SsVC93DvL2QsXq2KEClWuw$7jIVfrXLMXZaQY2/RUDqCrXQzD2nQL4MIt8QATsw2Is'
+    email: admin@example.test
+    telegram_id: 0

@@ -1,0 +1,51 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gosec
+    - revive
+    - bodyclose
+    - noctx
+    - contextcheck
+    - forbidigo
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: '^fmt\.Print.*$'
+          msg: "use slog (via redact.Handler) instead of fmt.Print*"
+        - pattern: '^log\.'
+          msg: "use slog (via redact.Handler) instead of the log package"
+  exclusions:
+    generated: strict
+    paths:
+      - '.*_templ\.go$'
+    rules:
+      # fmt.Print* / log.* разрешены вне internal/ (cmd/ — вывод CLI)
+      - path-except: '^internal/'
+        linters:
+          - forbidigo
+      - path: '_test\.go$'
+        linters:
+          - gosec
+          - forbidigo
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/vasyakrg/tgproxy-server
+  exclusions:
+    generated: strict
+    paths:
+      - '.*_templ\.go$'

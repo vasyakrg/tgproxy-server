@@ -1,0 +1,19 @@
+# Черновой dev-конфиг agent. Схема уточняется в M1-T1.
+listen:
+  api: "127.0.0.1:8443"       # mTLS: /tg/*, /_agent/*
+  metrics: "127.0.0.1:9443"   # /metrics (bearer)
+
+tls:
+  cert_file: ./dev/tls/agent.crt
+  key_file: ./dev/tls/agent.key
+  ca_file: ./dev/tls/ca.crt
+  allowed_client_san: tgproxy-server
+
+data_dir: ./dev/data/agent
+
+telegram:
+  api_url: https://api.telegram.org
+
+logging:
+  level: debug
+  format: text

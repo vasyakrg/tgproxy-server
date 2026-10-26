@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>tgproxy — добавление агента</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0F1115;color:#E6E8EE;font-family:'IBM Plex Sans',system-ui,sans-serif}
+a{color:#5EEAD4}a:hover{color:#99F6E4}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.nav{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#C3C9D4;text-decoration:none;font-size:14px}
+.nav:hover{background:#1B1F27;color:#E6E8EE}
+.fld{display:flex;flex-direction:column;gap:6px}
+.fld span{font-size:12px;color:#9AA3B2}
+.inp{min-height:40px;box-sizing:border-box;padding:0 12px;border-radius:8px;border:1px solid #2F3542;background:#0F1115;color:#E6E8EE;font-size:14px;font-family:inherit}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh; background: #0F1115">
+
+  <dc-import name="Sidebar" current="Agents.dc.html" hint-size="232px,100vh"></dc-import>
+
+  <main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 20px">
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <a href="Agents.dc.html" style="font-size: 13px">← Агенты</a>
+      <h1 style="margin: 0; font-size: 24px; font-weight: 600">Новый агент</h1>
+    </div>
+
+    <ol aria-label="Шаги" style="margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px">
+      <sc-for list="{{steps}}" as="s" hint-placeholder-count="3">
+        <li style="flex: 1 1 200px; display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 10px; border: 1px solid {{s.border}}; background: #171A21">
+          <span class="mono" style="width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; background: {{s.dot}}; color: {{s.dotText}}">{{s.n}}</span>
+          <span style="font-size: 14px; color: {{s.text}}">{{s.label}}</span>
+        </li>
+      </sc-for>
+    </ol>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+      <section style="flex: 3 1 560px; min-width: 0; background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 22px 24px; display: flex; flex-direction: column; gap: 18px">
+
+        <sc-if value="{{s1}}" hint-placeholder-val="{{true}}">
+          <div style="display: flex; flex-direction: column; gap: 18px">
+            <h2 style="margin: 0; font-size: 16px; font-weight: 600">Как агент будет связан с сервером</h2>
+            <div role="radiogroup" aria-label="Режим связи" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px">
+              <button type="button" role="radio" aria-checked="{{ssh}}" onClick="{{pickSsh}}" style="text-align: left; min-height: 72px; padding: 14px 16px; border-radius: 10px; border: 1px solid {{sshBorder}}; background: #12151B; color: #E6E8EE; cursor: pointer; display: flex; flex-direction: column; gap: 4px">
+                <span style="font-size: 14px; font-weight: 600">Сервер → агент, установка по SSH</span>
+                <span style="font-size: 12px; color: #9AA3B2">у агента открыт порт 8443 для IP сервера</span>
+              </button>
+              <button type="button" role="radio" aria-checked="{{nat}}" onClick="{{pickNat}}" style="text-align: left; min-height: 72px; padding: 14px 16px; border-radius: 10px; border: 1px solid {{natBorder}}; background: #12151B; color: #E6E8EE; cursor: pointer; display: flex; flex-direction: column; gap: 4px">
+                <span style="font-size: 14px; font-weight: 600">Агент → сервер, агент за NAT</span>
+                <span style="font-size: 12px; color: #9AA3B2">агент сам подключается к порту 8444 сервера</span>
+              </button>
+            </div>
+            <sc-if value="{{ssh}}" hint-placeholder-val="{{true}}"><div style="display: flex; flex-direction: column; gap: 18px">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px">
+              <label class="fld"><span>Имя агента</span><input class="inp" value="ams-2"></label>
+              <label class="fld"><span>Хост или IP</span><input class="inp mono" value="91.204.8.4"></label>
+              <label class="fld"><span>SSH-порт</span><input class="inp mono" value="22"></label>
+              <label class="fld"><span>Пользователь (sudo)</span><input class="inp mono" value="root"></label>
+              <label class="fld"><span>Порт агента (mTLS)</span><input class="inp mono" value="8443"></label>
+              <label class="fld"><span>Вес в балансировке</span><input class="inp mono" value="100"></label>
+            </div>
+            <fieldset style="margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 10px">
+              <legend style="font-size: 12px; color: #9AA3B2; padding: 0 0 8px">Аутентификация</legend>
+              <div style="display: flex; flex-wrap: wrap; gap: 18px">
+                <label style="display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 14px"><input type="radio" name="auth" checked>Приватный ключ</label>
+                <label style="display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 14px"><input type="radio" name="auth">Пароль</label>
+              </div>
+              <label class="fld"><span>Ключ (OpenSSH, PEM)</span><textarea class="inp mono" rows="4" style="padding: 10px 12px; resize: vertical">-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0…</textarea></label>
+              <label class="fld"><span>Passphrase (если есть)</span><input class="inp" type="password" value="••••••••"></label>
+            </fieldset>
+            <div style="font-size: 13px; color: #9AA3B2; background: #12151B; border: 1px solid #262B36; border-radius: 8px; padding: 12px 14px; line-height: 1.5">Ключ и пароль используются один раз для этой установки и не сохраняются. Дальше сервер управляет агентом через отдельного пользователя tgproxy-deploy с ограниченным sudo.</div>
+            <div style="display: flex; justify-content: flex-end">
+              <button type="button" onClick="{{go2}}" style="min-height: 42px; padding: 0 18px; border-radius: 8px; border: 0; background: #2DD4BF; color: #0F1115; font-size: 14px; font-weight: 600; cursor: pointer">Подключиться</button>
+            </div>
+            </div></sc-if>
+            <sc-if value="{{nat}}" hint-placeholder-val="{{false}}">
+              <div style="display: flex; flex-direction: column; gap: 16px">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px">
+                  <label class="fld"><span>Имя агента</span><input class="inp" value="waw-2"></label>
+                  <label class="fld"><span>Вес в балансировке</span><input class="inp mono" value="100"></label>
+                  <label class="fld"><span>Адрес сервера для агента</span><input class="inp mono" value="tgproxy.corp.example:8444"></label>
+                </div>
+                <div class="fld"><span>Выполните на хосте агента (токен действует 1 час, один раз)</span>
+                  <pre class="mono" style="margin: 0; padding: 14px; border-radius: 8px; background: #0B0D11; border: 1px solid #262B36; font-size: 12px; line-height: 1.6; color: #C3C9D4; white-space: pre-wrap; word-break: break-all">curl -fsSLO https://github.com/vasyakrg/tgproxy-server/releases/download/v1.4.1/tgproxy_1.4.1_amd64.deb
+sudo dpkg -i tgproxy_1.4.1_amd64.deb
+sudo tgproxy agent enroll \
+  --server https://tgproxy.corp.example:8444 \
+  --token enr_Q8vT2mXk9pLz4RwN7cYd1hGs \
+  --ca-fingerprint SHA256:Xk2c9P0u…9Lw</pre>
+                </div>
+                <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center">
+                  <button type="button" aria-label="Копировать команду установки" title="Копировать" style="width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid #2F3542; background: transparent; color: #E6E8EE; cursor: pointer">
+                    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path></svg>
+                  </button>
+                  <button type="button" style="min-height: 38px; padding: 0 14px; border-radius: 8px; border: 1px solid #5B2B2B; background: transparent; color: #FCA5A5; font-size: 13px; cursor: pointer">Отозвать токен</button>
+                  <span role="status" style="margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: #FBBF24"><span style="width: 8px; height: 8px; border-radius: 50%; background: #FBBF24"></span>ждём подключения агента · 0:42</span>
+                </div>
+                <div style="font-size: 13px; color: #9AA3B2; background: #12151B; border: 1px solid #262B36; border-radius: 8px; padding: 12px 14px; line-height: 1.5">SSH не нужен. Агент проверит сервер по отпечатку CA, создаст ключ у себя и получит сертификат. Обновления он ставит сам по команде сервера и только с подписью релиза.</div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{s2}}" hint-placeholder-val="{{false}}">
+          <div style="display: flex; flex-direction: column; gap: 18px">
+            <h2 style="margin: 0; font-size: 16px; font-weight: 600">Проверьте ключ хоста</h2>
+            <div style="font-size: 14px; color: #C3C9D4; line-height: 1.5">Хост 91.204.8.4:22 подключается впервые. Сверьте отпечаток с выводом <span class="mono">ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</span> на самом сервере.</div>
+            <div style="background: #12151B; border: 1px solid #2D4A47; border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px">
+              <div style="font-size: 12px; color: #9AA3B2">ED25519 · SHA256</div>
+              <div class="mono" style="font-size: 16px; word-break: break-all">SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8</div>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px">
+              <button type="button" onClick="{{go1}}" style="min-height: 42px; padding: 0 18px; border-radius: 8px; border: 1px solid #2F3542; background: transparent; color: #E6E8EE; font-size: 14px; cursor: pointer">Отклонить</button>
+              <button type="button" onClick="{{go3}}" style="min-height: 42px; padding: 0 18px; border-radius: 8px; border: 0; background: #2DD4BF; color: #0F1115; font-size: 14px; font-weight: 600; cursor: pointer">Отпечаток совпадает, установить</button>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{s3}}" hint-placeholder-val="{{false}}">
+          <div style="display: flex; flex-direction: column; gap: 16px">
+            <div style="display: flex; align-items: center; gap: 12px">
+              <h2 style="margin: 0; font-size: 16px; font-weight: 600">Установка ams-2</h2>
+              <span style="font-size: 13px; color: #FBBF24">выполняется · 0:37</span>
+            </div>
+            <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px">
+              <sc-for list="{{job}}" as="j" hint-placeholder-count="7">
+                <li style="display: flex; align-items: center; gap: 10px; font-size: 14px; min-height: 26px">
+                  <span class="mono" style="width: 18px; color: {{j.color}}">{{j.mark}}</span>
+                  <span style="color: {{j.text}}">{{j.label}}</span>
+                </li>
+              </sc-for>
+            </ol>
+            <pre class="mono" aria-label="Журнал установки" style="margin: 0; max-height: 220px; overflow: auto; background: #0B0D11; border: 1px solid #262B36; border-radius: 8px; padding: 14px; font-size: 12px; line-height: 1.6; color: #C3C9D4; white-space: pre-wrap">[14:40:02] ssh 91.204.8.4:22 host key OK (pinned)
+[14:40:03] sftp tgproxy_1.4.1_amd64.deb → /tmp (14.2 MB)
+[14:40:07] dpkg -i … Setting up tgproxy (1.4.1) …
+[14:40:09] useradd tgproxy-deploy; sudoers: dpkg, systemctl tgproxy-agent
+[14:40:10] agent: keygen ECDSA P-256, CSR → server
+[14:40:10] server CA: signed spiffe://tgproxy/agent/ams-2, 90d
+[14:40:11] systemctl enable --now tgproxy-agent
+[14:40:12] waiting for /_agent/healthz over mTLS …</pre>
+          </div>
+        </sc-if>
+      </section>
+
+      <aside style="flex: 1 1 280px; min-width: 0; background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px">
+        <h2 style="margin: 0; font-size: 14px; font-weight: 600">Что сделает установщик</h2>
+        <ol style="margin: 0; padding-left: 18px; font-size: 13px; color: #C3C9D4; line-height: 1.7">
+          <li>Закрепит ключ хоста после подтверждения</li>
+          <li>Зальёт deb той же версии, что у сервера</li>
+          <li>Создаст пользователей tgproxy-agent и tgproxy-deploy</li>
+          <li>Выпустит сертификат: ключ создаётся на агенте</li>
+          <li>Запустит службу и проверит связь до api.telegram.org</li>
+          <li>Добавит агента в балансировку с выбранным весом</li>
+        </ol>
+        <div style="font-size: 12px; color: #9AA3B2">Требования: Debian 11+ / Ubuntu 22.04+, x86_64, открытый TCP-порт агента для IP сервера.</div>
+      </aside>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { step: 1, mode: 'ssh' }; }
+  renderVals() {
+    const cur = 'Agents.dc.html';
+    const nav = [
+      { label: 'Обзор', href: 'Main.dc.html' },
+      { label: 'Агенты', href: 'Agents.dc.html' },
+      { label: 'Доступ', href: 'ClientKeys.dc.html' },
+      { label: 'Ошибки', href: 'Errors.dc.html' },
+      { label: 'Система', href: 'System.dc.html' }
+    ].map((n) => ({ ...n, active: n.href === cur, idle: n.href !== cur }));
+    const st = this.state.step;
+    const steps = ['Хост и доступ', 'Ключ хоста', 'Установка'].map((label, i) => {
+      const n = i + 1, done = n < st, now = n === st;
+      return {
+        n: done ? '✓' : String(n), label,
+        border: now ? '#2DD4BF' : '#262B36',
+        dot: done ? '#1B2A2A' : now ? '#2DD4BF' : '#262B36',
+        dotText: done ? '#5EEAD4' : now ? '#0F1115' : '#9AA3B2',
+        text: now ? '#E6E8EE' : '#9AA3B2'
+      };
+    });
+    const ok = { mark: '✓', color: '#34D399', text: '#E6E8EE' };
+    const run = { mark: '●', color: '#FBBF24', text: '#E6E8EE' };
+    const wait = { mark: '○', color: '#6B7280', text: '#9AA3B2' };
+    return {
+      nav, steps,
+      s1: st === 1, s2: st === 2, s3: st === 3,
+      ssh: this.state.mode !== 'nat', nat: this.state.mode === 'nat',
+      sshBorder: this.state.mode !== 'nat' ? '#2DD4BF' : '#262B36',
+      natBorder: this.state.mode === 'nat' ? '#2DD4BF' : '#262B36',
+      pickSsh: () => this.setState({ mode: 'ssh' }),
+      pickNat: () => this.setState({ mode: 'nat' }),
+      go1: () => this.setState({ step: 1 }),
+      go2: () => this.setState({ step: 2 }),
+      go3: () => this.setState({ step: 3 }),
+      job: [
+        { ...ok, label: 'SSH-подключение, ключ хоста закреплён' },
+        { ...ok, label: 'Загрузка пакета tgproxy 1.4.1' },
+        { ...ok, label: 'Установка пакета и пользователей' },
+        { ...ok, label: 'Выпуск сертификата агента' },
+        { ...ok, label: 'Запуск tgproxy-agent' },
+        { ...run, label: 'Проверка mTLS и доступа к Telegram' },
+        { ...wait, label: 'Включение в балансировку' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

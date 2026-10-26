@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>tgproxy — система</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0F1115;color:#E6E8EE;font-family:'IBM Plex Sans',system-ui,sans-serif}
+a{color:#5EEAD4}a:hover{color:#99F6E4}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+table{border-collapse:collapse;width:100%}
+th{text-align:left;font-weight:500;font-size:12px;color:#9AA3B2;padding:8px 10px;border-bottom:1px solid #262B36;white-space:nowrap}
+td{padding:10px;font-size:13px;border-bottom:1px solid #1E222B;white-space:nowrap}
+.nav{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#C3C9D4;text-decoration:none;font-size:14px}
+.nav:hover{background:#1B1F27;color:#E6E8EE}
+.fld{display:flex;flex-direction:column;gap:6px}
+.fld span{font-size:12px;color:#9AA3B2}
+.inp{min-height:40px;box-sizing:border-box;padding:0 12px;border-radius:8px;border:1px solid #2F3542;background:#0F1115;color:#E6E8EE;font-size:14px;font-family:inherit}
+.card{background:#171A21;border:1px solid #262B36;border-radius:10px;padding:20px 22px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.row{display:flex;align-items:center;gap:10px;min-height:36px;font-size:14px}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh; background: #0F1115">
+
+  <dc-import name="Sidebar" current="System.dc.html" hint-size="232px,100vh"></dc-import>
+
+  <main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 20px">
+    <h1 style="margin: 0; font-size: 24px; font-weight: 600">Система</h1>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; align-items: start">
+
+      <section class="card">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 600">Обновление сервера</h2>
+        <div style="display: flex; flex-wrap: wrap; gap: 24px">
+          <div style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 12px; color: #9AA3B2">Установлено</span><span class="mono" style="font-size: 20px">v1.4.1</span></div>
+          <div style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 12px; color: #9AA3B2">Доступно</span><span class="mono" style="font-size: 20px; color: #5EEAD4">v1.5.0</span></div>
+          <div style="display: flex; flex-direction: column; gap: 4px"><span style="font-size: 12px; color: #9AA3B2">Проверено</span><span style="font-size: 14px; padding-top: 4px">сегодня, 09:00</span></div>
+        </div>
+        <fieldset style="margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 4px">
+          <legend style="font-size: 12px; color: #9AA3B2; padding-bottom: 6px">Откуда скачать</legend>
+          <sc-for list="{{sources}}" as="s" hint-placeholder-count="4">
+            <label class="row"><input type="radio" name="src" checked="{{s.on}}" onChange="{{s.pick}}">{{s.label}}<span style="font-size: 12px; color: #9AA3B2">{{s.hint}}</span></label>
+          </sc-for>
+        </fieldset>
+        <div style="background: #12151B; border: 1px solid #262B36; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+          <div class="row" style="min-height: 22px"><span style="color: #34D399">✓</span>tgproxy_1.5.0_amd64.deb · 14.6 MB</div>
+          <div class="row" style="min-height: 22px"><span style="color: #34D399">✓</span>подпись minisign проверена, ключ RWQf…3kZ</div>
+          <div class="row" style="min-height: 22px"><span style="color: #34D399">✓</span>sha256 совпадает с checksums.txt</div>
+        </div>
+        <div style="font-size: 12px; color: #9AA3B2; line-height: 1.5">Пакет ставит отдельная служба tgproxy-update с правами root. Если /healthz не ответит за 30 с, будет откат на v1.4.1. Агенты обновляются отдельно, на странице «Агенты».</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 10px">
+          <button type="button" style="min-height: 42px; padding: 0 18px; border-radius: 8px; border: 0; background: #2DD4BF; color: #0F1115; font-size: 14px; font-weight: 600; cursor: pointer">Установить v1.5.0</button>
+          <a href="#changelog" style="display: inline-flex; align-items: center; min-height: 42px; padding: 0 6px; font-size: 14px">Что нового</a>
+        </div>
+      </section>
+
+      <section class="card">
+        <div style="display: flex; align-items: center">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600">Уведомления в Telegram</h2>
+          <button type="button" style="margin-left: auto; min-height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #2F3542; background: transparent; color: #E6E8EE; font-size: 13px; cursor: pointer">Отправить тест</button>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 13px">
+          <span style="padding: 4px 10px; border-radius: 6px; background: #16302B; color: #5EEAD4">бот @tgproxy_alerts_bot подключён</span>
+          <span style="padding: 4px 10px; border-radius: 6px; background: #222731; color: #C3C9D4">отправка через пул агентов</span>
+        </div>
+        <div style="overflow-x: auto">
+          <table>
+            <thead><tr><th>Администратор</th><th>telegram_id</th><th>2FA</th><th>Последний вход</th></tr></thead>
+            <tbody>
+              <sc-for list="{{admins}}" as="u" hint-placeholder-count="3">
+                <tr><td>{{u.name}}</td><td class="mono">{{u.tg}}</td><td style="color: {{u.totpColor}}">{{u.totp}}</td><td class="mono" style="color: #9AA3B2">{{u.last}}</td></tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+        <div style="font-size: 12px; color: #9AA3B2">Список берётся из /etc/tgproxy/users.yml и перечитывается при изменении файла.</div>
+        <fieldset style="margin: 0; padding: 0; border: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 2px 16px">
+          <legend style="font-size: 12px; color: #9AA3B2; padding-bottom: 6px">Какие события отправлять</legend>
+          <sc-for list="{{alerts}}" as="a" hint-placeholder-count="8">
+            <label class="row" style="font-size: 13px"><input type="checkbox" checked="{{a.on}}">{{a.label}}</label>
+          </sc-for>
+        </fieldset>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px">
+          <label class="fld"><span>Ошибки агента, %</span><input class="inp mono" value="5"></label>
+          <label class="fld"><span>In-flight на агент</span><input class="inp mono" value="64"></label>
+          <label class="fld"><span>Повтор алерта, мин</span><input class="inp mono" value="60"></label>
+        </div>
+      </section>
+
+      <section class="card">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600">Сертификат входа</h2>
+          <span style="font-size: 12px; padding: 3px 8px; border-radius: 5px; background: #1E2A3A; color: #93C5FD">из файлов</span>
+        </div>
+        <fieldset style="margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 4px">
+          <legend style="font-size: 12px; color: #9AA3B2; padding-bottom: 6px">Источник (tls.mode в конфиге)</legend>
+          <label class="row" style="font-size: 13px"><input type="radio" name="tlsmode" disabled="{{true}}">Получает сервер (ACME)<span style="font-size: 12px; color: #9AA3B2">автопродление</span></label>
+          <label class="row" style="font-size: 13px"><input type="radio" name="tlsmode" checked="{{true}}" disabled="{{true}}">Файлы администратора<span style="font-size: 12px; color: #9AA3B2">купленный сертификат</span></label>
+          <label class="row" style="font-size: 13px"><input type="radio" name="tlsmode" disabled="{{true}}">Выключен<span style="font-size: 12px; color: #9AA3B2">TLS на reverse proxy</span></label>
+        </fieldset>
+        <div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+          <div style="display: flex; flex-wrap: wrap; gap: 8px"><span style="color: #9AA3B2; width: 150px">Домены</span><span class="mono">tgproxy.corp.local, *.corp.local</span></div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px"><span style="color: #9AA3B2; width: 150px">Издатель</span><span>GlobalSign RSA OV SSL CA 2018</span></div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px"><span style="color: #9AA3B2; width: 150px">Действует до</span><span class="mono" style="color: #FBBF24">2026-11-21 · 26 дней</span></div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px"><span style="color: #9AA3B2; width: 150px">Файлы</span><span class="mono">/etc/tgproxy/tls/ingress.{crt,key}</span></div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px"><span style="color: #9AA3B2; width: 150px">Перечитан</span><span>сегодня, 09:14 · без рестарта</span></div>
+        </div>
+        <div style="font-size: 12px; color: #9AA3B2; line-height: 1.5">Замените файлы на диске: сервер подхватит их сам. Если новый сертификат не подходит к ключу или истёк, останется старый и придёт алерт.</div>
+        <div style="display: flex; gap: 10px">
+          <button type="button" style="min-height: 38px; padding: 0 14px; border-radius: 8px; border: 1px solid #2F3542; background: transparent; color: #E6E8EE; font-size: 13px; cursor: pointer">Перечитать файлы</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 600">Prometheus</h2>
+        <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px">
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center"><span style="color: #9AA3B2; width: 140px">Сервер</span><code class="mono">https://tgproxy.corp.local:9464/metrics</code></div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center"><span style="color: #9AA3B2; width: 140px">Федерация агентов</span><code class="mono">/api/v1/agents/{id}/metrics</code></div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center"><span style="color: #9AA3B2; width: 140px">Bearer-токен</span><code class="mono">••••••••••••3f9a</code>
+            <button type="button" style="min-height: 34px; padding: 0 12px; border-radius: 7px; border: 1px solid #2F3542; background: transparent; color: #C3C9D4; font-size: 12px; cursor: pointer">Перевыпустить</button></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 600">Безопасность</h2>
+        <div style="display: flex; flex-direction: column; gap: 10px; font-size: 13px">
+          <div style="display: flex; gap: 8px"><span style="color: #9AA3B2; width: 180px">Корневой сертификат CA</span><span class="mono">ECDSA P-256 · до 2036-10-26</span></div>
+          <div style="display: flex; gap: 8px"><span style="color: #9AA3B2; width: 180px">Сертификаты агентов</span><span>90 дней, автопродление</span></div>
+          <div style="display: flex; gap: 8px"><span style="color: #9AA3B2; width: 180px">Отозвано (denylist)</span><span class="mono">2</span></div>
+          <div style="display: flex; gap: 8px"><span style="color: #9AA3B2; width: 180px">Ключ tgproxy-deploy</span><span class="mono">ed25519 · SHA256:Xk2…9Lw</span></div>
+        </div>
+        <a href="#audit" style="font-size: 13px">Журнал действий администраторов →</a>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1400}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { src: 'gh' }; }
+  renderVals() {
+    const cur = 'System.dc.html';
+    const nav = [
+      { label: 'Обзор', href: 'Main.dc.html' },
+      { label: 'Агенты', href: 'Agents.dc.html' },
+      { label: 'Доступ', href: 'ClientKeys.dc.html' },
+      { label: 'Ошибки', href: 'Errors.dc.html' },
+      { label: 'Система', href: 'System.dc.html' }
+    ].map((n) => ({ ...n, active: n.href === cur, idle: n.href !== cur }));
+    const sources = [
+      { id: 'gh', label: 'GitHub Releases', hint: 'напрямую' },
+      { id: 'proxy', label: 'Через HTTP-прокси', hint: 'update.http_proxy' },
+      { id: 'agent', label: 'Через агента', hint: 'fra-1' },
+      { id: 'upload', label: 'Загрузить файл', hint: 'deb + .minisig' }
+    ].map((s) => ({ ...s, on: s.id === this.state.src, pick: () => this.setState({ src: s.id }) }));
+    return {
+      nav, sources,
+      admins: [
+        { name: 'vasya', tg: '123456789', totp: 'включена', totpColor: '#34D399', last: 'сейчас' },
+        { name: 'oleg', tg: '987654321', totp: 'включена', totpColor: '#34D399', last: 'вчера' },
+        { name: 'irina', tg: '555000111', totp: 'не настроена', totpColor: '#FBBF24', last: '—' }
+      ],
+      alerts: [
+        { label: 'Агент недоступен', on: true },
+        { label: 'Деградация агента', on: true },
+        { label: 'Перегрузка', on: true },
+        { label: 'Все агенты недоступны', on: true },
+        { label: 'Сертификат истекает', on: true },
+        { label: 'Версия отстаёт', on: false },
+        { label: 'Блокировка входа', on: true },
+        { label: 'Смена ключа хоста', on: true }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

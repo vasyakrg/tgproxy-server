@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>tgproxy — обзор</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0F1115;color:#E6E8EE;font-family:'IBM Plex Sans',system-ui,sans-serif}
+a{color:#5EEAD4}a:hover{color:#99F6E4}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+table{border-collapse:collapse;width:100%}
+th{text-align:left;font-weight:500;font-size:12px;color:#9AA3B2;padding:10px 12px;border-bottom:1px solid #262B36;white-space:nowrap}
+td{padding:12px;font-size:13px;border-bottom:1px solid #1E222B;white-space:nowrap}
+.nav{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#C3C9D4;text-decoration:none;font-size:14px}
+.nav:hover{background:#1B1F27;color:#E6E8EE}
+button{font-family:inherit}
+.bar > div{transition:height .5s cubic-bezier(.2,.8,.2,1)}
+.bar{transition:opacity .15s ease}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.6)}70%{box-shadow:0 0 0 7px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+.dot-live{animation:pulse 1.6s infinite}
+@media (prefers-reduced-motion: reduce){.bar > div,.bar{transition:none}.dot-live{animation:none}}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh; background: #0F1115">
+
+  <dc-import name="Sidebar" current="Main.dc.html" hint-size="232px,100vh"></dc-import>
+
+  <main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 24px">
+
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600">Обзор</h1>
+        <div style="font-size: 13px; color: #9AA3B2">Трафик ботов через пул агентов</div>
+      </div>
+      <div role="group" aria-label="Период" style="margin-left: auto; display: flex; background: #171A21; border: 1px solid #262B36; border-radius: 8px; padding: 3px">
+        <sc-for list="{{ranges}}" as="r" hint-placeholder-count="4">
+          <sc-if value="{{r.active}}" hint-placeholder-val="{{false}}">
+            <button type="button" onClick="{{r.pick}}" aria-pressed="true" style="min-height: 34px; padding: 0 14px; border: 0; border-radius: 6px; background: #262B36; color: #E6E8EE; font-size: 13px; cursor: pointer">{{r.label}}</button>
+          </sc-if>
+          <sc-if value="{{r.idle}}" hint-placeholder-val="{{true}}">
+            <button type="button" onClick="{{r.pick}}" aria-pressed="false" style="min-height: 34px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; color: #9AA3B2; font-size: 13px; cursor: pointer">{{r.label}}</button>
+          </sc-if>
+        </sc-for>
+      </div>
+    </header>
+
+    <section aria-label="Ключевые показатели" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px">
+      <sc-for list="{{kpis}}" as="k" hint-placeholder-count="5">
+        <div style="background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px">
+          <div style="font-size: 12px; color: #9AA3B2">{{k.label}}</div>
+          <div class="mono" style="font-size: 28px; font-weight: 500; color: {{k.color}}">{{k.value}}</div>
+          <div style="font-size: 12px; color: #9AA3B2">{{k.hint}}</div>
+        </div>
+      </sc-for>
+    </section>
+
+    <section style="background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 16px">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600">Запросы и ошибки, rps</h2>
+        <button type="button" onClick="{{toggleLive}}" aria-pressed="{{live}}" title="{{liveTitle}}" style="display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid #2F3542; background: #12151B; color: {{liveColor}}; font-size: 12px; cursor: pointer">
+          <span class="{{dotClass}}" style="width: 8px; height: 8px; border-radius: 50%; background: {{liveColor}}"></span>{{liveLabel}}
+        </button>
+        <span class="mono" style="font-size: 11px; color: #9AA3B2">{{updated}}</span>
+        <div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: #9AA3B2; margin-left: auto">
+          <span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 2px; background: #2DD4BF"></span>успешные</span>
+          <span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 2px; background: #FB923C"></span>ошибки прокси</span>
+          <span style="display: flex; align-items: center; gap: 6px"><span style="width: 10px; height: 10px; border-radius: 2px; background: #A78BFA"></span>429 Telegram</span>
+        </div>
+      </div>
+      <div class="mono" aria-live="polite" style="min-height: 20px; font-size: 12px; color: {{tipColor}}">{{tip}}</div>
+      <div role="img" aria-label="График запросов по времени, обновляется каждые 2 секунды" onMouseLeave="{{leave}}" style="display: flex; align-items: flex-end; gap: 3px; height: 180px; padding-top: 8px; border-bottom: 1px solid #262B36">
+        <sc-for list="{{bars}}" as="b" hint-placeholder-count="48">
+          <div class="bar" onMouseEnter="{{b.enter}}" style="flex: 1 1 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 1px; height: 100%; opacity: {{b.op}}; cursor: crosshair">
+            <div style="height: {{b.lim}}px; background: #A78BFA; border-radius: 2px 2px 0 0"></div>
+            <div style="height: {{b.err}}px; background: #FB923C"></div>
+            <div style="height: {{b.ok}}px; background: #2DD4BF; opacity: 0.85"></div>
+          </div>
+        </sc-for>
+      </div>
+      <div class="mono" style="display: flex; justify-content: space-between; font-size: 11px; color: #9AA3B2">
+        <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>сейчас</span>
+      </div>
+    </section>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+      <section style="flex: 3 1 560px; min-width: 0; background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; align-items: center">
+          <h2 style="margin: 0; font-size: 15px; font-weight: 600">Агенты</h2>
+          <a href="Agents.dc.html" style="margin-left: auto; font-size: 13px">Все агенты →</a>
+        </div>
+        <div style="overflow-x: auto">
+          <table>
+            <thead><tr><th>Агент</th><th>Статус</th><th>rps</th><th>p95</th><th>Ошибки</th><th>In-flight</th><th>Версия</th></tr></thead>
+            <tbody>
+              <sc-for list="{{agents}}" as="a" hint-placeholder-count="6">
+                <tr>
+                  <td><div style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">{{a.name}}</span><span class="mono" style="font-size: 11px; color: #9AA3B2">{{a.addr}}</span></div></td>
+                  <td><span style="display: inline-flex; align-items: center; gap: 6px; color: {{a.color}}"><span style="width: 8px; height: 8px; border-radius: 50%; background: {{a.color}}"></span>{{a.status}}</span></td>
+                  <td class="mono">{{a.rps}}</td>
+                  <td class="mono">{{a.p95}}</td>
+                  <td class="mono">{{a.err}}</td>
+                  <td class="mono">{{a.inflight}}</td>
+                  <td class="mono" style="color: {{a.verColor}}">{{a.ver}}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section style="flex: 2 1 320px; min-width: 0; background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 4px">
+        <div style="display: flex; align-items: center; padding-bottom: 8px">
+          <h2 style="margin: 0; font-size: 15px; font-weight: 600">События</h2>
+          <span style="margin-left: auto; font-size: 12px; color: #9AA3B2">уведомления отправлены в Telegram</span>
+        </div>
+        <sc-for list="{{events}}" as="e" hint-placeholder-count="5">
+          <div style="display: flex; gap: 12px; padding: 10px 0; border-top: 1px solid #1E222B">
+            <span style="flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: {{e.color}}"></span>
+            <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+              <div style="font-size: 13px">{{e.text}}</div>
+              <div class="mono" style="font-size: 11px; color: #9AA3B2">{{e.meta}}</div>
+            </div>
+          </div>
+        </sc-for>
+      </section>
+    </div>
+
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const series = [];
+    for (let i = 0; i < 48; i++) series.push(this.point(i));
+    this.state = { range: '24ч', series, seq: 48, live: true, hover: -1, ago: 0 };
+  }
+  point(i) {
+    const base = 70 + Math.round(45 * Math.sin((i - 14) / 7.6) + 18 * Math.sin(i * 1.7) + (Math.random() * 16 - 8));
+    const spike = Math.random() < 0.06;
+    return { ok: Math.max(20, Math.min(150, base)), err: spike ? 18 + Math.round(Math.random() * 14) : (Math.random() < 0.2 ? 4 : 1), lim: Math.random() < 0.08 ? 6 : 0 };
+  }
+  componentDidMount() {
+    this.timer = setInterval(() => {
+      if (!this.state.live) { this.setState({ ago: this.state.ago + 1 }); return; }
+      const series = this.state.series.slice(1);
+      series.push(this.point(this.state.seq));
+      this.setState({ series, seq: this.state.seq + 1, ago: 0 });
+    }, 2000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+  renderVals() {
+    const cur = 'Main.dc.html';
+    const nav = [
+      { label: 'Обзор', href: 'Main.dc.html' },
+      { label: 'Агенты', href: 'Agents.dc.html' },
+      { label: 'Доступ', href: 'ClientKeys.dc.html' },
+      { label: 'Ошибки', href: 'Errors.dc.html' },
+      { label: 'Система', href: 'System.dc.html' }
+    ].map((n) => ({ ...n, active: n.href === cur, idle: n.href !== cur }));
+    const ranges = ['1ч', '6ч', '24ч', '7д'].map((l) => ({
+      label: l, active: l === this.state.range, idle: l !== this.state.range,
+      pick: () => this.setState({ range: l })
+    }));
+    const bucketMin = { '1ч': 1.25, '6ч': 7.5, '24ч': 30, '7д': 210 }[this.state.range];
+    const fmtAgo = (m) => m < 1 ? 'сейчас' : m < 60 ? `−${Math.round(m)} мин` : `−${Math.floor(m / 60)} ч ${Math.round(m % 60)} мин`;
+    const h = this.state.hover;
+    const bars = this.state.series.map((p, i) => ({
+      ...p,
+      op: h < 0 || h === i ? 1 : 0.45,
+      enter: () => this.setState({ hover: i })
+    }));
+    const last = this.state.series[this.state.series.length - 1];
+    const rps = (v) => Math.round(v * 3.4);
+    const hp = h >= 0 ? this.state.series[h] : null;
+    const live = this.state.live;
+    const green = '#34D399', amber = '#FBBF24', red = '#F87171';
+    return {
+      nav, ranges, bars,
+      live,
+      liveLabel: live ? 'Live · опрос 2 с' : 'Пауза',
+      liveTitle: live ? 'Остановить обновление' : 'Возобновить обновление',
+      liveColor: live ? green : '#9AA3B2',
+      dotClass: live ? 'dot-live' : '',
+      toggleLive: () => this.setState({ live: !live, ago: 0 }),
+      updated: live ? `обновлено ${this.state.ago} с назад` : `на паузе ${this.state.ago * 2} с`,
+      leave: () => this.setState({ hover: -1 }),
+      tip: hp ? `${fmtAgo((47 - h) * bucketMin)} · успешные ${rps(hp.ok)} rps · ошибки ${hp.err} · 429: ${hp.lim ? 2 : 0}` : 'Наведите на столбец, чтобы увидеть значения',
+      tipColor: hp ? '#E6E8EE' : '#9AA3B2',
+      kpis: [
+        { label: 'Запросов в секунду', value: String(rps(last.ok)), hint: 'пик 690 в 14:20', color: '#E6E8EE' },
+        { label: 'Ошибки прокси', value: '0,8 %', hint: '502/504 за период', color: amber },
+        { label: 'Агенты в работе', value: '5 / 6', hint: '1 недоступен', color: '#E6E8EE' },
+        { label: 'In-flight сейчас', value: '37', hint: 'long-poll: 128', color: '#E6E8EE' },
+        { label: 'Ответов 429', value: '12', hint: '3 бота упёрлись в лимит', color: '#A78BFA' }
+      ],
+      agents: [
+        { name: 'fra-1', addr: '185.12.4.10:8443', status: 'в работе', color: green, rps: '96', p95: '182 мс', err: '0,2 %', inflight: '8', ver: 'v1.4.1', verColor: '#E6E8EE' },
+        { name: 'fra-2', addr: '185.12.4.11:8443', status: 'в работе', color: green, rps: '91', p95: '190 мс', err: '0,3 %', inflight: '7', ver: 'v1.4.1', verColor: '#E6E8EE' },
+        { name: 'ams-1', addr: '91.204.8.3:8443', status: 'деградация', color: amber, rps: '58', p95: '940 мс', err: '6,1 %', inflight: '14', ver: 'v1.4.1', verColor: '#E6E8EE' },
+        { name: 'hel-1', addr: '65.21.90.7:8443', status: 'в работе', color: green, rps: '88', p95: '210 мс', err: '0,4 %', inflight: '5', ver: 'v1.3.9', verColor: amber },
+        { name: 'waw-1', addr: '51.68.12.40:8443', status: 'в работе', color: green, rps: '79', p95: '230 мс', err: '0,5 %', inflight: '3', ver: 'v1.4.1', verColor: '#E6E8EE' },
+        { name: 'ist-1', addr: '78.135.2.9:8443', status: 'недоступен', color: red, rps: '—', p95: '—', err: '—', inflight: '—', ver: 'v1.4.1', verColor: '#E6E8EE' }
+      ],
+      events: [
+        { color: red, text: 'ist-1 недоступен: dial timeout', meta: '14:32 · agent_down · отправлено 3 админам' },
+        { color: amber, text: 'ams-1: ошибки 6,1 % за 5 мин', meta: '14:20 · agent_degraded' },
+        { color: amber, text: 'hel-1 отстаёт по версии: v1.3.9', meta: '09:00 · version_mismatch' },
+        { color: '#A78BFA', text: 'Бот 7012345678 получает 429 от Telegram', meta: '08:41 · retry_after 18 с' },
+        { color: green, text: 'waw-1 восстановлен', meta: '03:12 · resolved' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

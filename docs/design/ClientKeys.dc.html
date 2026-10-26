@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>tgproxy — доступ</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0F1115;color:#E6E8EE;font-family:'IBM Plex Sans',system-ui,sans-serif}
+a{color:#5EEAD4}a:hover{color:#99F6E4}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+table{border-collapse:collapse;width:100%}
+th{text-align:left;font-weight:500;font-size:12px;color:#9AA3B2;padding:10px 12px;border-bottom:1px solid #262B36;white-space:nowrap}
+td{padding:12px;font-size:13px;border-bottom:1px solid #1E222B;vertical-align:middle}
+.nav{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#C3C9D4;text-decoration:none;font-size:14px}
+.nav:hover{background:#1B1F27;color:#E6E8EE}
+.fld{display:flex;flex-direction:column;gap:6px}
+.fld span{font-size:12px;color:#9AA3B2}
+.inp{min-height:40px;box-sizing:border-box;padding:0 12px;border-radius:8px;border:1px solid #2F3542;background:#0F1115;color:#E6E8EE;font-size:14px;font-family:inherit}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh; background: #0F1115">
+
+  <dc-import name="Sidebar" current="ClientKeys.dc.html" hint-size="232px,100vh"></dc-import>
+
+  <main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 20px">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600">Доступ</h1>
+        <div style="font-size: 13px; color: #9AA3B2">Откуда разрешено слать трафик. Боты не регистрируются: запросы уходят в api.telegram.org как есть.</div>
+      </div>
+      <button type="button" onClick="{{openNew}}" style="margin-left: auto; min-height: 40px; padding: 0 16px; border-radius: 8px; border: 0; background: #2DD4BF; color: #0F1115; font-size: 14px; font-weight: 600; cursor: pointer">+ Новое правило</button>
+    </header>
+
+    <section aria-label="Как подключить бота" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px">
+      <div style="background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 14px 18px; display: flex; flex-direction: column; gap: 6px">
+        <div style="font-size: 12px; color: #9AA3B2">Из разрешённой сети — меняется только адрес</div>
+        <code class="mono" style="font-size: 13px; word-break: break-all">https://tgproxy.corp.local/bot&lt;token&gt;/sendMessage</code>
+      </div>
+      <div style="background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 14px 18px; display: flex; flex-direction: column; gap: 6px">
+        <div style="font-size: 12px; color: #9AA3B2">Из любой сети — скрытый ключ в адресе</div>
+        <code class="mono" style="font-size: 13px; word-break: break-all">https://tgproxy.corp.local/k/&lt;ключ&gt;/bot&lt;token&gt;/sendMessage</code>
+      </div>
+    </section>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+      <div style="flex: 3 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+        <section style="background: #171A21; border: 1px solid #262B36; border-radius: 10px; overflow: hidden">
+          <div style="overflow-x: auto">
+            <table>
+              <thead><tr><th>Правило</th><th>Тип</th><th>Сети</th><th>Ключ</th><th>Лимит</th><th>Запросов 24ч</th><th>Последний запрос</th><th><span style="position: absolute; left: -9999px">Действия</span></th></tr></thead>
+              <tbody>
+                <sc-for list="{{rules}}" as="r" hint-placeholder-count="4">
+                  <tr>
+                    <td style="font-weight: 500; white-space: nowrap">{{r.name}}</td>
+                    <td style="white-space: nowrap"><span style="font-size: 12px; padding: 3px 8px; border-radius: 5px; background: {{r.typeBg}}; color: {{r.typeColor}}">{{r.type}}</span></td>
+                    <td>
+                      <div style="display: flex; flex-wrap: wrap; gap: 4px; max-width: 260px">
+                        <sc-for list="{{r.cidrs}}" as="c" hint-placeholder-count="1">
+                          <span class="mono" style="font-size: 11px; padding: 3px 7px; border-radius: 5px; background: #222731; color: #C3C9D4">{{c}}</span>
+                        </sc-for>
+                      </div>
+                    </td>
+                    <td class="mono" style="white-space: nowrap; color: #C3C9D4">{{r.key}}</td>
+                    <td class="mono" style="white-space: nowrap">{{r.limit}}</td>
+                    <td class="mono">{{r.req}}</td>
+                    <td class="mono" style="white-space: nowrap; color: {{r.seenColor}}">{{r.seen}}</td>
+                    <td>
+                      <div style="display: flex; gap: 6px; justify-content: flex-end">
+                        <button type="button" aria-label="Изменить правило {{r.name}}" title="Изменить" style="width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 7px; border: 1px solid #2F3542; background: transparent; color: #C3C9D4; cursor: pointer">
+                          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
+                        </button>
+                        <button type="button" aria-label="Удалить правило {{r.name}}" title="Удалить" style="width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 7px; border: 1px solid #5B2B2B; background: transparent; color: #FCA5A5; cursor: pointer">
+                          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6M14 11v6"></path></svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section style="background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: center; gap: 12px">
+            <h2 style="margin: 0; font-size: 15px; font-weight: 600">Активные боты за 24 часа</h2>
+            <span style="font-size: 12px; color: #9AA3B2">по трафику, без регистрации; токены не хранятся</span>
+          </div>
+          <div style="overflow-x: auto">
+            <table>
+              <thead><tr><th>bot_id</th><th>Правило</th><th>Запросов</th><th>Ошибки</th><th>429</th></tr></thead>
+              <tbody>
+                <sc-for list="{{bots}}" as="b" hint-placeholder-count="4">
+                  <tr><td class="mono">{{b.id}}</td><td>{{b.rule}}</td><td class="mono">{{b.req}}</td><td class="mono">{{b.err}}</td><td class="mono" style="color: {{b.limColor}}">{{b.lim}}</td></tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <sc-if value="{{showNew}}" hint-placeholder-val="{{true}}">
+        <section aria-label="Новое правило" style="flex: 1 1 340px; min-width: 0; background: #171A21; border: 1px solid #2D4A47; border-radius: 10px; padding: 20px 22px; display: flex; flex-direction: column; gap: 16px">
+          <div style="display: flex; align-items: center">
+            <h2 style="margin: 0; font-size: 16px; font-weight: 600">Новое правило</h2>
+            <button type="button" onClick="{{closeNew}}" aria-label="Закрыть" style="margin-left: auto; min-width: 34px; min-height: 34px; border-radius: 7px; border: 1px solid #2F3542; background: transparent; color: #C3C9D4; cursor: pointer">✕</button>
+          </div>
+          <sc-if value="{{form}}" hint-placeholder-val="{{false}}">
+            <div style="display: flex; flex-direction: column; gap: 14px">
+              <label class="fld"><span>Название</span><input class="inp" value="Подрядчик CRM"></label>
+              <label class="fld"><span>Сети, CIDR по одному в строке (пусто — любые, но тогда нужен ключ)</span><textarea class="inp mono" rows="3" style="padding: 10px 12px; resize: vertical"></textarea></label>
+              <label style="display: flex; align-items: center; gap: 10px; min-height: 36px; font-size: 14px"><input type="checkbox" checked="{{withKey}}" onChange="{{toggleKey}}">Скрытый ключ в адресе</label>
+              <label class="fld"><span>Лимит, запросов/с</span><input class="inp mono" value="30"></label>
+              <div style="font-size: 12px; color: #9AA3B2; line-height: 1.5">Правило без сетей и без ключа не создаётся: это открытый прокси, за который Telegram банит IP агентов.</div>
+              <button type="button" onClick="{{create}}" style="min-height: 42px; border-radius: 8px; border: 0; background: #2DD4BF; color: #0F1115; font-size: 14px; font-weight: 600; cursor: pointer">Создать правило</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{created}}" hint-placeholder-val="{{true}}">
+            <div style="display: flex; flex-direction: column; gap: 14px">
+              <div style="font-size: 13px; color: #FBBF24; line-height: 1.5">Ключ показан один раз. На сервере хранится только его хеш.</div>
+              <div class="fld"><span>Base URL для бота</span>
+                <div style="display: flex; gap: 8px">
+                  <code class="mono" style="flex: 1; min-width: 0; padding: 11px 12px; border-radius: 8px; background: #0B0D11; border: 1px solid #262B36; font-size: 12px; word-break: break-all">https://tgproxy.corp.local/k/tgp_k7Qm2vXa9LrT4cNw8ZpE1hYs</code>
+                  <button type="button" aria-label="Копировать Base URL" title="Копировать" style="flex: none; width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid #2F3542; background: transparent; color: #E6E8EE; cursor: pointer">
+                    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path></svg>
+                  </button>
+                </div>
+              </div>
+              <div style="font-size: 12px; color: #9AA3B2; line-height: 1.6">Клиент меняет только адрес: <span class="mono">{base}/bot&lt;token&gt;/sendMessage</span>. Если клиент умеет заголовки, ключ можно передать в <span class="mono">X-Proxy-Key</span>.</div>
+              <div style="font-size: 12px; color: #9AA3B2">Вебхуки не поддерживаются: используйте getUpdates.</div>
+            </div>
+          </sc-if>
+        </section>
+      </sc-if>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { panel: 'created', withKey: true }; }
+  renderVals() {
+    const cur = 'ClientKeys.dc.html';
+    const nav = [
+      { label: 'Обзор', href: 'Main.dc.html' },
+      { label: 'Агенты', href: 'Agents.dc.html' },
+      { label: 'Доступ', href: 'ClientKeys.dc.html' },
+      { label: 'Ошибки', href: 'Errors.dc.html' },
+      { label: 'Система', href: 'System.dc.html' }
+    ].map((n) => ({ ...n, active: n.href === cur, idle: n.href !== cur }));
+    const p = this.state.panel;
+    const net = { type: 'сеть', typeBg: '#1E2A3A', typeColor: '#93C5FD' };
+    const key = { type: 'ключ', typeBg: '#16302B', typeColor: '#5EEAD4' };
+    const both = { type: 'сеть + ключ', typeBg: '#2A2440', typeColor: '#C4B5FD' };
+    const on = '#E6E8EE', off = '#9AA3B2';
+    return {
+      nav,
+      showNew: p !== 'none', form: p === 'form', created: p === 'created',
+      withKey: this.state.withKey,
+      toggleKey: () => this.setState({ withKey: !this.state.withKey }),
+      openNew: () => this.setState({ panel: 'form' }),
+      closeNew: () => this.setState({ panel: 'none' }),
+      create: () => this.setState({ panel: 'created' }),
+      rules: [
+        { name: 'Офис и ДЦ', ...net, cidrs: ['10.20.0.0/16', '10.30.0.0/16'], key: '—', limit: '50 rps', req: '694 120', seen: 'только что', seenColor: on },
+        { name: 'Сервер 1С', ...net, cidrs: ['10.40.1.7/32'], key: '—', limit: '10 rps', req: '3 208', seen: '4 мин назад', seenColor: on },
+        { name: 'Подрядчик CRM', ...key, cidrs: ['любые'], key: 'tgp_k7Qm…', limit: '30 rps', req: '—', seen: 'не было', seenColor: off },
+        { name: 'Мониторинг', ...both, cidrs: ['192.168.5.10/32'], key: 'tgp_c1Zr…', limit: '5 rps', req: '4 812', seen: '3 мин назад', seenColor: on }
+      ],
+      bots: [
+        { id: '6123450001', rule: 'Офис и ДЦ', req: '412 300', err: '0,3 %', lim: '9', limColor: '#C4B5FD' },
+        { id: '6801234567', rule: 'Офис и ДЦ', req: '281 820', err: '0,1 %', lim: '0', limColor: off },
+        { id: '5550001111', rule: 'Мониторинг', req: '4 812', err: '0,0 %', lim: '0', limColor: off },
+        { id: '7012345678', rule: 'Сервер 1С', req: '3 208', err: '1,2 %', lim: '3', limColor: '#C4B5FD' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

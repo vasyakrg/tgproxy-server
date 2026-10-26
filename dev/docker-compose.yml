@@ -1,0 +1,32 @@
+# Dev-стенд. Сертификаты redis: ./dev/tls/redis/{ca.crt,redis.crt,redis.key} (make dev-certs, M1).
+# Пароли ниже — только для dev.
+services:
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --port
+      - "0"
+      - --tls-port
+      - "6380"
+      - --tls-cert-file
+      - /tls/redis.crt
+      - --tls-key-file
+      - /tls/redis.key
+      - --tls-ca-cert-file
+      - /tls/ca.crt
+      - --tls-auth-clients
+      - "no"
+      - --user
+      - default off
+      - --user
+      - tgproxy on >dev-redis-password ~tgproxy:* &* +@all -@dangerous
+    ports:
+      - "127.0.0.1:6380:6380"
+    volumes:
+      - ./tls/redis:/tls:ro
+
+  sshd-debian:
+    build: ./sshd-debian
+    ports:
+      - "127.0.0.1:2222:22"

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>tgproxy — вход</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0F1115;color:#E6E8EE;font-family:'IBM Plex Sans',system-ui,sans-serif}
+a{color:#5EEAD4}a:hover{color:#99F6E4}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.fld{display:flex;flex-direction:column;gap:6px}
+.fld span{font-size:12px;color:#9AA3B2}
+.inp{min-height:44px;box-sizing:border-box;padding:0 14px;border-radius:8px;border:1px solid #2F3542;background:#0F1115;color:#E6E8EE;font-size:15px;font-family:inherit}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="min-height: 100vh; box-sizing: border-box; padding: 24px 16px; background: #0F1115; display: flex; align-items: center; justify-content: center">
+  <main style="width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 24px">
+    <div style="display: flex; align-items: center; gap: 12px; justify-content: center">
+      <img src="/_blob/a419b3358b62479b0e5dd4aa0027fdac" alt="" width="44" height="44" style="width: 44px; height: 44px; border-radius: 10px; object-fit: cover">
+      <div style="font-weight: 600; font-size: 22px">tgproxy</div>
+    </div>
+
+    <section style="background: #171A21; border: 1px solid #262B36; border-radius: 12px; padding: 28px; display: flex; flex-direction: column; gap: 18px">
+      <sc-if value="{{pwd}}" hint-placeholder-val="{{true}}">
+        <form style="display: flex; flex-direction: column; gap: 16px">
+          <h1 style="margin: 0; font-size: 20px; font-weight: 600">Вход в панель</h1>
+          <label class="fld"><span>Пользователь</span><input class="inp" autocomplete="username" value="vasya"></label>
+          <label class="fld"><span>Пароль</span><input class="inp" type="password" autocomplete="current-password" value="••••••••••••"></label>
+          <button type="button" onClick="{{next}}" style="min-height: 46px; border-radius: 8px; border: 0; background: #2DD4BF; color: #0F1115; font-size: 15px; font-weight: 600; cursor: pointer">Продолжить</button>
+        </form>
+      </sc-if>
+      <sc-if value="{{otp}}" hint-placeholder-val="{{false}}">
+        <form style="display: flex; flex-direction: column; gap: 16px">
+          <h1 style="margin: 0; font-size: 20px; font-weight: 600">Код подтверждения</h1>
+          <div style="font-size: 14px; color: #C3C9D4; line-height: 1.5">Введите 6 цифр из приложения-аутентификатора.</div>
+          <label class="fld"><span>Код TOTP</span><input class="inp mono" inputmode="numeric" autocomplete="one-time-code" value="482 913" style="font-size: 22px; letter-spacing: 6px; text-align: center"></label>
+          <a href="Main.dc.html" style="display: flex; align-items: center; justify-content: center; min-height: 46px; border-radius: 8px; background: #2DD4BF; color: #0F1115; font-size: 15px; font-weight: 600; text-decoration: none">Войти</a>
+          <button type="button" onClick="{{back}}" style="min-height: 40px; border: 0; background: transparent; color: #5EEAD4; font-size: 14px; cursor: pointer">← Другой пользователь</button>
+        </form>
+      </sc-if>
+      <div role="status" style="font-size: 13px; color: #FCA5A5; background: #2A1717; border: 1px solid #4A2323; border-radius: 8px; padding: 10px 12px">Неверный логин, пароль или код. Осталось попыток: 3.</div>
+    </section>
+
+    <div style="font-size: 12px; color: #9AA3B2; text-align: center; line-height: 1.6">После 10 неудачных попыток вход блокируется на 15 минут, администраторы получат уведомление.</div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { step: 'pwd' }; }
+  renderVals() {
+    return {
+      pwd: this.state.step === 'pwd',
+      otp: this.state.step === 'otp',
+      next: () => this.setState({ step: 'otp' }),
+      back: () => this.setState({ step: 'pwd' })
+    };
+  }
+}
+</script>
+</body>
+</html>

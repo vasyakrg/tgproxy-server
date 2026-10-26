@@ -1,0 +1,335 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "tgproxy — архитектура server / agent",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "data-path",
+        "label": "Путь запроса бота",
+        "focus": [
+          "bots",
+          "ingress",
+          "router",
+          "agent_a",
+          "agent_b",
+          "telegram"
+        ],
+        "note": "Бот → client-key → балансировщик → mTLS → агент → api.telegram.org"
+      },
+      {
+        "id": "control",
+        "label": "Управление агентами",
+        "focus": [
+          "admins",
+          "webui",
+          "store",
+          "installer",
+          "github",
+          "agent_b"
+        ],
+        "note": "UI ставит и обновляет агентов по SSH из кэша подписанных deb"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "bots",
+      "type": "external",
+      "label": "Telegram-боты",
+      "sublabel": "base URL = server",
+      "pos": [
+        40,
+        215
+      ],
+      "size": [
+        140,
+        62
+      ]
+    },
+    {
+      "id": "admins",
+      "type": "external",
+      "label": "Админы (2–3)",
+      "sublabel": "браузер",
+      "pos": [
+        40,
+        400
+      ],
+      "size": [
+        140,
+        62
+      ]
+    },
+    {
+      "id": "ingress",
+      "type": "security",
+      "label": "Proxy ingress",
+      "sublabel": "сеть / ключ · TLS",
+      "pos": [
+        260,
+        215
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "server"
+    },
+    {
+      "id": "router",
+      "type": "backend",
+      "label": "Router + Balancer",
+      "sublabel": "P2C · ретраи · gw :8444",
+      "pos": [
+        490,
+        215
+      ],
+      "size": [
+        156,
+        62
+      ],
+      "tag": "server"
+    },
+    {
+      "id": "webui",
+      "type": "frontend",
+      "label": "Web UI / API",
+      "sublabel": "templ+htmx · TOTP",
+      "pos": [
+        260,
+        400
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "server"
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "SQLite",
+      "sublabel": "опц. Redis",
+      "pos": [
+        260,
+        500
+      ],
+      "size": [
+        156,
+        62
+      ],
+      "tag": "server"
+    },
+    {
+      "id": "installer",
+      "type": "backend",
+      "label": "Installer / Updater",
+      "sublabel": "SSH · minisign",
+      "pos": [
+        490,
+        400
+      ],
+      "size": [
+        156,
+        62
+      ],
+      "tag": "server"
+    },
+    {
+      "id": "agent_a",
+      "type": "backend",
+      "label": "Agent A · за NAT",
+      "sublabel": "reverse, 2 соед.",
+      "pos": [
+        790,
+        140
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "tag": "agent"
+    },
+    {
+      "id": "agent_b",
+      "type": "backend",
+      "label": "Agent B · dial",
+      "sublabel": "слушает :8443",
+      "pos": [
+        790,
+        295
+      ],
+      "size": [
+        140,
+        62
+      ],
+      "tag": "agent"
+    },
+    {
+      "id": "telegram",
+      "type": "external",
+      "label": "api.telegram.org",
+      "sublabel": "Bot API",
+      "pos": [
+        1040,
+        218
+      ],
+      "size": [
+        150,
+        62
+      ]
+    },
+    {
+      "id": "github",
+      "type": "external",
+      "label": "GitHub Releases",
+      "sublabel": "deb + minisig",
+      "pos": [
+        790,
+        470
+      ],
+      "size": [
+        140,
+        62
+      ]
+    },
+    {
+      "id": "prom",
+      "type": "external",
+      "label": "Prometheus",
+      "sublabel": "bearer scrape",
+      "pos": [
+        1040,
+        370
+      ],
+      "size": [
+        150,
+        62
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Закрытый контур — tgproxy server",
+      "wraps": [
+        "ingress",
+        "router",
+        "webui",
+        "installer",
+        "store"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "security-group",
+      "label": "Хосты агентов",
+      "wraps": [
+        "agent_a",
+        "agent_b"
+      ],
+      "pad": 16
+    }
+  ],
+  "connections": [
+    {
+      "from": "bots",
+      "to": "ingress",
+      "label": "/bot<token>/…",
+      "variant": "emphasis"
+    },
+    {
+      "from": "ingress",
+      "to": "router",
+      "variant": "emphasis"
+    },
+    {
+      "from": "agent_a",
+      "to": "router",
+      "label": "reverse :8444",
+      "variant": "security"
+    },
+    {
+      "from": "router",
+      "to": "agent_b",
+      "label": "h2 mTLS :8443",
+      "variant": "security"
+    },
+    {
+      "from": "agent_a",
+      "to": "telegram",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "from": "agent_b",
+      "to": "telegram",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "from": "admins",
+      "to": "webui",
+      "label": "HTTPS",
+      "variant": "default"
+    },
+    {
+      "from": "webui",
+      "to": "installer",
+      "label": "jobs"
+    },
+    {
+      "from": "installer",
+      "to": "store"
+    },
+    {
+      "from": "installer",
+      "to": "agent_b",
+      "label": "SSH install",
+      "variant": "dashed"
+    },
+    {
+      "from": "github",
+      "to": "installer",
+      "label": "deb + sig",
+      "variant": "dashed"
+    },
+    {
+      "from": "prom",
+      "to": "agent_b",
+      "label": "/metrics",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Путь данных",
+      "items": [
+        "Правила доступа: сеть и/или скрытый ключ, ботов не учитываем",
+        "P2C по inflight×EWMA, circuit breaker",
+        "TLS входа: ACME или файлы администратора"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Ретраи без дублей",
+      "items": [
+        "Только синхронно, в пределах запроса бота",
+        "send*/forward*/copy* — только при отказе до отправки",
+        "429 отдаётся боту, окно держит сервер"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Управление",
+      "items": [
+        "Агент: dial (сервер → :8443) или reverse (агент → :8444)",
+        "Обновление по команде, подпись проверяет сам агент",
+        "Агент за NAT подключается одноразовым токеном"
+      ]
+    }
+  ]
+}

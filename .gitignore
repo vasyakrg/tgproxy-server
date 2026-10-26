@@ -1,0 +1,12 @@
+/tgproxy
+bin/
+dist/
+dev/.env
+dev/data/
+dev/tls/
+*.db
+*.db-shm
+*.db-wal
+coverage.*
+.DS_Store
+docs/diagrams/*.visual-check.*

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>tgproxy — ошибки</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0F1115;color:#E6E8EE;font-family:'IBM Plex Sans',system-ui,sans-serif}
+a{color:#5EEAD4}a:hover{color:#99F6E4}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+table{border-collapse:collapse;width:100%}
+th{text-align:left;font-weight:500;font-size:12px;color:#9AA3B2;padding:10px 12px;border-bottom:1px solid #262B36;white-space:nowrap}
+td{padding:11px 12px;font-size:13px;border-bottom:1px solid #1E222B;white-space:nowrap;vertical-align:middle}
+.nav{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#C3C9D4;text-decoration:none;font-size:14px}
+.nav:hover{background:#1B1F27;color:#E6E8EE}
+.fld{display:flex;flex-direction:column;gap:6px}
+.fld span{font-size:12px;color:#9AA3B2}
+.inp{min-height:40px;box-sizing:border-box;padding:0 10px;border-radius:8px;border:1px solid #2F3542;background:#0F1115;color:#E6E8EE;font-size:14px;font-family:inherit}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh; background: #0F1115">
+
+  <dc-import name="Sidebar" current="Errors.dc.html" hint-size="232px,100vh"></dc-import>
+
+  <main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 20px">
+    <header style="display: flex; flex-direction: column; gap: 4px">
+      <h1 style="margin: 0; font-size: 24px; font-weight: 600">Ошибки</h1>
+      <div style="font-size: 13px; color: #9AA3B2">Отказы прокси и агентов. Тела запросов не сохраняются, токены замаскированы.</div>
+    </header>
+
+    <section aria-label="Сводка" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px">
+      <sc-for list="{{phases}}" as="p" hint-placeholder-count="5">
+        <div style="background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px">
+          <div class="mono" style="font-size: 12px; color: #9AA3B2">{{p.label}}</div>
+          <div class="mono" style="font-size: 22px; font-weight: 500">{{p.value}}</div>
+          <div style="font-size: 12px; color: {{p.color}}">{{p.hint}}</div>
+        </div>
+      </sc-for>
+    </section>
+
+    <section style="background: #171A21; border: 1px solid #262B36; border-radius: 10px; overflow: hidden">
+      <form style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #262B36">
+        <label class="fld" style="flex: 0 1 150px"><span>Агент</span><select class="inp"><option>Все</option><option>fra-1</option><option>ams-1</option><option>ist-1</option></select></label>
+        <label class="fld" style="flex: 0 1 170px"><span>bot_id</span><input class="inp mono" placeholder="7012345678"></label>
+        <label class="fld" style="flex: 0 1 150px"><span>Фаза</span><select class="inp"><option>Все</option><option>dial</option><option>tls</option><option>pre-send</option><option>timeout</option><option>read</option></select></label>
+        <label class="fld" style="flex: 0 1 130px"><span>Код</span><select class="inp"><option>Все</option><option>429</option><option>502</option><option>504</option><option>5xx</option></select></label>
+        <label class="fld" style="flex: 1 1 200px"><span>Request ID</span><input class="inp mono" placeholder="01JB…"></label>
+        <button type="button" style="min-height: 40px; padding: 0 16px; border-radius: 8px; border: 1px solid #2F3542; background: #12151B; color: #E6E8EE; font-size: 14px; cursor: pointer">Применить</button>
+      </form>
+      <div style="overflow-x: auto">
+        <table>
+          <thead><tr><th>Время</th><th>Request ID</th><th>bot_id</th><th>Метод</th><th>Агент</th><th>Фаза</th><th>Код</th><th>Итог</th><th>Описание</th></tr></thead>
+          <tbody>
+            <sc-for list="{{rows}}" as="r" hint-placeholder-count="10">
+              <tr>
+                <td class="mono" style="color: #9AA3B2">{{r.t}}</td>
+                <td class="mono">{{r.id}}</td>
+                <td class="mono">{{r.bot}}</td>
+                <td class="mono">{{r.m}}</td>
+                <td class="mono">{{r.agent}}</td>
+                <td class="mono" style="color: {{r.phaseColor}}">{{r.phase}}</td>
+                <td class="mono">{{r.code}}</td>
+                <td><span style="font-size: 12px; padding: 3px 8px; border-radius: 5px; background: {{r.outBg}}; color: {{r.outColor}}">{{r.out}}</span></td>
+                <td style="color: #C3C9D4; white-space: normal; min-width: 240px">{{r.d}}</td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+      <div style="display: flex; justify-content: flex-end; padding: 12px 16px">
+        <button type="button" style="min-height: 38px; padding: 0 14px; border-radius: 8px; border: 1px solid #2F3542; background: transparent; color: #C3C9D4; font-size: 13px; cursor: pointer">Показать ещё</button>
+      </div>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const cur = 'Errors.dc.html';
+    const nav = [
+      { label: 'Обзор', href: 'Main.dc.html' },
+      { label: 'Агенты', href: 'Agents.dc.html' },
+      { label: 'Доступ', href: 'ClientKeys.dc.html' },
+      { label: 'Ошибки', href: 'Errors.dc.html' },
+      { label: 'Система', href: 'System.dc.html' }
+    ].map((n) => ({ ...n, active: n.href === cur, idle: n.href !== cur }));
+    const retried = { out: 'переотправлен', outBg: '#16302B', outColor: '#5EEAD4' };
+    const failed = { out: 'отказ боту', outBg: '#3A1D1D', outColor: '#FCA5A5' };
+    const passed = { out: 'передан боту', outBg: '#2A2440', outColor: '#C4B5FD' };
+    const pre = '#FBBF24', post = '#F87171', tg = '#A78BFA';
+    return {
+      nav,
+      phases: [
+        { label: 'dial / tls', value: '214', hint: 'все переотправлены', color: '#5EEAD4' },
+        { label: 'pre-send', value: '38', hint: 'все переотправлены', color: '#5EEAD4' },
+        { label: 'timeout / read', value: '9', hint: 'send* — без повтора', color: '#FCA5A5' },
+        { label: '429 Telegram', value: '12', hint: 'переданы ботам', color: '#C4B5FD' },
+        { label: 'нет агентов', value: '0', hint: 'за 24 часа', color: '#9AA3B2' }
+      ],
+      rows: [
+        { t: '14:32:18', id: '01JBX4…Q2', bot: '6123450001', m: 'sendMessage', agent: 'ist-1 → fra-2', phase: 'dial', phaseColor: pre, code: '200', d: 'connect: i/o timeout, повтор на fra-2 успешен', ...retried },
+        { t: '14:32:17', id: '01JBX4…P8', bot: '6801234567', m: 'getUpdates', agent: 'ist-1 → ams-1', phase: 'dial', phaseColor: pre, code: '200', d: 'connect: i/o timeout, повтор успешен', ...retried },
+        { t: '14:21:40', id: '01JBX3…7K', bot: '6123450002', m: 'sendPhoto', agent: 'ams-1', phase: 'timeout', phaseColor: post, code: '504', d: 'нет ответа от Telegram за 25 с; доставка неизвестна', ...failed },
+        { t: '14:20:55', id: '01JBX3…5D', bot: '6801234567', m: 'editMessageText', agent: 'ams-1 → fra-1', phase: 'read', phaseColor: post, code: '200', d: 'обрыв ответа; повтор: «message is not modified» = успех', ...retried },
+        { t: '14:20:02', id: '01JBX3…1A', bot: '6123450000', m: 'sendMessage', agent: 'ams-1 → waw-1', phase: 'pre-send', phaseColor: pre, code: '200', d: 'агент не смог открыть TLS до api.telegram.org', ...retried },
+        { t: '08:41:09', id: '01JBWF…ZZ', bot: '7012345678', m: 'sendMessage', agent: 'fra-1', phase: 'telegram', phaseColor: tg, code: '429', d: 'Too Many Requests: retry after 18', ...passed },
+        { t: '08:41:08', id: '01JBWF…ZY', bot: '7012345678', m: 'sendMessage', agent: '—', phase: 'server', phaseColor: tg, code: '429', d: 'окно retry_after ещё действует, запрос не отправлялся', ...passed }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

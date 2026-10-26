@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>tgproxy — боковое меню</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<aside aria-label="Боковое меню" style="box-sizing: border-box; width: {{width}}; min-height: 100vh; height: 100%; padding: 16px 12px; background: #12151B; border-right: 1px solid #222731; display: flex; flex-direction: column; gap: 6px; font-family: 'IBM Plex Sans', system-ui, sans-serif; color: #E6E8EE; transition: width 160ms ease">
+
+  <button type="button" onClick="{{toggle}}" aria-expanded="{{open}}" aria-label="{{toggleLabel}}" title="{{toggleLabel}}" style="display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 6px; margin-bottom: 12px; border: 0; border-radius: 10px; background: transparent; color: #E6E8EE; cursor: pointer; font-family: inherit; text-align: left">
+    <img src="/_blob/a419b3358b62479b0e5dd4aa0027fdac" alt="" width="32" height="32" style="flex: none; width: 32px; height: 32px; border-radius: 8px; object-fit: cover">
+    <sc-if value="{{open}}" hint-placeholder-val="{{true}}">
+      <span style="font-weight: 600; font-size: 16px">tgproxy</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #9AA3B2">v1.4.1</span>
+      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9AA3B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left: auto"><path d="M15 6l-6 6 6 6"></path></svg>
+    </sc-if>
+  </button>
+
+  <nav aria-label="Разделы" style="display: flex; flex-direction: column; gap: 2px">
+    <a href="Main.dc.html" aria-label="Обзор" title="Обзор" aria-current="{{cur.main}}" style="{{st.main}}">
+      <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg>
+      <sc-if value="{{open}}" hint-placeholder-val="{{true}}"><span>Обзор</span></sc-if>
+    </a>
+    <a href="Agents.dc.html" aria-label="Агенты" title="Агенты" aria-current="{{cur.agents}}" style="{{st.agents}}">
+      <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><rect x="3" y="4" width="18" height="7" rx="2"></rect><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg>
+      <sc-if value="{{open}}" hint-placeholder-val="{{true}}"><span>Агенты</span></sc-if>
+    </a>
+    <a href="ClientKeys.dc.html" aria-label="Доступ" title="Доступ" aria-current="{{cur.access}}" style="{{st.access}}">
+      <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"></path><path d="M9 12l2 2 4-4"></path></svg>
+      <sc-if value="{{open}}" hint-placeholder-val="{{true}}"><span>Доступ</span></sc-if>
+    </a>
+    <a href="Errors.dc.html" aria-label="Ошибки" title="Ошибки" aria-current="{{cur.errors}}" style="{{st.errors}}">
+      <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4M12 17h.01"></path></svg>
+      <sc-if value="{{open}}" hint-placeholder-val="{{true}}"><span>Ошибки</span></sc-if>
+    </a>
+    <a href="System.dc.html" aria-label="Система" title="Система" aria-current="{{cur.system}}" style="{{st.system}}">
+      <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>
+      <sc-if value="{{open}}" hint-placeholder-val="{{true}}"><span>Система</span></sc-if>
+    </a>
+  </nav>
+
+  <div style="margin-top: auto; padding-top: 14px; border-top: 1px solid #222731; display: flex; align-items: center; gap: 12px; min-height: 44px">
+    <a href="Login.dc.html" aria-label="Выйти (vasya)" title="Выйти" style="flex: none; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 8px; color: #C3C9D4; text-decoration: none">
+      <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5M21 12H9"></path></svg>
+    </a>
+    <sc-if value="{{open}}" hint-placeholder-val="{{true}}"><span style="font-size: 14px; color: #C3C9D4">vasya</span></sc-if>
+  </div>
+</aside>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"current":{"editor":"enum","options":["Main.dc.html","Agents.dc.html","ClientKeys.dc.html","Errors.dc.html","System.dc.html"],"default":"Main.dc.html"},"$preview":{"width":232,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { collapsed: false }; }
+  componentDidMount() {
+    try {
+      if (window.localStorage.getItem('tgproxy.sidebar.collapsed') === '1') this.setState({ collapsed: true });
+    } catch (e) {}
+  }
+  renderVals() {
+    const cur = this.props.current ?? 'Main.dc.html';
+    const open = !this.state.collapsed;
+    const base = 'display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-radius: 8px; text-decoration: none; font-size: 14px;';
+    const idle = base + ' color: #C3C9D4;';
+    const active = base + ' color: #5EEAD4; background: #1B2A2A; font-weight: 500;';
+    const map = { main: 'Main.dc.html', agents: 'Agents.dc.html', access: 'ClientKeys.dc.html', errors: 'Errors.dc.html', system: 'System.dc.html' };
+    const st = {}, curAttr = {};
+    Object.keys(map).forEach((k) => {
+      st[k] = map[k] === cur ? active : idle;
+      curAttr[k] = map[k] === cur ? 'page' : 'false';
+    });
+    return {
+      open, st, cur: curAttr,
+      width: open ? '232px' : '68px',
+      toggleLabel: open ? 'Свернуть меню' : 'Развернуть меню',
+      toggle: () => {
+        const collapsed = !this.state.collapsed;
+        this.setState({ collapsed });
+        try { window.localStorage.setItem('tgproxy.sidebar.collapsed', collapsed ? '1' : '0'); } catch (e) {}
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>tgproxy — агенты</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0F1115;color:#E6E8EE;font-family:'IBM Plex Sans',system-ui,sans-serif}
+a{color:#5EEAD4}a:hover{color:#99F6E4}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+table{border-collapse:collapse;width:100%}
+th{text-align:left;font-weight:500;font-size:12px;color:#9AA3B2;padding:10px 12px;border-bottom:1px solid #262B36;white-space:nowrap}
+td{padding:12px;font-size:13px;border-bottom:1px solid #1E222B;white-space:nowrap;vertical-align:middle}
+.nav{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#C3C9D4;text-decoration:none;font-size:14px}
+.nav:hover{background:#1B1F27;color:#E6E8EE}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh; background: #0F1115">
+
+  <dc-import name="Sidebar" current="Agents.dc.html" hint-size="232px,100vh"></dc-import>
+
+  <main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 28px 32px 48px; display: flex; flex-direction: column; gap: 20px">
+
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600">Агенты</h1>
+        <div style="font-size: 13px; color: #9AA3B2">6 агентов · 5 в работе · версия сервера v1.4.1</div>
+      </div>
+      <div style="margin-left: auto; display: flex; flex-wrap: wrap; gap: 10px">
+        <button type="button" onClick="{{startRollout}}" style="min-height: 40px; padding: 0 16px; border-radius: 8px; border: 1px solid #2F3542; background: #171A21; color: #E6E8EE; font-size: 14px; cursor: pointer">Обновить отстающие до v1.4.1</button>
+        <a href="AgentAdd.dc.html" style="display: inline-flex; align-items: center; min-height: 40px; padding: 0 16px; border-radius: 8px; background: #2DD4BF; color: #0F1115; font-size: 14px; font-weight: 600; text-decoration: none">+ Добавить агента</a>
+      </div>
+    </header>
+
+    <sc-if value="{{rollout}}" hint-placeholder-val="{{false}}">
+      <section aria-label="Обновление агентов" style="background: #171A21; border: 1px solid #2D4A47; border-radius: 10px; padding: 16px 20px; display: flex; flex-direction: column; gap: 14px">
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+          <div style="font-size: 14px; font-weight: 600">Раскатка v1.4.1 · канарейка → батчи по 2</div>
+          <div class="mono" style="font-size: 12px; color: #9AA3B2">подпись minisign проверена · sha256 9f2c…e41a</div>
+          <button type="button" onClick="{{stopRollout}}" style="margin-left: auto; min-height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid #5B2B2B; background: transparent; color: #FCA5A5; font-size: 13px; cursor: pointer">Остановить</button>
+        </div>
+        <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px">
+          <sc-for list="{{steps}}" as="s" hint-placeholder-count="5">
+            <li style="flex: 1 1 160px; border: 1px solid #262B36; border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; background: #12151B">
+              <div style="font-size: 12px; color: {{s.color}}">{{s.state}}</div>
+              <div style="font-size: 13px">{{s.label}}</div>
+            </li>
+          </sc-for>
+        </ol>
+      </section>
+    </sc-if>
+
+    <section style="background: #171A21; border: 1px solid #262B36; border-radius: 10px; overflow: hidden">
+      <div style="display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #262B36">
+        <label style="display: flex; flex-direction: column; gap: 4px; flex: 1 1 240px">
+          <span style="font-size: 12px; color: #9AA3B2">Поиск</span>
+          <input type="search" placeholder="имя или адрес" style="min-height: 38px; padding: 0 12px; border-radius: 8px; border: 1px solid #2F3542; background: #0F1115; color: #E6E8EE; font-size: 14px">
+        </label>
+        <label style="display: flex; flex-direction: column; gap: 4px; flex: 0 1 180px">
+          <span style="font-size: 12px; color: #9AA3B2">Статус</span>
+          <select style="min-height: 40px; padding: 0 10px; border-radius: 8px; border: 1px solid #2F3542; background: #0F1115; color: #E6E8EE; font-size: 14px">
+            <option>Все</option><option>В работе</option><option>Деградация</option><option>Недоступен</option><option>Drain</option>
+          </select>
+        </label>
+      </div>
+      <div style="overflow-x: auto">
+        <table>
+          <thead><tr><th>Агент</th><th>Связь</th><th>Статус</th><th>Вес</th><th>rps</th><th>p95</th><th>Ошибки 5м</th><th>In-flight</th><th>Версия</th><th>Сертификат</th><th>Опрос</th><th><span style="position: absolute; left: -9999px">Действия</span></th></tr></thead>
+          <tbody>
+            <sc-for list="{{agents}}" as="a" hint-placeholder-count="6">
+              <tr>
+                <td><div style="display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">{{a.name}}</span><span class="mono" style="font-size: 11px; color: #9AA3B2">{{a.addr}}</span></div></td>
+                <td><span class="mono" style="font-size: 12px; padding: 3px 8px; border-radius: 5px; background: {{a.linkBg}}; color: {{a.linkColor}}">{{a.link}}</span></td>
+                <td><span style="display: inline-flex; align-items: center; gap: 6px; color: {{a.color}}"><span style="width: 8px; height: 8px; border-radius: 50%; background: {{a.color}}"></span>{{a.status}}</span></td>
+                <td class="mono">{{a.weight}}</td>
+                <td class="mono">{{a.rps}}</td>
+                <td class="mono">{{a.p95}}</td>
+                <td class="mono">{{a.err}}</td>
+                <td class="mono">{{a.inflight}}</td>
+                <td class="mono" style="color: {{a.verColor}}">{{a.ver}}</td>
+                <td class="mono" style="color: {{a.certColor}}">{{a.cert}}</td>
+                <td class="mono" style="color: #9AA3B2">{{a.seen}}</td>
+                <td>
+                  <div style="display: flex; gap: 6px; justify-content: flex-end">
+                    <button type="button" aria-label="Вывести из балансировки (drain): {{a.name}}" title="Drain" style="width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 7px; border: 1px solid #2F3542; background: transparent; color: #C3C9D4; cursor: pointer">
+                      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg>
+                    </button>
+                    <button type="button" aria-label="Обновить агента {{a.name}}" title="Обновить" style="width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 7px; border: 1px solid #2F3542; background: transparent; color: #C3C9D4; cursor: pointer">
+                      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg>
+                    </button>
+                    <button type="button" aria-label="Ещё действия: {{a.name}}" title="Ещё" style="width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 7px; border: 1px solid #2F3542; background: transparent; color: #C3C9D4; cursor: pointer">
+                      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px">
+      <div style="background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px">
+        <div style="font-size: 12px; color: #9AA3B2">Меню «⋯»</div>
+        <div style="font-size: 13px; line-height: 1.6">Изменить вес · Режим связи (→ агент / агент →) · Перевыпустить сертификат · Откатить на предыдущую версию · Метрики агента · Удалить (сертификат в denylist)</div>
+      </div>
+      <div style="background: #171A21; border: 1px solid #262B36; border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px">
+        <div style="font-size: 12px; color: #9AA3B2">Пороги алертов</div>
+        <div style="font-size: 13px; line-height: 1.6">Деградация: ошибки &gt; 5 % за 5 мин · Перегрузка: in-flight &gt; 64 · Сертификат: &lt; 14 дней</div>
+      </div>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { rollout: true }; }
+  renderVals() {
+    const cur = 'Agents.dc.html';
+    const nav = [
+      { label: 'Обзор', href: 'Main.dc.html' },
+      { label: 'Агенты', href: 'Agents.dc.html' },
+      { label: 'Доступ', href: 'ClientKeys.dc.html' },
+      { label: 'Ошибки', href: 'Errors.dc.html' },
+      { label: 'Система', href: 'System.dc.html' }
+    ].map((n) => ({ ...n, active: n.href === cur, idle: n.href !== cur }));
+    const green = '#34D399', amber = '#FBBF24', red = '#F87171', mute = '#9AA3B2', text = '#E6E8EE';
+    return {
+      nav,
+      rollout: this.state.rollout,
+      startRollout: () => this.setState({ rollout: true }),
+      stopRollout: () => this.setState({ rollout: false }),
+      steps: [
+        { state: 'готово', color: green, label: 'Загрузка deb в кэш сервера' },
+        { state: 'готово', color: green, label: 'Канарейка: hel-1' },
+        { state: 'наблюдение 0:42 / 1:00', color: amber, label: 'Health-check hel-1' },
+        { state: 'ожидает', color: mute, label: 'Батч 2: —' },
+        { state: 'ожидает', color: mute, label: 'Итог и уведомление' }
+      ],
+      agents: [
+        { name: 'fra-1', addr: '185.12.4.10:8443', status: 'в работе', color: green, weight: '100', rps: '96', p95: '182 мс', err: '0,2 %', inflight: '8', ver: 'v1.4.1', verColor: text, cert: '71 д', certColor: text, seen: '2 с назад' },
+        { name: 'fra-2', addr: '185.12.4.11:8443', status: 'в работе', color: green, weight: '100', rps: '91', p95: '190 мс', err: '0,3 %', inflight: '7', ver: 'v1.4.1', verColor: text, cert: '71 д', certColor: text, seen: '1 с назад' },
+        { name: 'ams-1', addr: '91.204.8.3:8443', status: 'деградация', color: amber, weight: '100', rps: '58', p95: '940 мс', err: '6,1 %', inflight: '14', ver: 'v1.4.1', verColor: text, cert: '40 д', certColor: text, seen: '3 с назад' },
+        { name: 'hel-1', addr: '65.21.90.7:8443', status: 'обновляется', color: '#5EEAD4', weight: '50', rps: '12', p95: '210 мс', err: '0,0 %', inflight: '1', ver: 'v1.3.9 → v1.4.1', verColor: amber, cert: '12 д', certColor: amber, seen: '4 с назад' },
+        { name: 'waw-1', nat: true, addr: 'за NAT · 51.68.12.40', status: 'в работе', color: green, weight: '80', rps: '79', p95: '230 мс', err: '0,5 %', inflight: '3', ver: 'v1.4.1', verColor: text, cert: '88 д', certColor: text, seen: '2 с назад' },
+        { name: 'ist-1', addr: '78.135.2.9:8443', status: 'недоступен', color: red, weight: '100', rps: '—', p95: '—', err: '—', inflight: '—', ver: 'v1.4.1', verColor: text, cert: '55 д', certColor: text, seen: '6 мин назад' }
+      ].map((a) => a.nat
+        ? { ...a, link: 'агент → · 2 соед.', linkBg: '#2A2440', linkColor: '#C4B5FD' }
+        : { ...a, link: '→ агент', linkBg: '#1E2A3A', linkColor: '#93C5FD' })
+    };
+  }
+}
+</script>
+</body>
+</html>
