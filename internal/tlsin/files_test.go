@@ -200,12 +200,15 @@ func TestFilesRunFsnotifyAndPoll(t *testing.T) {
 	waitSerial(2)
 
 	// сломанная пара: остаётся 2; событие invalid ровно один раз, несмотря на тикер
-	_, _ = issue(t, certSpec{serial: 3}).write(t, dir, 0o600)
-	_ = os.WriteFile(kf, issue(t, certSpec{}).keyPEM, 0o600)
+	// Пишем только сертификат: с ключом от serial 2 пара не сходится ни в какой момент
+	// (запись валидной пары с последующей подменой ключа давала гонку с debounce).
+	if err := os.WriteFile(cf, issue(t, certSpec{serial: 3}).certPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	eventually(t, "invalid", func() bool { return col.count(EventInvalid) >= 1 })
 	time.Sleep(200 * time.Millisecond)
 	waitSerial(2)
-	if n := col.count(EventInvalid); n > 2 { // допускаем промежуточный сбой при двухшаговой записи
+	if n := col.count(EventInvalid); n > 2 { // truncate+write может дать два события до debounce
 		t.Fatalf("invalid repeated by poll: %d", n)
 	}
 	cancel()
