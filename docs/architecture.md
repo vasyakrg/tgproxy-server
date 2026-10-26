@@ -124,6 +124,7 @@ HTTP/2 reverse proxy поверх mTLS 1.3 (не gRPC — multipart и файл�
 ## 5. Балансировка
 
 - Power-of-two-choices, score = `(inflight+1) × EWMA(latency, α=0.3)`, вес агента из UI.
+- Peak-EWMA: оценка простаивающего агента затухает к нулю (τ=5s), первое наблюдение сглаживается с дефолтом 100ms — один медленный ответ (TLS-рукопожатие) не выключает агента из ротации.
 - Кандидаты: health=up, не draining, circuit breaker закрыт (5 подряд транспортных ошибок → open 30s → half-open).
 - Без sticky: лимиты Telegram на бота/чат, не на IP.
 - 429: сервер запоминает `retry_after` по `(sha256(token), chat_id)` в памяти и до истечения окна отвечает 429 сам, не нагружая агентов. На health агента не влияет.
@@ -140,7 +141,7 @@ HTTP/2 reverse proxy поверх mTLS 1.3 (не gRPC — multipart и файл�
 
 Бюджет: ≤3 попыток, ≤25s, агенты прошлых попыток исключаются.
 
-Буфер тела («кеш») на время запроса: ≤1 МиБ — RAM; multipart ≤10 МиБ — tmp-файл (удаляется по завершении); больше — без буфера, ретрай только если агент прочитал 0 байт. На диске — шифрование AES-256-GCM (DEK под KEK). Тела в SQLite/Redis не персистятся. В UI видны только метаданные in-flight.
+Буфер тела («кеш») на время запроса: ≤1 МиБ — RAM; multipart ≤10 МиБ — tmp-файл (удаляется по завершении); больше — без буфера, ретрай только если агент прочитал 0 байт. На диске — шифрование AES-256-GCM одноразовым ключом запроса, который живёт только в памяти процесса (KEK не нужен: после падения файл нечитаем и удаляется при старте). Тела в SQLite/Redis не персистятся. В UI видны только метаданные in-flight.
 
 ## 7. Хранилище
 
@@ -167,11 +168,11 @@ SQLite: `modernc.org/sqlite`, WAL, миграции goose. Redis — тольк�
 - Отдельный notifier-бот-токен; `sendMessage` идёт через тот же Router/Balancer с меткой `internal` (сервер сам Telegram не видит).
 - Получатели — `telegram_id` из users_database.yml.
 - Типы: `agent_down`, `agent_degraded` (err>5%/5m), `overload` (inflight выше порога), `cert_expiring`, `ingress_cert_expiring`, `ingress_cert_invalid`, `version_mismatch`, `login_lockout`, `hostkey_mismatch`, `agent_enrolled`, `all_agents_down`.
-- Outbox в SQLite, дедуп по `(agent_id,type)`, повтор firing ≤1/ч, resolved — один раз, глобально ≤20/мин со склейкой. Нет агентов → копится в outbox + метрика `tgp_alerts_undeliverable`.
+- Outbox в SQLite, дедуп по `(agent_id,type)`, повтор firing ≤1/ч, resolved — один раз, глобально ≤20/мин со склейкой. Нет агентов → копится в outbox + метрика `tgp_alerts_undeliverable_total`.
 
 ## 10. Метрики (`tgp_`)
 
-Server (отдельный порт, bearer, constant-time): `requests_total{rule,method,code}`, `request_duration_seconds{method_class,agent}`, `upstream_attempts_total{agent,result}`, `retries_total{class,reason}`, `telegram_429_total{rule}`, `agent_up{agent,mode}`, `agent_inflight{agent}`, `agent_reverse_conns{agent}`, `enroll_attempts_total{result}`, `no_healthy_agents_total`, `inflight_buffered_bytes`, `longpoll_active`, `webhook_blocked_total`, `install_jobs_total{result}`, `admin_logins_total{result}`, `alerts_undeliverable`, `build_info`.
+Server (отдельный порт, bearer, constant-time): `requests_total{rule,method,code}`, `request_duration_seconds{method_class,agent}`, `upstream_attempts_total{agent,result}`, `retries_total{class,reason}`, `telegram_429_total{rule}`, `agent_up{agent,mode}`, `agent_inflight{agent}`, `agent_reverse_conns{agent}`, `enroll_attempts_total{result}`, `no_healthy_agents_total`, `inflight_buffered_bytes`, `longpoll_active`, `webhook_blocked_total`, `install_jobs_total{result}`, `admin_logins_total{result}`, `alerts_undeliverable_total`, `build_info`.
 Agent: `agent_requests_total{code_class,error_phase}`, `agent_upstream_duration_seconds`, `agent_inflight`, `agent_upstream_bytes_total{direction}`, `agent_dial_errors_total{kind}`, `build_info` + go/process.
 Кардинальность: `method` ~150+`other`, `code` из фиксированного набора, `rule` = число правил доступа. `bot_id` в метки не попадает (ботов никто не регистрирует — множество неограниченно); «топ ботов» для UI — in-memory top-K по `bot_id` за окно, плюс фильтр по `bot_id` в журнале ошибок.
 

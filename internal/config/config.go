@@ -174,6 +174,7 @@ type StoreConfig struct {
 	SQLitePath        string      `yaml:"sqlite_path"`
 	RedisURL          string      `yaml:"redis_url"` // только rediss://
 	RedisPasswordFile string      `yaml:"redis_password_file"`
+	RedisCAFile       string      `yaml:"redis_ca_file"` // PEM CA для rediss://; пусто — системные корни
 
 	RedisPassword Secret `yaml:"-"`
 }

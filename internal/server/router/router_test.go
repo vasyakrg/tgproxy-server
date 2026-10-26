@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -78,7 +79,8 @@ func TestDoBuildsRequest(t *testing.T) {
 	if f.body != `{"a":1}` {
 		t.Fatal(f.body)
 	}
-	if f.req.Header.Get(tgapi.HeaderAttempt) != "1" || f.req.Header.Get(tgapi.HeaderTimeoutMs) != "25000" {
+	ms, _ := strconv.Atoi(f.req.Header.Get(tgapi.HeaderTimeoutMs))
+	if f.req.Header.Get(tgapi.HeaderAttempt) != "1" || ms < 24000 || ms > 25000 {
 		t.Fatal(f.req.Header)
 	}
 	if strings.Contains(f.req.URL.String(), "secret") {

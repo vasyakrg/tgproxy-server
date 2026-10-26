@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -14,6 +16,7 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/config"
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
 	"github.com/vasyakrg/tgproxy-server/internal/server/access"
+	"github.com/vasyakrg/tgproxy-server/internal/server/notify"
 	"github.com/vasyakrg/tgproxy-server/internal/tgapi"
 )
 
@@ -43,11 +46,17 @@ type Handler struct {
 	router  Router
 	cfg     *config.ServerConfig
 	log     *slog.Logger
+	rec     Recorder
+	bots    BotObserver
 }
 
 // New создаёт Handler. logger должен быть обёрнут redact-хендлером.
-func New(checker *access.Checker, router Router, cfg *config.ServerConfig, logger *slog.Logger) http.Handler {
-	return &Handler{checker: checker, router: router, cfg: cfg, log: logger}
+func New(checker *access.Checker, router Router, cfg *config.ServerConfig, logger *slog.Logger, opts ...Option) http.Handler {
+	h := &Handler{checker: checker, router: router, cfg: cfg, log: logger, rec: noopRecorder{}}
+	for _, o := range opts {
+		o(h)
+	}
+	return h
 }
 
 // ServeHTTP обрабатывает запрос бота.
@@ -63,7 +72,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		botID int64
 		route tgapi.Route
 	)
+	internal := notify.IsInternal(r.Context())
 	defer func() {
+		h.observe(internal, rule, route.Method, botID, sw.status)
 		h.log.Info("request",
 			"request_id", id, "rule", rule, "bot_id", botID, "method", route.Method,
 			"status", sw.status, "duration", time.Since(start))
@@ -78,6 +89,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	info, err := h.checker.Check(r, route)
 	if err != nil {
+		var rl *access.RateLimitedError
+		if errors.As(err, &rl) {
+			secs := max(int(math.Ceil(rl.RetryAfter.Seconds())), 1)
+			tgapi.WriteError(w, http.StatusTooManyRequests, "Too Many Requests: retry after "+strconv.Itoa(secs), secs)
+			return
+		}
 		tgapi.WriteError(w, http.StatusForbidden, descDenied, 0)
 		return
 	}
@@ -85,6 +102,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if tgapi.IsWebhookSetter(route.Method) {
 		if h.cfg.WebhookPolicy != config.WebhookPassthrough {
+			h.rec.WebhookBlocked()
 			tgapi.WriteError(w, http.StatusForbidden, descWebhook, 0)
 			return
 		}
@@ -105,6 +123,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		h.rec.Telegram429(rule)
+	}
 
 	copyResponseHeaders(w.Header(), resp.Header, id)
 	w.WriteHeader(resp.StatusCode)

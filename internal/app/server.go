@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,8 +20,11 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
 	"github.com/vasyakrg/tgproxy-server/internal/server/access"
+	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
+	"github.com/vasyakrg/tgproxy-server/internal/server/balancer"
 	"github.com/vasyakrg/tgproxy-server/internal/server/proxy"
 	"github.com/vasyakrg/tgproxy-server/internal/server/router"
+	"github.com/vasyakrg/tgproxy-server/internal/store"
 	"github.com/vasyakrg/tgproxy-server/internal/transport"
 )
 
@@ -37,30 +41,51 @@ type ServerOptions struct {
 	Level *slog.LevelVar
 	// ReloadConfig перечитывает конфиг при SIGHUP (nil — SIGHUP игнорируется).
 	ReloadConfig func() (*config.ServerConfig, error)
+	// AccessOptions / AgentOptions — дополнительные опции access.Checker и
+	// agents.Registry (тесты: быстрые интервалы).
+	AccessOptions []access.Option
+	AgentOptions  []agents.Option
 	// ProxyListener / AdminListener — готовые листенеры вместо cfg.Listen.* (тесты).
 	ProxyListener net.Listener
 	AdminListener net.Listener
+	// MetricsListener — готовый листенер /metrics вместо cfg.Listen.Metrics (тесты).
+	MetricsListener net.Listener
+	// SamplerTicks подменяет 10-секундный тикер сэмплера истории (тесты).
+	SamplerTicks <-chan time.Time
+	// NotifyPoll — период опроса outbox (тесты); 0 — по умолчанию.
+	NotifyPoll time.Duration
 }
 
 // snapshot — неизменяемое состояние, подменяемое атомарно при reload:
-// Checker правил доступа, роутер и прокси-обработчик, собранные из одного конфига.
+// конфиг и собранный из него обработчик прокси.
 type snapshot struct {
 	cfg     *config.ServerConfig
-	up      *Upstream
+	router  *router.Router
 	handler http.Handler
 }
 
 // Server — процесс `tgproxy server`.
 type Server struct {
-	logger *slog.Logger
-	opts   ServerOptions
-	tr     *transport.Registry
-	ingTLS *tls.Config
-	cur    atomic.Pointer[snapshot]
+	logger  *slog.Logger
+	opts    ServerOptions
+	tr      *transport.Registry
+	ingTLS  *tls.Config
+	st      store.Store
+	checker *access.Checker
+	bal     *balancer.Balancer
+	reg     *agents.Registry
+	up      *Upstream
+	windows *router.Windows
+	obs     *obs
+	cur     atomic.Pointer[snapshot]
+	closed  sync.Once
 }
 
-// NewServer собирает сервер: mTLS до агентов, TLS входа, обработчики. Сеть не открывается.
-func NewServer(cfg *config.ServerConfig, logger *slog.Logger, opts ...ServerOptions) (*Server, error) {
+// NewServer собирает сервер: хранилище, mTLS до агентов, реестр агентов,
+// правила доступа, TLS входа, обработчики. Сеть не открывается; фоновые
+// горутины реестра стартуют в Serve. После неуспешного Serve (или без него)
+// вызывайте Close.
+func NewServer(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logger, opts ...ServerOptions) (*Server, error) {
 	s := &Server{logger: logger}
 	if len(opts) > 0 {
 		s.opts = opts[0]
@@ -69,36 +94,109 @@ func NewServer(cfg *config.ServerConfig, logger *slog.Logger, opts ...ServerOpti
 	if err != nil {
 		return nil, err
 	}
+	if s.ingTLS, err = ingressTLS(cfg); err != nil {
+		return nil, err
+	}
+	if err := router.CleanupTmpDir(cfg.Buffer.TmpDir); err != nil {
+		logger.Warn("cleanup of stale buffers failed", "error", redact.Error(err))
+	}
+	var distributed bool
+	if s.st, distributed, err = openStore(ctx, cfg); err != nil {
+		return nil, err
+	}
 	s.tr = transport.NewRegistry(map[config.AgentMode]transport.AgentTransport{
 		config.AgentModeDial: transport.NewDial(cert, pool),
 	})
-	if s.ingTLS, err = ingressTLS(cfg); err != nil {
+	if err := s.wire(context.WithoutCancel(ctx), cfg, distributed); err != nil {
+		s.Close()
 		return nil, err
 	}
 	snap, err := s.build(cfg)
 	if err != nil {
+		s.Close()
 		return nil, err
 	}
 	s.cur.Store(snap)
+	if s.obs.deliv != nil {
+		if err := s.obs.deliv.Reload(); err != nil {
+			logger.Warn("notify recipients not loaded", "error", redact.Error(err))
+		}
+	}
 	return s, nil
 }
 
-func (s *Server) build(cfg *config.ServerConfig) (*snapshot, error) {
-	checker, err := access.NewStatic(cfg.AccessRules, cfg.TrustedProxies)
+// wire засевает БД из конфига (только в пустые таблицы) и собирает
+// Checker, балансировщик, реестр агентов и окна 429.
+func (s *Server) wire(ctx context.Context, cfg *config.ServerConfig, distributed bool) error {
+	nr, err := access.SeedFromConfig(ctx, s.st.AccessRules(), cfg.AccessRules)
 	if err != nil {
-		return nil, fmt.Errorf("app: access rules: %w", err)
+		return fmt.Errorf("app: seed access rules: %w", err)
 	}
-	up, err := NewUpstream(s.tr, cfg.Agents)
+	na, err := agents.SeedFromConfig(ctx, s.st.Agents(), cfg.Agents)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("app: seed agents: %w", err)
 	}
-	h := proxy.New(checker, router.New(cfg, up, s.logger), cfg, s.logger)
-	return &snapshot{cfg: cfg, up: up, handler: h}, nil
+	if nr > 0 || na > 0 {
+		s.logger.Info("database seeded from config", "access_rules", nr, "agents", na)
+	}
+
+	aopts := []access.Option{access.WithLogger(s.logger)}
+	if distributed {
+		aopts = append(aopts, access.WithDistributedLimit(s.st.RateState()))
+	}
+	aopts = append(aopts, s.opts.AccessOptions...)
+	if s.checker, err = access.NewFromStore(ctx, s.st.AccessRules(), cfg.TrustedProxies, aopts...); err != nil {
+		return fmt.Errorf("app: access rules: %w", err)
+	}
+
+	s.bal = balancer.New()
+	s.reg = agents.New(s.st.Agents(), s.tr, s.bal,
+		append([]agents.Option{agents.WithLogger(s.logger)}, s.opts.AgentOptions...)...)
+	s.up = NewUpstream(s.tr, s.reg)
+
+	var ws router.Store = router.NewMemStore(nil)
+	if distributed {
+		ws = windowStore{repo: s.st.RateState()}
+	}
+	s.windows = router.NewWindows(ws, nil)
+	return s.wireObs(cfg)
 }
 
-// Reload перечитывает конфиг и атомарно подменяет правила доступа (и всё, что
-// собрано из них), а также уровень логов. При ошибке остаётся прежнее состояние.
-func (s *Server) Reload() error {
+func (s *Server) build(cfg *config.ServerConfig) (*snapshot, error) {
+	rt := router.New(cfg, s.up, s.logger,
+		router.WithBalancer(s.bal),
+		router.WithWindows(s.windows),
+		router.WithBufferConfig(cfg.Buffer),
+		router.WithPassive(s.reg.ReportResult),
+		router.WithRecorder(s.obs.m),
+		router.WithHistory(s.obs.coll),
+		router.WithErrorLog(s.obs.errlog),
+		router.WithInflight(s.obs.inflight),
+		router.WithBufferGauge(s.obs.m.BufferedBytes()),
+	)
+	h := proxy.New(s.checker, rt, cfg, s.logger, proxy.WithRecorder(s.obs.m), proxy.WithBots(s.obs.top))
+	return &snapshot{cfg: cfg, router: rt, handler: h}, nil
+}
+
+// Close освобождает ресурсы (Checker, транспорт, хранилище); идемпотентен.
+func (s *Server) Close() {
+	s.closed.Do(func() {
+		if s.checker != nil {
+			s.checker.Close()
+		}
+		if s.tr != nil {
+			_ = s.tr.Close()
+		}
+		if s.st != nil {
+			_ = s.st.Close()
+		}
+	})
+}
+
+// Reload перечитывает конфиг: применяет уровень логов и параметры обработчика,
+// просит Checker перечитать правила доступа из БД. При ошибке остаётся прежнее
+// состояние. Правила доступа и агенты живут в БД и меняются через CLI/UI.
+func (s *Server) Reload(ctx context.Context) error {
 	if s.opts.ReloadConfig == nil {
 		return errors.New("app: reload not configured")
 	}
@@ -116,15 +214,26 @@ func (s *Server) Reload() error {
 	if err != nil {
 		return fmt.Errorf("app: reload: %w", err)
 	}
+	rctx, cancel := context.WithTimeout(ctx, readyProbeTimeout)
+	defer cancel()
+	if err := s.checker.Refresh(rctx); err != nil {
+		return fmt.Errorf("app: reload: refresh access rules: %w", err)
+	}
 	old := s.cur.Swap(snap)
 	if s.opts.Level != nil {
 		s.opts.Level.Set(lvl)
 	}
 	if old != nil && (!reflect.DeepEqual(old.cfg.Listen, cfg.Listen) || !reflect.DeepEqual(old.cfg.TLS, cfg.TLS) ||
-		!reflect.DeepEqual(old.cfg.AgentTLS, cfg.AgentTLS)) {
-		s.logger.Warn("listen/tls settings changed: restart required, not applied")
+		!reflect.DeepEqual(old.cfg.AgentTLS, cfg.AgentTLS) || old.cfg.Metrics.BearerFile != cfg.Metrics.BearerFile ||
+		!reflect.DeepEqual(old.cfg.Notify, cfg.Notify) || !reflect.DeepEqual(old.cfg.Store, cfg.Store)) {
+		s.logger.Warn("listen/tls/store settings changed: restart required, not applied")
 	}
-	s.logger.Info("config reloaded", "access_rules", len(cfg.AccessRules), "agents", len(cfg.Agents))
+	if s.obs.deliv != nil {
+		if err := s.obs.deliv.Reload(); err != nil {
+			s.logger.Warn("notify recipients reload failed, keeping previous", "error", redact.Error(err))
+		}
+	}
+	s.logger.Info("config reloaded")
 	return nil
 }
 
@@ -141,16 +250,24 @@ func (s *Server) adminHandler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), readyProbeTimeout)
-		defer cancel()
-		if !s.cur.Load().up.AnyReady(ctx) {
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if !s.anyAgentUp() {
 			http.Error(w, "no agent ready", http.StatusServiceUnavailable)
 			return
 		}
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	return mux
+}
+
+// anyAgentUp — хотя бы один агент up в реестре.
+func (s *Server) anyAgentUp() bool {
+	for _, st := range s.reg.List() {
+		if st.Up {
+			return true
+		}
+	}
+	return false
 }
 
 func newHTTPServer(h http.Handler, tlsCfg *tls.Config, errLog *slog.Logger) *http.Server {
@@ -172,6 +289,10 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 		newHTTPServer(s.adminHandler(), s.ingTLS, s.logger),
 	}
 	lns := []net.Listener{proxyLn, adminLn}
+	if ml := s.opts.MetricsListener; ml != nil && s.obs.metricsHandler != nil {
+		srvs = append(srvs, newHTTPServer(s.obs.metricsHandler, s.ingTLS, s.logger))
+		lns = append(lns, ml)
+	}
 	errc := make(chan error, len(srvs))
 	for i, srv := range srvs {
 		go func() {
@@ -186,13 +307,24 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 	}
 	if s.opts.ReloadConfig != nil {
 		onReload(ctx, func() {
-			if err := s.Reload(); err != nil {
+			if err := s.Reload(ctx); err != nil {
 				s.logger.Error("reload rejected, keeping previous config", "error", redact.Error(err))
 			}
 		})
 	}
+	rctx, rcancel := context.WithCancel(context.WithoutCancel(ctx))
+	regDone := make(chan struct{})
+	events, unsub := s.reg.Subscribe()
+	go s.syncAgentMetrics(ctx, events)
+	obsWait := s.runObs(rctx)
+	go func() {
+		defer close(regDone)
+		if err := s.reg.Run(rctx); err != nil {
+			s.logger.Error("agent registry stopped", "error", redact.Error(err))
+		}
+	}()
 	s.logger.Info("server started", "proxy", proxyLn.Addr().String(), "admin", adminLn.Addr().String(),
-		"tls", s.ingTLS != nil)
+		"metrics", len(lns) > 2, "tls", s.ingTLS != nil)
 
 	var first error
 	select {
@@ -211,16 +343,21 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 			_ = srv.Close()
 		}
 	}
-	_ = s.tr.Close()
+	rcancel()
+	<-regDone
+	obsWait()
+	unsub()
+	s.Close()
 	return first
 }
 
 // RunServer запускает сервер и блокируется до отмены ctx.
 func RunServer(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logger, opts ...ServerOptions) error {
-	s, err := NewServer(cfg, logger, opts...)
+	s, err := NewServer(ctx, cfg, logger, opts...)
 	if err != nil {
 		return err
 	}
+	defer s.Close()
 	var lc net.ListenConfig
 	proxyLn, adminLn := s.opts.ProxyListener, s.opts.AdminListener
 	if proxyLn == nil {
@@ -233,6 +370,15 @@ func RunServer(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logge
 			_ = proxyLn.Close()
 			return fmt.Errorf("app: listen admin: %w", err)
 		}
+	}
+	if s.opts.MetricsListener == nil && cfg.Listen.Metrics != "" {
+		ln, lerr := lc.Listen(ctx, "tcp", cfg.Listen.Metrics)
+		if lerr != nil {
+			_ = proxyLn.Close()
+			_ = adminLn.Close()
+			return fmt.Errorf("app: listen metrics: %w", lerr)
+		}
+		s.opts.MetricsListener = ln
 	}
 	return s.Serve(ctx, proxyLn, adminLn)
 }

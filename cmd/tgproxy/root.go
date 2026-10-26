@@ -19,6 +19,8 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newServerCmd(),
 		newAgentCmd(),
+		newAccessCmd(),
+		newAgentsCmd(),
 		newConfigCmd(),
 		newPKICmd(),
 		newVersionCmd(),

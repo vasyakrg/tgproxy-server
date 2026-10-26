@@ -33,6 +33,7 @@ type Agent struct {
 	transport *http.Transport
 	proxy     *proxy
 	stats     *stats
+	rec       Recorder
 	health    *healthProbe
 	draining  atomic.Bool
 	started   time.Time
@@ -89,6 +90,7 @@ func New(cfg *config.AgentConfig, logger *slog.Logger, opts ...Option) (*Agent, 
 		tlsCfg:   tlsCfg,
 		upTLS:    &tls.Config{MinVersion: tls.VersionTLS12},
 		stats:    newStats(time.Now),
+		rec:      noopRecorder{},
 		now:      time.Now,
 	}
 	if len(cert.Certificate) > 0 {

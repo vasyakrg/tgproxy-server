@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build generate test test-race lint vuln snapshot dev-certs run-server run-agent redis-up vendor-verify deploy
+.PHONY: help build generate test test-race lint vuln snapshot dev-certs run-server run-agent run-agent2 redis-up vendor-verify deploy
 
 help: ## Список целей
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -35,14 +35,17 @@ vuln: ## govulncheck
 snapshot: ## goreleaser snapshot
 	goreleaser release --snapshot --clean
 
-dev-certs: build ## Dev-сертификаты в dev/tls (идемпотентно)
-	./bin/tgproxy pki dev-init --out dev/tls --agent local
+dev-certs: build ## Dev-сертификаты (агенты local, local2) в dev/tls (идемпотентно)
+	./bin/tgproxy pki dev-init --out dev/tls --agent local --agent local2
 
 run-server: build ## Запустить сервер с dev/server.yaml
 	./bin/tgproxy server -c dev/server.yaml
 
 run-agent: build ## Запустить агент с dev/agent.yaml
 	./bin/tgproxy agent -c dev/agent.yaml
+
+run-agent2: build ## Запустить второй агент с dev/agent2.yaml (:8445)
+	./bin/tgproxy agent -c dev/agent2.yaml
 
 redis-up: ## Поднять dev-Redis (TLS)
 	docker compose -f dev/docker-compose.yml up -d redis

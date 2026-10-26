@@ -1,0 +1,21 @@
+# Dev-конфиг agent (macOS). Схема: internal/config/config.go.
+# Upstream (api.telegram.org) в конфиге не задаётся — он зашит в бинарь.
+# Проверка: tgproxy config validate --mode agent -c dev/agent2.yaml
+listen:
+  api: "127.0.0.1:8445"        # mTLS: /tg/*, /_agent/*
+  metrics: "127.0.0.1:9445"    # /metrics (bearer не нужен только на loopback)
+
+mode: dial                     # dial | reverse (reverse: нужен server_url)
+# server_url: https://127.0.0.1:8444
+
+tls:
+  cert_file: ./dev/tls/agent-local2.crt
+  key_file: ./dev/tls/agent-local2.key
+  ca_file: ./dev/tls/ca.crt
+allowed_client_san: tgproxy-server
+
+data_dir: ./dev/data/agent2
+
+logging:
+  level: debug
+  format: text

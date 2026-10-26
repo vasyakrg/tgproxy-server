@@ -607,3 +607,27 @@ func mustRead(t *testing.T, p string) []byte {
 	}
 	return b
 }
+
+func TestDevInitMultipleAgents(t *testing.T) {
+	dir := t.TempDir()
+	if err := DevInit(dir, []string{"a1", "a2"}); err != nil {
+		t.Fatal(err)
+	}
+	pool, _ := PoolFromPEM(mustRead(t, filepath.Join(dir, FileCACert)))
+	for _, id := range []string{"a1", "a2"} {
+		b := mustRead(t, filepath.Join(dir, AgentCertFile(id)))
+		if err := VerifyAgentPeer(pool, id)(state(t, b)); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, AgentKeyFile(id))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// первый — ещё и agent.crt
+	if string(mustRead(t, filepath.Join(dir, FileAgentCert))) != string(mustRead(t, filepath.Join(dir, AgentCertFile("a1")))) {
+		t.Fatal("agent.crt must equal first agent cert")
+	}
+	if err := DevInit(t.TempDir(), []string{"a1", "a1"}); err == nil {
+		t.Fatal("duplicate ids accepted")
+	}
+}

@@ -23,16 +23,23 @@ const (
 
 const devCATTL = 10 * 365 * 24 * time.Hour
 
-// DevInit создаёт в outDir (0700) dev-PKI: CA, сертификат сервера и сертификат
-// агента для agentIDs[0] (по умолчанию "local"). Ключи — 0600. Если ca.crt или
-// ca.key уже есть — ErrExists, ничего не меняется.
+// DevInit создаёт в outDir (0700) dev-PKI: CA, сертификат сервера и сертификаты
+// агентов agentIDs (по умолчанию ["local"]) в файлах agent-<id>.crt/.key;
+// первый агент дополнительно сохраняется как agent.crt/.key (совместимость).
+// Ключи — 0600. Если ca.crt или ca.key уже есть — ErrExists, ничего не меняется.
 func DevInit(outDir string, agentIDs []string) error {
-	agentID := "local"
-	if len(agentIDs) > 0 {
-		agentID = agentIDs[0]
+	if len(agentIDs) == 0 {
+		agentIDs = []string{"local"}
 	}
-	if !ValidAgentID(agentID) {
-		return fmt.Errorf("pki: invalid agent id %q", agentID)
+	seen := make(map[string]struct{}, len(agentIDs))
+	for _, id := range agentIDs {
+		if !ValidAgentID(id) {
+			return fmt.Errorf("pki: invalid agent id %q", id)
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("pki: duplicate agent id %q", id)
+		}
+		seen[id] = struct{}{}
 	}
 	if err := os.MkdirAll(outDir, 0o700); err != nil {
 		return fmt.Errorf("pki: mkdir: %w", err)
@@ -56,29 +63,33 @@ func DevInit(outDir string, agentIDs []string) error {
 	if err != nil {
 		return err
 	}
-	csr, agentKey, err := NewAgentCSR(agentID)
-	if err != nil {
-		return err
-	}
-	agentCert, err := IssueAgent(ca, csr, agentID, 0)
-	if err != nil {
-		return err
-	}
 	caKey, err := ca.KeyPEM()
 	if err != nil {
 		return err
 	}
-	files := []struct {
-		name string
-		data []byte
-		mode os.FileMode
-	}{
+	files := []devFile{
 		{FileCACert, ca.CertPEM(), 0o644},
 		{FileCAKey, caKey, 0o600},
 		{FileServerCert, srv.CertPEM, 0o644},
 		{FileServerKey, srv.KeyPEM, 0o600},
-		{FileAgentCert, agentCert, 0o644},
-		{FileAgentKey, agentKey, 0o600},
+	}
+	for i, id := range agentIDs {
+		csr, agentKey, err := NewAgentCSR(id)
+		if err != nil {
+			return err
+		}
+		agentCert, err := IssueAgent(ca, csr, id, 0)
+		if err != nil {
+			return err
+		}
+		files = append(files,
+			devFile{AgentCertFile(id), agentCert, 0o644},
+			devFile{AgentKeyFile(id), agentKey, 0o600})
+		if i == 0 {
+			files = append(files,
+				devFile{FileAgentCert, agentCert, 0o644},
+				devFile{FileAgentKey, agentKey, 0o600})
+		}
 	}
 	for _, f := range files {
 		if err := writeFile(filepath.Join(outDir, f.name), f.data, f.mode); err != nil {
@@ -87,6 +98,18 @@ func DevInit(outDir string, agentIDs []string) error {
 	}
 	return nil
 }
+
+type devFile struct {
+	name string
+	data []byte
+	mode os.FileMode
+}
+
+// AgentCertFile — имя файла сертификата агента id, созданного DevInit.
+func AgentCertFile(id string) string { return "agent-" + id + ".crt" }
+
+// AgentKeyFile — имя файла ключа агента id, созданного DevInit.
+func AgentKeyFile(id string) string { return "agent-" + id + ".key" }
 
 // writeFile пишет файл с точными правами; CA-файлы — только O_EXCL.
 func writeFile(path string, data []byte, mode os.FileMode) error {

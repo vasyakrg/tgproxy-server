@@ -28,16 +28,34 @@ store:
   # driver: redis
   # redis_url: rediss://tgproxy@127.0.0.1:6380/0
   # redis_password_file: ./dev/data/redis-password   # права 0600/0640
+  # redis_ca_file: ./dev/tls/redis-ca.crt            # CA для rediss://; пусто — системные корни
 
 update:
   enabled: false                   # в dev самообновление не нужно
   staging_dir: ./dev/data/updates
 
+# /metrics на loopback доступен без bearer; на не-loopback bearer обязателен (старт иначе откажет).
+metrics:
+  # bearer_file: ./dev/data/metrics-bearer   # 0600; тогда curl -H "Authorization: Bearer $(cat dev/data/metrics-bearer)"
+
+# Алерты в Telegram (бот-уведомитель) — opt-in: раскомментируйте после создания файла с токеном
+# (он НЕ в git, см. dev/README.md). Файл обязателен, если секция включена (конфиг иначе не загрузится,
+# в т.ч. для CLI `tgproxy access/agents`). Получатели — telegram_id из auth.users_file (в dev/users.yml он 0).
+# Без секции уведомления выключены (INFO в логе).
+# notify:
+#   bot_token_file: ./dev/data/notify-token
+
 webhook_policy: deny               # deny | passthrough
 
 agents:
+  # Агенты и правила доступа засеваются в SQLite ТОЛЬКО при пустых таблицах (первый старт);
+  # дальше источник правды — БД (`tgproxy access ...`, `tgproxy agents list`).
+  # Чтобы пересеять из конфига: остановить сервер и удалить dev/data/tgproxy.db*.
   - id: local
     url: https://127.0.0.1:8443
+    mode: dial
+  - id: local2
+    url: https://127.0.0.1:8445
     mode: dial
 
 # Подходящее хотя бы одно правило пропускает запрос. См. dev/README.md.

@@ -41,7 +41,8 @@ type phaseTracker struct {
 	dialErr   atomic.Bool
 	tlsErr    atomic.Bool
 	writeErr  atomic.Bool
-	firstByte atomic.Int64 // ns от start до первого байта ответа; 0 — не было
+	firstByte atomic.Int64           // ns от start до первого байта ответа; 0 — не было
+	errPhase  atomic.Pointer[string] // фаза отказа (errorHandler); nil — ответил Telegram
 }
 
 func newPhaseTracker(now time.Time) *phaseTracker { return &phaseTracker{start: now} }
@@ -124,10 +125,16 @@ func trackerFrom(ctx context.Context) *phaseTracker {
 // Telegram с X-TGP-Source: agent и X-TGP-Error-Phase.
 func (a *Agent) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	phase := tgapi.PhaseDial
-	if t := trackerFrom(r.Context()); t != nil {
+	t := trackerFrom(r.Context())
+	if t != nil {
 		phase = t.classify(err, r.Context().Err())
+		t.errPhase.Store(&phase)
 	}
 	a.stats.recordError(phase)
+	if phase == tgapi.PhaseDial || phase == tgapi.PhaseTLS ||
+		(phase == tgapi.PhaseTimeout && (t == nil || stage(t.stage.Load()) == stageStart)) {
+		a.rec.DialError(dialErrorKind(err, phase))
+	}
 	code := http.StatusBadGateway
 	if phase == tgapi.PhaseTimeout {
 		code = http.StatusGatewayTimeout

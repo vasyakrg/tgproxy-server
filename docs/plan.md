@@ -135,56 +135,57 @@
 
 Цель: несколько агентов, отказ одного не виден ботам для safe/semi-методов; unsafe не дублируются; client-keys в SQLite.
 
-- [ ] **M2-T1 · `internal/store` + SQLite + миграции** (S-core)
+- [x] **M2-T1 · `internal/store` + SQLite + миграции** (S-core)
   - Файлы: `store.go` (`type Store interface{ Agents() AgentRepo; AccessRules() AccessRuleRepo; Sessions() SessionRepo; Outbox() OutboxRepo; RateState() RateStateRepo; History() HistoryRepo; Audit() AuditRepo; HostKeys() HostKeyRepo; Certs() CertRepo; Close() error }`), `models.go`, `sqlite/open.go` (DSN из §0.1, `StrictPragmas(true)`, `SetMaxOpenConns`: 1 writer-пул + reader-пул), `sqlite/migrations/0001_init.sql` … (goose, `embed.FS`), `sqlite/*_repo.go`, `memtest/` (in-memory реализация для unit-тестов потребителей).
   - Таблицы: `agents`, `agent_hostkeys`, `certs`, `cert_denylist`, `access_rules` (`name`, `cidrs` JSON, `key_hash` NULL, `key_prefix` NULL, `rps`, `enabled`, `revoked_at`; CHECK: есть `cidrs` или `key_hash`), `sessions`, `rate_windows`, `outbox`, `audit_log`, `samples_10s`, `samples_5m`, `error_events`, `install_jobs`, `install_job_events`, `releases`.
   - Тесты первыми: миграции up на пустой БД и повторно (идемпотентно); WAL включён (`PRAGMA journal_mode`); конкурентные записи 50 горутин без `SQLITE_BUSY`; contract-тесты `storetest.Run(t, factory)` общие для sqlite и memtest (и redis в M2-T7).
-- [ ] **M2-T2 · `access`: правила доступа из БД (сеть и/или ключ), rate-limit** (S-proxy) · зависит от M2-T1
+- [x] **M2-T2 · `access`: правила доступа из БД (сеть и/или ключ), rate-limit** (S-proxy) · зависит от M2-T1
   - Файлы: `internal/server/access/rules.go` (`Checker.Check(r *http.Request, route tgapi.Route) (RuleInfo, error)`: ключ из `/k/<key>` или `X-Proxy-Key` → правила с этим ключом (+CIDR, если задан); без ключа → правила только-сеть; кэш правил в памяти с инвалидацией по версии), `cidr.go`, `ratelimit.go` (`rate.Limiter` на правило; при `store.redis` — через `RateStateRepo`), `generate.go` (`NewKey() (plain, hash, prefix)` — `tgp_` + 24 символа base62 из `crypto/rand`).
   - Тесты первыми: отозванный ключ → 403; IP вне CIDR → 403; правило «сеть+ключ» требует оба; несколько подходящих правил → берётся первое по специфичности (ключ+сеть > ключ > сеть) для учёта rps; превышение rps → 429 с `retry_after` в формате Telegram; `X-Forwarded-For` **не** учитывается (только `RemoteAddr`, если не задан `trusted_proxies`); хеш в БД, plain не сохраняется нигде.
-- [ ] **M2-T3 · `RetryBuffer`** (S-proxy)
-  - Файлы: `internal/server/router/buffer.go` (`type Replayable interface{ NewReader() (io.ReadCloser, error); Size() int64; Replayable() bool; Close() error }`; `Wrap(req, cfg, kek) (Replayable, error)`: ≤1 МиБ — RAM; multipart ≤10 МиБ — tmp-файл в `/var/lib/tgproxy/tmp` (0600) с AES-256-GCM (DEK на запрос, DEK под KEK) поблочно; больше — `nonReplayable` с счётчиком прочитанных байт), `buffer_crypto.go`.
+- [x] **M2-T3 · `RetryBuffer`** (S-proxy)
+  - Файлы: `internal/server/router/buffer.go` (`type Replayable interface{ NewReader() (io.ReadCloser, error); Size() int64; Replayable() bool; Close() error }`; `Wrap(req, cfg) (Replayable, error)`: ≤1 МиБ — RAM; multipart ≤10 МиБ — tmp-файл в `/var/lib/tgproxy/tmp` (0600) с AES-256-GCM поблочно, ключ — случайный на запрос, только в памяти (KEK не нужен); при старте tmp-каталог очищается; больше — `nonReplayable` с счётчиком прочитанных байт), `buffer_crypto.go`.
   - Тесты первыми: 3 чтения подряд байт-в-байт равны оригиналу (RAM и disk); tmp-файл удаляется после `Close` и при панике хендлера; на диске нет открытого текста (поиск маркера в файле); >10 МиБ → `Replayable()==false`, но `BytesConsumed()==0` до первого чтения; метрика `inflight_buffered_bytes` растёт/падает.
-- [ ] **M2-T4 · `balancer`: P2C + EWMA + circuit breaker** (S-proxy)
+- [x] **M2-T4 · `balancer`: P2C + EWMA + circuit breaker** (S-proxy)
   - Файлы: `internal/server/balancer/balancer.go` (`type Balancer interface{ Pick(ctx, key string, exclude []AgentID) (Agent, func(Result), error) }`; P2C, score = `(inflight+1) × EWMA(latency, α=0.3) / weight`), `ewma.go`, `breaker.go` (`closed → open` после 5 подряд транспортных ошибок, open 30s → `half-open` с одной пробной попыткой), `health.go` (кандидаты: up, не draining, breaker не open).
   - Тесты первыми: детерминированный `rand` — из двух выбирается меньший score; `exclude` соблюдается; при всех исключённых → `ErrNoHealthyAgents`; вес 0 → агент не выбирается; long-poll (`release(Result{LongPoll:true})`) не меняет EWMA; breaker: 4 ошибки + успех → closed; 5 ошибок → open; через 30s (fake clock) half-open пропускает ровно одну попытку; ответы Telegram 4xx/5xx/429 **не** считаются транспортной ошибкой агента; распределение на 10k выборов при равных агентах — отклонение < 5%; race-тест конкурентных `Pick/release`.
-- [ ] **M2-T5 · `router`: ретраи, бюджет, 429-окна** (S-proxy) · зависит от M1-T3, M1-T6, M2-T3, M2-T4
+- [x] **M2-T5 · `router`: ретраи, бюджет, 429-окна** (S-proxy) · зависит от M1-T3, M1-T6, M2-T3, M2-T4
   - Файлы: `internal/server/router/router.go` (`Router.Do(ctx, route, req, body Replayable) (*http.Response, error)`), `policy.go` (`Decide(class tgapi.Class, outcome transport.Outcome, attempt int) Decision{Retry bool; Backoff time.Duration; Final *FinalResponse}` — чистая функция), `deadline.go` (бюджет 25s; `getUpdates`: `timeout+15s`, ≤65s; `X-TGP-Timeout-Ms` = остаток), `ratewindow.go` (`Windows.Check(botID, chatID) (retryAfter, bool)`, `Windows.Observe(botID, chatID, env)`; `chat_id` из JSON/form/multipart-поля без полного разбора тела > 1 МиБ), `nohealthy.go` (ожидание агента до дедлайна, затем 502 `tgproxy: no healthy agents`).
   - Тесты первыми — **ретрай-матрица** (`policy_test.go`, table-driven, полное декартово произведение):
     - классы `safe | semi | unsafe` × исходы `dial, tls, pre-send, write, read, timeout, tg-5xx, tg-429, tg-4xx, tg-400-not-modified, ok` × попытка `1, 3`;
     - ожидание: `dial/tls/pre-send` → retry для всех классов; `write/read/timeout` → retry для safe/semi, для unsafe → final 502 `{"ok":false,"error_code":502,"description":"tgproxy: delivery unknown"}`; `tg-5xx` → retry safe/semi с backoff 0.5/1/2s, unsafe → passthrough; `tg-429` → passthrough всегда; `not modified` для semi → успех; попытка 3 → final во всех случаях.
   - Интеграционные (`router_test.go`, 3 фейковых агента на `httptest`): агент-1 рвёт на `dial` → `sendMessage` уходит на агент-2, тело байт-в-байт; агент-1 рвёт после записи → `sendMessage` 502, агент-2 **не** получил запрос; `getUpdates?timeout=50` — дедлайн 65s, не 25s; бюджет 25s исчерпан → финальный ответ до дедлайна клиента; агенты прошлых попыток исключены; 429 c `retry_after=7` на `(bot,chat)` → следующий `sendMessage` в тот же чат за 7s отвечает 429 сам (агент не вызван), в другой чат — проходит; `/file/*` — ретрай только до первого отданного байта; запрос боту отменён (`ctx.Done`) → ретраев нет; nonReplayable тело + `pre-send` → retry только если `BytesConsumed()==0`.
-- [ ] **M2-T6 · Реестр агентов и poller** (S-proxy) · зависит от M1-T6, M2-T1
+- [x] **M2-T6 · Реестр агентов и poller** (S-proxy) · зависит от M1-T6, M2-T1
   - Файлы: `internal/server/agents/registry.go` (`Registry{List, Get, SetWeight, SetDraining, Subscribe() <-chan Event}`), `poller.go` (опрос `/_agent/status` каждые 5s, jitter 10%, 3 неудачи → down), `passive.go` (health по реальному трафику от балансировщика).
   - Тесты первыми: fake clock; down после 3 пропусков; up после 1 успеха; событие `agent_down`/`agent_up` публикуется один раз; draining снимает агента из кандидатов немедленно.
-- [ ] **M2-T7 · Redis-бэкенд (опционально)** (S-core) · зависит от M2-T1
+- [x] **M2-T7 · Redis-бэкенд (опционально)** (S-core) · зависит от M2-T1
   - Файлы: `internal/store/redis/{sessions,ratestate}.go`; отказ старта без `rediss://` и ACL-пользователя.
   - Тесты: contract-тесты `storetest` под тегом `integration` против `make redis-up`.
-- [ ] **M2-T8 · Wiring + CLI** (S-wire)
-  - `tgproxy keys create|list|revoke` (локально к БД — для бутстрапа до UI); конфиг агентов → таблица `agents` при первом старте (`agents.seed`).
-  - Приёмка среза: 2 агента на `127.0.0.1:8443/8444`; `kill` одного во время цикла `getMe` ×1000 → 0 ошибок у бота; `sendMessage` при обрыве после записи → 502 `delivery unknown`, в чате нет дубля; 429-окно воспроизводится скриптом `scripts/dev/flood.sh`.
+- [x] **M2-T8 · Wiring + CLI** (S-wire)
+  - `tgproxy access add|list|delete` (правила доступа локально к БД — для бутстрапа до UI; `--cidr`, `--with-key`, `--rps`; ключ печатается один раз); `access_rules` из конфига → таблица при первом старте; конфиг агентов → таблица `agents` при первом старте (`agents.seed`).
+  - Приёмка среза: 2 агента на `127.0.0.1:8443/8445` (`:8444` занят `agent_gateway`); `kill` одного во время цикла `getMe` ×1000 → 0 ошибок у бота; `sendMessage` при обрыве после записи → 502 `delivery unknown`, в чате нет дубля; 429-окно воспроизводится скриптом `scripts/dev/flood.sh`.
 
-**Срез M2:** отказоустойчивый прокси без UI.
+**Срез M2:** отказоустойчивый прокси без UI. Статус: 2 агента, `kill -9` одного под нагрузкой → 0 ошибок у клиента; rate-limit правила и 429-окна работают. Не проверено: `flood.sh` и «нет дубля в чате» с реальным ботом (нужен `dev/.env`), Redis-интеграционные тесты (`-tags integration`).
 
 ---
 
 ## M3 — Метрики, история, алерты · объём **M**
 
-- [ ] **M3-T1 · `internal/metrics`** (S-obs)
+- [x] **M3-T1 · `internal/metrics`** (S-obs)
   - Файлы: `server.go` (`NewServerRegistry() (*prometheus.Registry, *ServerMetrics)` — все метрики §10 с префиксом `tgp_`), `agent.go` (`NewAgentRegistry()`), `common.go` (`build_info`, `collectors.NewGoCollector()`, `collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})`), `handler.go` (`Handler(reg, bearer)` — `promhttp.HandlerFor`, `subtle.ConstantTimeCompare`), `labels.go` (фиксированные наборы `code`, `method` через `tgapi.MethodLabel`, `rule` — имя правила доступа; `bot_id` в метках запрещён), `topbots.go` (in-memory top-K `bot_id` за окно для UI).
   - Тесты первыми: `promlint` без проблем; `testutil.CollectAndCompare` для `requests_total`; нет `bot_id` ни в одной метрике (рефлексия по `Desc`); неверный bearer → 401, пустой bearer в конфиге → отказ старта; кардинальность: 10k случайных методов → ≤ 151 значений метки.
-- [ ] **M3-T2 · Инструментирование** (S-proxy, S-agent — параллельно, разные файлы)
+- [x] **M3-T2 · Инструментирование** (S-proxy, S-agent — параллельно, разные файлы)
   - S-proxy: `internal/server/router/metrics.go`, `internal/server/proxy/metrics.go` (интерфейс `Recorder`, реализация передаётся из wiring).
   - S-agent: `internal/agent/metrics.go`.
   - Тесты: после фейкового запроса нужные счётчики +1 с правильными метками.
-- [ ] **M3-T3 · `history`** (S-obs) · зависит от M2-T1
+- [x] **M3-T3 · `history`** (S-obs) · зависит от M2-T1
   - Файлы: `internal/server/history/sampler.go` (каждые 10s снимок: rps ok/err/429, p95, inflight по агентам → `samples_10s`), `rollup.go` (5m агрегаты, ретенция 24h / 30d), `errors.go` (кольцевой журнал `error_events`: время, request_id, bot_id, method, agent, phase, code, outcome ∈ {retried, failed_to_bot, passed_to_bot}, описание через `redact`), `query.go` (`Timeseries(range 1h|6h|24h|7d)`, `Errors(cursor, filters)`).
   - Тесты первыми: rollup правильно агрегирует p95 (по гистограмме, не среднее p95); ретенция удаляет старое; курсорная пагинация стабильна при вставках; описание ошибки не содержит токен.
-- [ ] **M3-T4 · `notify`** (S-obs) · зависит от M2-T1, M2-T5
+- [x] **M3-T4 · `notify`** (S-obs) · зависит от M2-T1, M2-T5
   - Файлы: `internal/server/notify/notifier.go` (`Notifier{Fire(ctx, Alert), Resolve(ctx, AlertKey)}`; типы из §9), `outbox.go` (дедуп `(agent_id,type)`, firing ≤1/ч, resolved однократно, глобально ≤20/мин со склейкой в одно сообщение), `deliver.go` (`sendMessage` через `Router` с меткой `internal`, получатели — `telegram_id` из users-файла), `rules.go` (`agent_degraded`: err>5%/5m, `overload`: inflight>порог, `cert_expiring`: <14 дней, `version_mismatch`, `all_agents_down`).
   - Тесты первыми: fake clock — повтор firing через 59 мин подавлен, через 61 — отправлен; resolved без firing не шлётся; 25 алертов за минуту → ≤20 сообщений, последнее — склейка; нет агентов → outbox копится, `alerts_undeliverable` растёт, при появлении агента доставляется; текст алерта без токенов.
-- [ ] **M3-T5 · Wiring** (S-wire): листенеры `:9090`/`:9443`, `/healthz`, `/readyz` (≥1 агент up).
+- [x] **M3-T5 · Wiring** (S-wire): листенеры `:9090`/`:9443`, `/healthz`, `/readyz` (≥1 агент up).
   - Приёмка среза: `curl -H "Authorization: Bearer …" 127.0.0.1:9090/metrics` показывает `tgp_*`; остановка агента → алерт `agent_down` приходит в Telegram админу через второй агент.
+  - Статус: `/metrics` и отсутствие `bot_id` проверены вживую; доставка `agent_down`/resolved через второй агент — e2e с фейковым Telegram. Живой алерт в настоящий Telegram ждёт токен бота уведомлений.
 
 ---
 

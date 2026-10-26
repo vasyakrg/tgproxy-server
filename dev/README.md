@@ -3,10 +3,66 @@
 ## Запуск (сквозной путь бот → server → agent → api.telegram.org)
 
 ```sh
-make dev-certs          # один раз: CA + сертификаты server/agent в dev/tls
-make run-agent          # терминал 1: mTLS на 127.0.0.1:8443
-make run-server         # терминал 2: прокси 127.0.0.1:8080, admin 127.0.0.1:8090
+make dev-certs          # один раз: CA + сертификаты server и агентов local, local2 в dev/tls
+make run-agent          # терминал 1: агент local,  mTLS на 127.0.0.1:8443
+make run-agent2         # терминал 2: агент local2, mTLS на 127.0.0.1:8445 (:8444 занят agent_gateway)
+make run-server         # терминал 3: прокси 127.0.0.1:8080, admin 127.0.0.1:8090
 ```
+
+`dev-certs` идемпотентен: если `dev/tls/ca.crt` уже есть (создан до появления `local2`),
+удалите `dev/tls` и повторите `make dev-certs`.
+
+Один агент можно не запускать: сервер работает с тем, что `up` (опрос статуса каждые 5 с,
+3 неудачи подряд — down, один успех — снова up). Запросы к упавшему агенту уходят на второй.
+
+## Метрики и алерты
+
+`/metrics` слушает `127.0.0.1:9090` и на loopback открыт без bearer:
+
+```sh
+curl -s 127.0.0.1:9090/metrics | grep tgp_requests_total      # bot_id в метках нет
+```
+
+Чтобы включить bearer: `openssl rand -hex 24 > dev/data/metrics-bearer && chmod 600 dev/data/metrics-bearer`,
+раскомментировать `metrics.bearer_file` в `dev/server.yaml`, затем
+`curl -H "Authorization: Bearer $(cat dev/data/metrics-bearer)" 127.0.0.1:9090/metrics`.
+
+Алерты (`notify`) выключены по умолчанию. Включение: создать файл токена (в git нет, `dev/data/` в `.gitignore`)
+и раскомментировать секцию `notify` в `dev/server.yaml`:
+
+```sh
+mkdir -p dev/data && printf '%s' '<токен от @BotFather>' > dev/data/notify-token && chmod 600 dev/data/notify-token
+```
+
+Получатели — `telegram_id` пользователей в `dev/users.yml` (по умолчанию `0` → никому не отправляется;
+подставьте свой id). Алерт `agent_down` приходит, когда агент недоступен, через оставшиеся агенты.
+Секция `notify` закомментирована намеренно: при включённой секции без файла токена конфиг не грузится (в т.ч. для CLI).
+SIGHUP перечитывает и получателей.
+
+## БД, правила доступа и агенты
+
+Состояние сервера — SQLite `dev/data/tgproxy.db`. Правила доступа и агенты из `server.yaml`
+(`access_rules`, `agents`) засеваются в БД **только при пустых таблицах** (первый старт);
+дальше источник правды — БД. Чтобы пересеять — остановить сервер и удалить `dev/data/tgproxy.db*`.
+
+CLI работает напрямую с БД по конфигу сервера, в том числе при запущенном сервере
+(WAL; сервер подхватывает изменения в течение ~2 с, рестарт не нужен):
+
+```sh
+./bin/tgproxy access add --name ext --with-key --rps 5 -c dev/server.yaml   # ключ печатается ОДИН раз
+./bin/tgproxy access add --name lan --cidr 10.0.0.0/8 --cidr 192.168.0.0/16 -c dev/server.yaml
+./bin/tgproxy access list -c dev/server.yaml                                # только префикс ключа
+./bin/tgproxy access delete --name ext -c dev/server.yaml                   # или --id N
+./bin/tgproxy agents list -c dev/server.yaml
+```
+
+Ограничение `--rps`: сверх лимита сервер отвечает `429` с `retry_after`, не обращаясь к агенту.
+
+## Окна 429 (flood)
+
+`scripts/dev/flood.sh [N] [PROXY]` шлёт N `sendMessage` в один чат (токен и `TGP_DEV_CHAT_ID` — из
+`dev/.env`, токен не печатается) и показывает, на каком запросе Telegram вернул 429 через агента
+и с какого сервер отвечает 429 сам (окно `(bot, chat)`), без похода к агенту.
 
 Токен бота — в `dev/.env` (не коммитится, шаблон — `dev/.env.example`):
 
@@ -18,18 +74,18 @@ curl -s http://127.0.0.1:8080/bot$TOKEN/getMe                              # п�
 curl -s http://127.0.0.1:8080/k/tgp_devkey_local_only/bot$TOKEN/getMe      # правило dev-key (ключ)
 
 curl -s http://127.0.0.1:8090/healthz     # 200
-curl -s http://127.0.0.1:8090/readyz      # 200, если агент отвечает
+curl -s http://127.0.0.1:8090/readyz      # 200, если хотя бы один агент up
 ```
 
 Сигналы: `SIGTERM`/`SIGINT` — graceful shutdown (до 30 с на inflight);
-`SIGHUP` — перечитать конфиг (правила доступа и уровень логов применяются без рестарта;
-`kill -HUP <pid>`). Некорректный конфиг при SIGHUP отвергается, остаётся прежний.
+`SIGHUP` — перечитать конфиг (уровень логов и параметры обработчика; правила доступа
+перечитываются из БД; `kill -HUP <pid>`). Некорректный конфиг при SIGHUP отвергается, остаётся прежний.
 
 Все ключи и пароли в этой папке — **только для локальной разработки**. В прод не переносить.
 
 ## Ключ клиента `dev-key`
 
-Правило доступа `dev-key` в `server.yaml` хранит только SHA-256 ключа (`key_sha256`).
+Правило доступа `dev-key` в `server.yaml` (засеивается в БД при первом старте) хранит только SHA-256 ключа (`key_sha256`).
 Сам ключ — строка `tgp_devkey_local_only`. Хеш считается так:
 
 ```sh
@@ -56,5 +112,5 @@ curl -H 'X-Proxy-Key: tgp_devkey_local_only' http://127.0.0.1:8080/bot$TOKEN/get
 
 - `users.yml` — пользователь `admin`, пароль `dev-password`.
 - `tls/` — dev-сертификаты (`make dev-certs` → `tgproxy pki dev-init`); в git не коммитятся.
-- `data/` — рабочие данные dev-процессов.
+- `data/` — рабочие данные dev-процессов (БД сервера `tgproxy.db`, данные агентов).
 - Конфиги проверяются командой `tgproxy config validate --mode server|agent -c <file>`.

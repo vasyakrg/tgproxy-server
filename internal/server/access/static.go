@@ -1,5 +1,6 @@
 // Package access решает, подходит ли запрос под правила доступа (сеть и/или
-// скрытый ключ). Правила в M1 статические — из конфига.
+// скрытый ключ) и применяет rate-limit правила. Правила — из конфига
+// (NewStatic) или из БД с кэшем и инвалидацией по версии (NewFromStore).
 package access
 
 import (
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 
 	"github.com/vasyakrg/tgproxy-server/internal/config"
@@ -20,27 +22,42 @@ var ErrDenied = errors.New("access: denied")
 
 // RuleInfo описывает сработавшее правило.
 type RuleInfo struct {
+	ID   int64 // 0 для правил из конфига
 	Name string
 	RPS  float64
 }
 
 type rule struct {
-	info  RuleInfo
-	cidrs []netip.Prefix
-	hash  []byte
-	score int // 3 ключ+сеть, 2 ключ, 1 сеть
+	info   RuleInfo
+	cidrs  []netip.Prefix
+	hash   []byte
+	score  int    // 3 ключ+сеть, 2 ключ, 1 сеть
+	limKey string // ключ лимитера: стабилен между снимками
 }
 
-// Checker проверяет доступ по статическим правилам.
-type Checker struct {
-	rules   []rule
-	trusted []netip.Prefix
+func newRule(id int64, name string, cidrs []netip.Prefix, hash []byte, rps float64) rule {
+	ru := rule{info: RuleInfo{ID: id, Name: name, RPS: rps}, cidrs: cidrs, hash: hash}
+	switch {
+	case len(hash) > 0 && len(cidrs) > 0:
+		ru.score = 3
+	case len(hash) > 0:
+		ru.score = 2
+	default:
+		ru.score = 1
+	}
+	if id > 0 {
+		ru.limKey = "id:" + strconv.FormatInt(id, 10)
+	} else {
+		ru.limKey = "name:" + name
+	}
+	return ru
 }
 
-// NewStatic строит Checker. Правило без сети и без ключа — ошибка
-// (открытый relay).
-func NewStatic(rules []config.AccessRule, trusted []netip.Prefix) (*Checker, error) {
-	c := &Checker{trusted: trusted}
+// NewStatic строит Checker из конфиговых правил. Правило без сети и без ключа —
+// ошибка (открытый relay).
+func NewStatic(rules []config.AccessRule, trusted []netip.Prefix, opts ...Option) (*Checker, error) {
+	c := newChecker(trusted, opts)
+	rs := make([]rule, 0, len(rules))
 	for _, r := range rules {
 		hasKey := r.HasKey()
 		if hasKey && len(r.KeyHash) != sha256.Size {
@@ -49,22 +66,15 @@ func NewStatic(rules []config.AccessRule, trusted []netip.Prefix) (*Checker, err
 		if !hasKey && len(r.CIDRs) == 0 {
 			return nil, errors.New("access: rule " + r.Name + " has neither cidrs nor key")
 		}
-		ru := rule{info: RuleInfo{Name: r.Name, RPS: r.RPS}, cidrs: r.CIDRs, hash: r.KeyHash}
-		switch {
-		case hasKey && len(r.CIDRs) > 0:
-			ru.score = 3
-		case hasKey:
-			ru.score = 2
-		default:
-			ru.score = 1
-		}
-		c.rules = append(c.rules, ru)
+		rs = append(rs, newRule(0, r.Name, r.CIDRs, r.KeyHash, r.RPS))
 	}
+	c.install(&snapshot{rules: rs})
 	return c, nil
 }
 
 // Check возвращает наиболее специфичное подходящее правило или ErrDenied.
 func (c *Checker) Check(r *http.Request, route tgapi.Route) (RuleInfo, error) {
+	rules := c.snap.Load().rules
 	ip := c.clientIP(r)
 	key := route.ClientKey
 	if key == "" {
@@ -75,8 +85,8 @@ func (c *Checker) Check(r *http.Request, route tgapi.Route) (RuleInfo, error) {
 		sum = sha256.Sum256([]byte(key))
 	}
 	best := -1
-	for i := range c.rules {
-		ru := &c.rules[i]
+	for i := range rules {
+		ru := &rules[i]
 		var ok bool
 		if key != "" {
 			// сравниваем со всеми ключевыми правилами без раннего выхода
@@ -87,14 +97,18 @@ func (c *Checker) Check(r *http.Request, route tgapi.Route) (RuleInfo, error) {
 		if ok && len(ru.cidrs) > 0 && !contains(ru.cidrs, ip) {
 			ok = false
 		}
-		if ok && (best < 0 || ru.score > c.rules[best].score) {
+		if ok && (best < 0 || ru.score > rules[best].score) {
 			best = i
 		}
 	}
 	if best < 0 {
 		return RuleInfo{}, ErrDenied
 	}
-	return c.rules[best].info, nil
+	ru := &rules[best]
+	if err := c.limit(r.Context(), ru); err != nil {
+		return RuleInfo{}, err
+	}
+	return ru.info, nil
 }
 
 func contains(ps []netip.Prefix, ip netip.Addr) bool {

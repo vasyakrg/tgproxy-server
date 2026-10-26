@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -26,14 +27,16 @@ func (f *fakeTransport) Status(context.Context, transport.AgentRef) (*transport.
 	return &transport.AgentStatus{}, nil
 }
 
+type mapRefs map[string]transport.AgentRef
+
+func (m mapRefs) Ref(id string) (transport.AgentRef, bool) { ref, ok := m[id]; return ref, ok }
+
 func TestUpstreamMapsAgentAndRejectsUnknown(t *testing.T) {
 	ft := &fakeTransport{fn: func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
 	}}
-	up, err := NewUpstream(ft, []config.AgentEndpoint{{ID: "a1", URL: "https://127.0.0.1:1", Mode: config.AgentModeDial}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	u, _ := url.Parse("https://127.0.0.1:1")
+	up := NewUpstream(ft, mapRefs{"a1": {ID: "a1", URL: u, Mode: config.AgentModeDial}})
 	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/tg/x", nil)
 	resp, err := up.RoundTrip(context.Background(), "a1", req)
 	if err != nil {
@@ -47,9 +50,6 @@ func TestUpstreamMapsAgentAndRejectsUnknown(t *testing.T) {
 	if err == nil {
 		_ = resp.Body.Close()
 		t.Fatal("unknown agent must fail")
-	}
-	if _, err := NewUpstream(ft, []config.AgentEndpoint{{ID: "a"}, {ID: "a"}}); err == nil {
-		t.Fatal("duplicate ids must fail")
 	}
 }
 
@@ -67,10 +67,7 @@ func (b *errBody) Read(p []byte) (int, error) {
 // до вызывающего (роутер отдаёт по нему 413).
 func TestUpstreamPropagatesMaxBytesErrorThroughDial(t *testing.T) {
 	env := newE2E(t, e2eOpts{})
-	up, err := NewUpstream(env.dial, env.cfg.Agents)
-	if err != nil {
-		t.Fatal(err)
-	}
+	up := NewUpstream(env.dial, env.srv.reg)
 	req, _ := http.NewRequestWithContext(context.Background(), "POST", "/tg/bot"+testToken+"/sendDocument",
 		io.NopCloser(&errBody{n: 3}))
 	req.ContentLength = -1

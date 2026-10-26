@@ -70,7 +70,9 @@ type env struct {
 	log *bytes.Buffer
 }
 
-func setup(t *testing.T, mut func(*config.ServerConfig)) *env {
+func setup(t *testing.T, mut func(*config.ServerConfig)) *env { return setupOpts(t, mut) }
+
+func setupOpts(t *testing.T, mut func(*config.ServerConfig), opts ...Option) *env {
 	t.Helper()
 	k := sha256.Sum256([]byte("k1"))
 	cfg := config.DefaultServer()
@@ -92,7 +94,7 @@ func setup(t *testing.T, mut func(*config.ServerConfig)) *env {
 	up := &fakeUp{}
 	buf := &bytes.Buffer{}
 	log := slog.New(redact.NewHandler(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	return &env{h: New(chk, router.New(cfg, up, log), cfg, log), up: up, log: buf}
+	return &env{h: New(chk, router.New(cfg, up, log), cfg, log, opts...), up: up, log: buf}
 }
 
 func (e *env) do(method, target, remote string, body io.Reader, hdr map[string]string) *httptest.ResponseRecorder {
@@ -321,7 +323,7 @@ func TestUpstreamDown(t *testing.T) {
 		return nil, errors.New("dial https://x/bot" + tok + "/getMe: refused")
 	}
 	w := e.do("GET", "/bot"+tok+"/getMe", "10.1.1.1:1", nil, nil)
-	errDesc(t, w, 502, router.DescNoAgents)
+	errDesc(t, w, 502, router.DescUpstreamUnavailable)
 	if w.Header().Get("Content-Type") != "application/json" {
 		t.Fatal("not json")
 	}
@@ -415,5 +417,22 @@ func TestTokenNeverInLogs(t *testing.T) {
 	}
 	if !strings.Contains(out, `"bot_id":123456`) || !strings.Contains(out, `"rule":"lan"`) {
 		t.Fatalf("access log fields missing:\n%s", out)
+	}
+}
+
+func TestRuleRateLimitReturns429WithRetryAfter(t *testing.T) {
+	e := setup(t, func(c *config.ServerConfig) {
+		c.AccessRules = []config.AccessRule{{Name: "lan", RPS: 1, CIDRs: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}}}
+	})
+	if w := e.do("GET", "/bot"+tok+"/getMe", "10.1.2.3:555", nil, nil); w.Code != 200 {
+		t.Fatalf("first: %d", w.Code)
+	}
+	w := e.do("GET", "/bot"+tok+"/getMe", "10.1.2.3:555", nil, nil)
+	if w.Code != 429 || w.Header().Get("Retry-After") != "1" {
+		t.Fatalf("second: %d %v %s", w.Code, w.Header(), w.Body)
+	}
+	var env tgapi.Envelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil || env.ErrorCode != 429 || env.Parameters == nil || env.Parameters.RetryAfter != 1 {
+		t.Fatalf("%s %v", w.Body, err)
 	}
 }

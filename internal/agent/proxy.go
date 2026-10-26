@@ -104,6 +104,7 @@ func (p *proxy) modifyResponse(resp *http.Response) error {
 func (a *Agent) handleTG(w http.ResponseWriter, r *http.Request) {
 	if a.draining.Load() {
 		a.stats.recordError(tgapi.PhasePreSend)
+		a.rec.Request(codeClassProxyErr, tgapi.PhasePreSend)
 		writeAgentError(w, http.StatusServiceUnavailable, tgapi.PhasePreSend, "tgproxy: agent is draining")
 		return
 	}
@@ -112,14 +113,36 @@ func (a *Agent) handleTG(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.stats.begin()
-	defer a.stats.end()
+	a.rec.SetInflight(int(a.stats.inflight.Load()))
+	defer func() {
+		a.stats.end()
+		a.rec.SetInflight(int(a.stats.inflight.Load()))
+	}()
 
 	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout(r.Header))
 	defer cancel()
 	t := newPhaseTracker(a.now())
 	ctx = httptrace.WithClientTrace(ctx, t.clientTrace())
 	ctx = context.WithValue(ctx, trackerKey{}, t)
-	a.proxy.rp.ServeHTTP(w, r.WithContext(ctx))
+
+	var in *countingBody
+	if r.Body != nil && r.Body != http.NoBody {
+		in = &countingBody{ReadCloser: r.Body}
+		r.Body = in
+	}
+	mw := &metricsWriter{ResponseWriter: w}
+	a.proxy.rp.ServeHTTP(mw, r.WithContext(ctx))
+
+	a.rec.UpstreamDuration(t.upstream())
+	if in != nil {
+		a.rec.UpstreamBytes(DirUp, int(in.n.Load()))
+	}
+	a.rec.UpstreamBytes(DirDown, int(mw.n))
+	if ep := t.errPhase.Load(); ep != nil {
+		a.rec.Request(codeClassProxyErr, *ep)
+	} else {
+		a.rec.Request(codeClass(mw.status), "")
+	}
 }
 
 // slogErrorLog направляет логи net/http в slog (с редакцией).

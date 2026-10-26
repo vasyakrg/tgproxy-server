@@ -16,14 +16,15 @@ func newPKICmd() *cobra.Command {
 }
 
 func newPKIDevInitCmd() *cobra.Command {
-	var out, agentID string
+	var out string
+	var agentIDs []string
 	cmd := &cobra.Command{
 		Use:   "dev-init",
 		Short: "Создать dev-PKI (CA, сертификаты сервера и агента); существующий CA не перезаписывается",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			w := cmd.OutOrStdout()
-			err := pki.DevInit(out, []string{agentID})
+			err := pki.DevInit(out, agentIDs)
 			switch {
 			case errors.Is(err, pki.ErrExists):
 				_, werr := fmt.Fprintf(w, "dev PKI уже существует в %s, пропуск (удалите каталог для пересоздания)\n", out)
@@ -31,11 +32,11 @@ func newPKIDevInitCmd() *cobra.Command {
 			case err != nil:
 				return err
 			}
-			_, err = fmt.Fprintf(w, "dev PKI создана в %s (агент %q)\n", out, agentID)
+			_, err = fmt.Fprintf(w, "dev PKI создана в %s (агенты %v)\n", out, agentIDs)
 			return err
 		},
 	}
 	cmd.Flags().StringVar(&out, "out", "dev/tls", "каталог для сертификатов")
-	cmd.Flags().StringVar(&agentID, "agent", "local", "id агента")
+	cmd.Flags().StringSliceVar(&agentIDs, "agent", []string{"local"}, "id агентов (повторяемый или через запятую)")
 	return cmd
 }

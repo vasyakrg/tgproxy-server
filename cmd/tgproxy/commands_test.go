@@ -100,3 +100,63 @@ func TestAgentTelegramURLFlagHidden(t *testing.T) {
 		t.Fatalf("hidden flag leaked into help: %s", out)
 	}
 }
+
+func TestAccessAndAgentsCLI(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(root, "dev"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"server.yaml", "users.yml"} {
+		b, err := os.ReadFile(filepath.Join(devDir(t), f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "dev", f), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(root)
+	if _, err := run(t, "pki", "dev-init", "--out", "dev/tls"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := []string{"-c", "dev/server.yaml"}
+	with := func(a ...string) []string { return append(a, cfg...) }
+
+	out, err := run(t, with("access", "add", "--name", "ext", "--with-key", "--rps", "2", "--cidr", "10.0.0.0/8")...)
+	if err != nil || !strings.Contains(out, "tgp_") || !strings.Contains(out, "/k/tgp_") {
+		t.Fatalf("add: %v %q", err, out)
+	}
+	key := out[strings.Index(out, "tgp_"):]
+	key = key[:strings.IndexAny(key, "\n/ ")]
+
+	out, err = run(t, with("access", "list")...)
+	if err != nil || !strings.Contains(out, "ext") || !strings.Contains(out, "10.0.0.0/8") {
+		t.Fatalf("list: %v %q", err, out)
+	}
+	if strings.Contains(out, key) {
+		t.Fatalf("list leaks the full key: %q", out)
+	}
+	if _, err := run(t, with("access", "add", "--name", "bad")...); err == nil {
+		t.Fatal("rule without cidr and key must fail")
+	}
+	if _, err := run(t, with("access", "add", "--name", "ext", "--cidr", "10.0.0.0/8")...); err == nil {
+		t.Fatal("duplicate name must fail")
+	}
+	if _, err := run(t, with("access", "add", "--name", "x", "--cidr", "bogus")...); err == nil {
+		t.Fatal("bad cidr must fail")
+	}
+	if _, err := run(t, with("access", "delete")...); err == nil {
+		t.Fatal("delete without --name/--id must fail")
+	}
+	if _, err := run(t, with("access", "delete", "--name", "ext")...); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ = run(t, with("access", "list")...); strings.Contains(out, "ext") {
+		t.Fatalf("rule not deleted: %q", out)
+	}
+
+	// агенты из БД: пусты, пока сервер ни разу не стартовал (seed делает сервер)
+	if out, err = run(t, with("agents", "list")...); err != nil || !strings.Contains(out, "ID") {
+		t.Fatalf("agents list: %v %q", err, out)
+	}
+}
