@@ -8,6 +8,7 @@ import (
 
 // Agent — рекордеры метрик агента.
 type Agent struct {
+	reg      *prometheus.Registry
 	requests *prometheus.CounterVec
 	duration prometheus.Histogram
 	inflight prometheus.Gauge
@@ -20,6 +21,7 @@ func NewAgentRegistry() (*prometheus.Registry, *Agent) {
 	reg := prometheus.NewRegistry()
 	registerCommon(reg)
 	a := &Agent{
+		reg: reg,
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "agent_requests_total",
 			Help: "Requests handled by the agent."}, []string{"code_class", "error_phase"}),
 		duration: prometheus.NewHistogram(prometheus.HistogramOpts{Namespace: namespace, Name: "agent_upstream_duration_seconds",
@@ -53,3 +55,12 @@ func (a *Agent) UpstreamBytes(direction string, n int) {
 
 // DialError — ошибка соединения с upstream (kind: dns|connect|tls|timeout|...).
 func (a *Agent) DialError(kind string) { a.dialErr.WithLabelValues(kind).Inc() }
+
+// WatchReverseConns регистрирует gauge tgp_agent_reverse_conns, читающий
+// число reverse-соединений агента из conns при каждом скрейпе. Повторный вызов
+// игнорируется.
+func (a *Agent) WatchReverseConns(conns func() int) {
+	g := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: namespace, Name: "agent_reverse_conns",
+		Help: "Active reverse connections of the agent to the server."}, func() float64 { return float64(conns()) })
+	_ = a.reg.Register(g)
+}

@@ -1,10 +1,17 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/vasyakrg/tgproxy-server/internal/app"
+	"github.com/vasyakrg/tgproxy-server/internal/pki"
+	"github.com/vasyakrg/tgproxy-server/internal/server/enroll"
+	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
 
 func newAgentsCmd() *cobra.Command {
@@ -34,6 +41,69 @@ func newAgentsCmd() *cobra.Command {
 	}
 	list.Flags().StringVarP(&cfgPath, "config", "c", "", "путь к server.yaml")
 	_ = list.MarkFlagRequired("config")
-	cmd.AddCommand(list)
+	cmd.AddCommand(list, newAgentsEnrollTokenCmd())
+	return cmd
+}
+
+func newAgentsEnrollTokenCmd() *cobra.Command {
+	var (
+		cfgPath, name, gatewayURL string
+		ttl                       time.Duration
+		weight                    int
+	)
+	cmd := &cobra.Command{
+		Use:   "enroll-token",
+		Short: "Выпустить одноразовый токен подключения агента за NAT и вывести команду для агента",
+		Long: "То же, что кнопка «Агент за NAT» в UI. Токен показывается один раз; в БД хранится только SHA-256.\n" +
+			"Требуется инициализированный CA (tgproxy pki init).",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, st, err := openAdminStore(cmd, cfgPath)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+			if cfg.PKI.KEKFile == "" {
+				return errors.New("pki.kek_file не задан в конфиге (создать: tgproxy pki kek-init)")
+			}
+			kek, err := pki.LoadKEK(cfg.PKI.KEKFile)
+			if err != nil {
+				return fmt.Errorf("загрузка KEK: %w", err)
+			}
+			if _, err := st.Certs().LoadCA(cmd.Context()); errors.Is(err, store.ErrNotFound) {
+				return errors.New("CA не инициализирован (выполните: tgproxy pki init)")
+			} else if err != nil {
+				return err
+			}
+			auth, err := pki.LoadOrInit(cmd.Context(), st.Certs(), kek, pki.Options{})
+			if err != nil {
+				return err
+			}
+			url, ok := app.GatewayURL(cfg, gatewayURL)
+			if !ok {
+				return errors.New("не удалось определить публичный URL agent_gateway: задайте --gateway-url или server.public_base_url")
+			}
+			svc, err := enroll.New(enroll.Config{
+				Enrollments: st.Enrollments(), Agents: st.Agents(), Audit: st.Audit(), CA: auth, GatewayURL: url,
+			})
+			if err != nil {
+				return err
+			}
+			is, err := svc.IssueFor(cmd.Context(), enroll.IssueRequest{Name: name, Weight: weight, CreatedBy: "cli", TTL: ttl})
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Токен действует до %s и показывается один раз. Команда для агента:\n%s\n",
+				is.ExpiresAt.Local().Format(time.RFC3339), is.Cmdline)
+			return err
+		},
+	}
+	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "путь к server.yaml")
+	cmd.Flags().StringVar(&name, "name", "", "имя агента (из него строится id)")
+	cmd.Flags().IntVar(&weight, "weight", 0, "вес в балансировке (0 — по умолчанию)")
+	cmd.Flags().DurationVar(&ttl, "ttl", 0, "срок токена (по умолчанию 1h, максимум 24h)")
+	cmd.Flags().StringVar(&gatewayURL, "gateway-url", "", "публичный https-URL agent_gateway (по умолчанию из конфига)")
+	_ = cmd.MarkFlagRequired("config")
+	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }

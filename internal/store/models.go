@@ -12,6 +12,8 @@ type AgentMode string
 const (
 	ModeDial    AgentMode = "dial"
 	ModeReverse AgentMode = "reverse"
+	// ModeBoth — сервер ходит к агенту сам (url обязателен) и принимает его reverse-соединения.
+	ModeBoth AgentMode = "both"
 )
 
 // Agent — запись реестра агентов. Рантайм-состояние (up/down, EWMA) в БД не хранится.
@@ -205,4 +207,36 @@ type AuditQuery struct {
 	BeforeID int64
 	Limit    int
 	Actor    string
+}
+
+// Состояния задачи установки.
+const (
+	InstallRunning    = "running"
+	InstallDone       = "done"
+	InstallFailed     = "failed"
+	InstallRolledBack = "rolled_back"
+)
+
+// InstallJob — задача SSH-установки агента (M5-T3). Креды админа в БД не хранятся.
+type InstallJob struct {
+	ID         string
+	AgentID    string
+	Host       string // host:port
+	Kind       string // "install"
+	State      string // Install*
+	Error      string
+	CreatedAt  time.Time
+	FinishedAt *time.Time
+}
+
+// InstallJobEvent — событие задачи (журнал мастера). ID монотонно растёт (используется как seq / Last-Event-ID).
+// Message уже очищено от секретов.
+type InstallJobEvent struct {
+	ID      int64
+	JobID   string
+	At      time.Time
+	Kind    string // step | log | done | error
+	Step    string // ключ шага
+	Level   string // info | warn | error
+	Message string
 }

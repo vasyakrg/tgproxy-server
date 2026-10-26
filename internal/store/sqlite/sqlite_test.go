@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pressly/goose/v3"
+
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 	"github.com/vasyakrg/tgproxy-server/internal/store/sqlite"
 	"github.com/vasyakrg/tgproxy-server/internal/store/storetest"
@@ -191,5 +193,43 @@ func TestOpenErrors(t *testing.T) {
 	}
 	if _, err := sqlite.Open(context.Background(), filepath.Join(f, "sub", "db")); err == nil {
 		t.Fatal("path under a file must fail")
+	}
+}
+
+// Миграция 0004 расширяет CHECK режима до both и не теряет агентов и триггер версии.
+func TestMigration0004AgentModeBoth(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db := rawDB(t, path)
+	ctx := context.Background()
+	p, err := goose.NewProvider(goose.DialectSQLite3, db, os.DirFS("migrations"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.UpTo(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO agents (id,name,url,mode,weight,draining,created_at,updated_at) VALUES ('a1','a1','https://x','dial',7,1,1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO agents (id,name,url,mode,created_at,updated_at) VALUES ('x','x','','both',1,1)`); err == nil {
+		t.Fatal("old schema accepted mode both")
+	}
+	var before int64
+	if err := db.QueryRowContext(ctx, `SELECT v FROM versions WHERE name='agents'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var w, d int
+	if err := db.QueryRowContext(ctx, `SELECT weight, draining FROM agents WHERE id='a1'`).Scan(&w, &d); err != nil || w != 7 || d != 1 {
+		t.Fatalf("agent lost: %d %d %v", w, d, err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO agents (id,name,url,mode,created_at,updated_at) VALUES ('b','b','https://y','both',1,1)`); err != nil {
+		t.Fatalf("both rejected: %v", err)
+	}
+	var after int64
+	if err := db.QueryRowContext(ctx, `SELECT v FROM versions WHERE name='agents'`).Scan(&after); err != nil || after <= before+1 {
+		t.Fatalf("version trigger: %d -> %d %v", before, after, err)
 	}
 }

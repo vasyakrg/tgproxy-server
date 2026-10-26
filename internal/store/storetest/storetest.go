@@ -38,6 +38,7 @@ func Run(t *testing.T, factory Factory) {
 		{"Certs", testCerts},
 		{"Enrollments", testEnrollments},
 		{"ErrorEvents", testErrorEvents},
+		{"InstallJobs", testInstallJobs},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {
@@ -94,6 +95,16 @@ func testAgents(t *testing.T, s store.Store) {
 	is(t, err, store.ErrInvalid)
 	_, err = r.Create(ctx, store.Agent{ID: "n1", Name: "nat-1", Mode: store.ModeReverse, Weight: 50})
 	ok(t, err)
+	_, err = r.Create(ctx, store.Agent{ID: "b0", Name: "both-nourl", Mode: store.ModeBoth})
+	is(t, err, store.ErrInvalid)
+	_, err = r.Create(ctx, store.Agent{ID: "b1", Name: "both-1", URL: "https://10.0.0.2:8443", Mode: store.ModeBoth, Weight: 10})
+	ok(t, err)
+	gotB, err := r.Get(ctx, "b1")
+	ok(t, err)
+	if gotB.Mode != store.ModeBoth || gotB.URL != "https://10.0.0.2:8443" {
+		t.Fatalf("both agent roundtrip: %+v", gotB)
+	}
+	ok(t, r.Delete(ctx, "b1"))
 
 	v1, err := r.Version(ctx)
 	ok(t, err)
@@ -608,8 +619,21 @@ func testHostKeys(t *testing.T, s store.Store) {
 	if got.AgentID != "a1" || got.Fingerprint != "SHA256:def" {
 		t.Fatalf("upsert %+v", got)
 	}
+	k2 := store.HostKey{Host: "10.0.0.0:22", Algo: "ssh-rsa", Fingerprint: "SHA256:zzz", PublicKey: []byte{9}}
+	ok(t, r.Put(ctx, k2))
+	list, err := r.List(ctx)
+	ok(t, err)
+	if len(list) != 2 || list[0].Host != "10.0.0.0:22" || list[1].Host != "10.0.0.1:22" || list[1].Fingerprint != "SHA256:def" {
+		t.Fatalf("list %+v", list)
+	}
 	ok(t, r.Delete(ctx, "10.0.0.1:22"))
 	is(t, r.Delete(ctx, "10.0.0.1:22"), store.ErrNotFound)
+	ok(t, r.Delete(ctx, "10.0.0.0:22"))
+	list, err = r.List(ctx)
+	ok(t, err)
+	if len(list) != 0 {
+		t.Fatalf("list after delete %+v", list)
+	}
 }
 
 func testCerts(t *testing.T, s store.Store) {
@@ -729,6 +753,16 @@ func testEnrollments(t *testing.T, s store.Store) {
 	if wins != 1 {
 		t.Fatalf("token consumed %d times", wins)
 	}
+	// отзыв: неиспользованный удаляется, повтор/использованный/неизвестный — ErrNotFound
+	ok(t, r.Create(ctx, mk("e5", "revoke", time.Hour)))
+	ok(t, r.Delete(ctx, "e5"))
+	is(t, r.Delete(ctx, "e5"), store.ErrNotFound)
+	is(t, r.Delete(ctx, "e1"), store.ErrNotFound) // уже использован
+	is(t, r.Delete(ctx, "nope"), store.ErrNotFound)
+	if _, err := r.Consume(ctx, hash("revoke"), now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("revoked token consumed: %v", err)
+	}
+
 	if d := n(r.DeleteExpired(ctx, now)); d != 1 {
 		t.Fatalf("deleted %d", d)
 	}
@@ -801,5 +835,59 @@ func testErrorEvents(t *testing.T, s store.Store) {
 	all, _ := r.List(ctx, store.ErrorQuery{Limit: 100})
 	if len(all) != 5 {
 		t.Fatalf("after trim %d", len(all))
+	}
+}
+
+func testInstallJobs(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	r := s.InstallJobs()
+	_, err := r.Get(ctx, "j1")
+	is(t, err, store.ErrNotFound)
+	is(t, r.Create(ctx, store.InstallJob{ID: "j1"}), store.ErrInvalid)
+	j := store.InstallJob{ID: "j1", Host: "10.0.0.1:22", Kind: "install", State: store.InstallRunning}
+	ok(t, r.Create(ctx, j))
+	is(t, r.Create(ctx, j), store.ErrConflict)
+	got, err := r.Get(ctx, "j1")
+	ok(t, err)
+	if got.State != store.InstallRunning || got.FinishedAt != nil || got.CreatedAt.IsZero() || got.Host != j.Host {
+		t.Fatalf("got %+v", got)
+	}
+	ok(t, r.SetAgent(ctx, "j1", "ams-2"))
+	is(t, r.SetAgent(ctx, "nope", "x"), store.ErrNotFound)
+	ok(t, r.SetState(ctx, "j1", store.InstallFailed, "boom"))
+	is(t, r.SetState(ctx, "nope", store.InstallDone, ""), store.ErrNotFound)
+	is(t, r.SetState(ctx, "j1", "", ""), store.ErrInvalid)
+	got, _ = r.Get(ctx, "j1")
+	if got.State != store.InstallFailed || got.Error != "boom" || got.FinishedAt == nil || got.AgentID != "ams-2" {
+		t.Fatalf("after state %+v", got)
+	}
+
+	_, err = r.AppendEvent(ctx, store.InstallJobEvent{JobID: "j1"})
+	is(t, err, store.ErrInvalid)
+	_, err = r.AppendEvent(ctx, store.InstallJobEvent{JobID: "ghost", Kind: "log"})
+	if err == nil {
+		t.Fatal("event for unknown job accepted")
+	}
+	var last int64
+	for i := 0; i < 3; i++ {
+		e, err := r.AppendEvent(ctx, store.InstallJobEvent{JobID: "j1", Kind: "log", Step: "ssh", Message: fmt.Sprint("m", i)})
+		ok(t, err)
+		if e.ID <= last || e.Level != "info" || e.At.IsZero() {
+			t.Fatalf("event %+v after %d", e, last)
+		}
+		last = e.ID
+	}
+	all, err := r.Events(ctx, "j1", 0)
+	ok(t, err)
+	if len(all) != 3 || all[0].Message != "m0" || all[2].Kind != "log" || all[1].Step != "ssh" {
+		t.Fatalf("events %+v", all)
+	}
+	tail, _ := r.Events(ctx, "j1", all[0].ID)
+	if len(tail) != 2 || tail[0].Message != "m1" {
+		t.Fatalf("tail %+v", tail)
+	}
+	none, _ := r.Events(ctx, "other", 0)
+	if len(none) != 0 {
+		t.Fatalf("other %+v", none)
 	}
 }

@@ -348,8 +348,17 @@ func ValidateAgent(c *AgentConfig) error {
 		} else {
 			v.httpsURL("server_url", c.ServerURL)
 		}
+	case AgentModeBoth:
+		if c.AllowedClientSAN == "" {
+			v.add("allowed_client_san", "required for mode=both (SAN of the server client certificate)")
+		}
+		if c.ServerURL == "" {
+			v.add("server_url", "required for mode=both")
+		} else {
+			v.httpsURL("server_url", c.ServerURL)
+		}
 	default:
-		v.add("mode", "must be dial|reverse, got %q", c.Mode)
+		v.add("mode", "must be dial|reverse|both, got %q", c.Mode)
 	}
 
 	if c.TLS.CertFile == "" {

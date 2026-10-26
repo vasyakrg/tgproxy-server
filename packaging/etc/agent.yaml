@@ -1,0 +1,25 @@
+# tgproxy agent — прод-шаблон (/etc/tgproxy/agent.yaml, root:tgproxy 0640).
+# Схема: internal/config/config.go. Проверка:
+#   tgproxy config validate --mode agent -c /etc/tgproxy/agent.yaml
+# Upstream (api.telegram.org) зашит в бинарь и в конфиге не задаётся. Пакет не перезаписывает
+# этот файл при обновлении (conffile, noreplace). Обычно файл правит установщик сервера.
+
+listen:
+  api: ":8443"                    # mTLS: /tg/*, /_agent/*
+  metrics: "127.0.0.1:9443"       # /metrics; не-loopback требует metrics.bearer_file
+
+mode: dial                        # dial: сервер подключается к агенту | reverse: агент к серверу
+# server_url: https://tg.example.com:8444   # обязателен для mode=reverse
+
+# Материалы mTLS: создаются при enrollment / установке (CSR-флоу), ключ генерируется на агенте.
+tls:
+  cert_file: /var/lib/tgproxy/agent/agent.crt
+  key_file: /var/lib/tgproxy/agent/agent.key
+  ca_file: /var/lib/tgproxy/agent/ca.crt
+allowed_client_san: tgproxy-server
+
+data_dir: /var/lib/tgproxy/agent
+
+logging:
+  level: info
+  format: json

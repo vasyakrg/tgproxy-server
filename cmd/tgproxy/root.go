@@ -21,11 +21,13 @@ func newRootCmd() *cobra.Command {
 		newAgentCmd(),
 		newAccessCmd(),
 		newAgentsCmd(),
+		newHostKeysCmd(),
 		newConfigCmd(),
 		newPKICmd(),
 		newHashpwCmd(),
 		newTOTPCmd(),
 		newVersionCmd(),
+		newDeployHelperCmd(),
 	)
 	return root
 }

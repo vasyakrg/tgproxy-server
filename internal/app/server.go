@@ -22,6 +22,7 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/server/access"
 	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
 	"github.com/vasyakrg/tgproxy-server/internal/server/balancer"
+	"github.com/vasyakrg/tgproxy-server/internal/server/gateway"
 	"github.com/vasyakrg/tgproxy-server/internal/server/proxy"
 	"github.com/vasyakrg/tgproxy-server/internal/server/router"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
@@ -55,6 +56,16 @@ type ServerOptions struct {
 	SamplerTicks <-chan time.Time
 	// NotifyPoll — период опроса outbox (тесты); 0 — по умолчанию.
 	NotifyPoll time.Duration
+	// GatewayListener — готовый листенер agent_gateway вместо cfg.Listen.AgentGateway
+	// (тесты); используется только в PKI-режиме.
+	GatewayListener net.Listener
+	// GatewayURL — публичный https-URL agent_gateway для команды enrollment; пусто —
+	// выводится из server.public_base_url и listen.agent_gateway.
+	GatewayURL string
+	// DenylistInterval / RotateInterval — периоды обновления denylist и проверки
+	// ротации сертификатов (тесты); 0 — по умолчанию.
+	DenylistInterval time.Duration
+	RotateInterval   time.Duration
 }
 
 // snapshot — неизменяемое состояние, подменяемое атомарно при reload:
@@ -82,6 +93,7 @@ type Server struct {
 	obs        *obs
 	rstats     *ruleStats
 	web        *webState // nil — веб-UI не поднят
+	pki        *pkiState // nil — статические agent_tls (без reverse и enrollment)
 	cur        atomic.Pointer[snapshot]
 	closed     sync.Once
 }
@@ -95,10 +107,7 @@ func NewServer(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logge
 	if len(opts) > 0 {
 		s.opts = opts[0]
 	}
-	cert, pool, err := loadAgentTLS(cfg)
-	if err != nil {
-		return nil, err
-	}
+	var err error
 	if s.ingress, err = s.newIngress(cfg); err != nil {
 		return nil, err
 	}
@@ -110,10 +119,15 @@ func NewServer(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logge
 	if s.st, distributed, err = openStore(ctx, cfg); err != nil {
 		return nil, err
 	}
-	s.tr = transport.NewRegistry(map[config.AgentMode]transport.AgentTransport{
-		config.AgentModeDial: transport.NewDial(cert, pool),
-	})
+	if err := s.initTransport(ctx, cfg); err != nil {
+		s.Close()
+		return nil, err
+	}
 	if err := s.wire(context.WithoutCancel(ctx), cfg, distributed); err != nil {
+		s.Close()
+		return nil, err
+	}
+	if err := s.wirePKI(cfg); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -193,6 +207,9 @@ func (s *Server) build(cfg *config.ServerConfig) (*snapshot, error) {
 // Close освобождает ресурсы (Checker, транспорт, хранилище); идемпотентен.
 func (s *Server) Close() {
 	s.closed.Do(func() {
+		if s.pki != nil && s.pki.inst != nil {
+			s.pki.inst.Close()
+		}
 		if s.checker != nil {
 			s.checker.Close()
 		}
@@ -308,7 +325,7 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 		srvs = append(srvs, newHTTPServer(s.obs.metricsHandler, s.ingTLS, s.logger))
 		lns = append(lns, ml)
 	}
-	errc := make(chan error, len(srvs))
+	errc := make(chan error, len(srvs)+1)
 	for i, srv := range srvs {
 		go func() {
 			var err error
@@ -319,6 +336,12 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 			}
 			errc <- err
 		}()
+	}
+	var gw *gateway.Gateway
+	if s.pki != nil && s.opts.GatewayListener != nil {
+		gw = s.pki.gw
+		gwLn := s.opts.GatewayListener
+		go func() { errc <- gw.Serve(gwLn) }() //nolint:contextcheck // gateway принимает соединения без контекста запроса
 	}
 	onReload(ctx, func() {
 		s.reloadIngress()
@@ -337,6 +360,7 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 	obsWait := s.runObs(rctx)
 	webWait := s.runWeb(rctx)
 	ingWait := s.runIngress(rctx)
+	pkiWait := s.runPKI(rctx)
 	go func() {
 		defer close(regDone)
 		if err := s.reg.Run(rctx); err != nil {
@@ -344,7 +368,7 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 		}
 	}()
 	s.logger.Info("server started", "proxy", proxyLn.Addr().String(), "admin", adminLn.Addr().String(),
-		"metrics", len(lns) > 2, "tls", s.ingTLS != nil)
+		"metrics", len(lns) > 2, "tls", s.ingTLS != nil, "gateway", gw != nil)
 
 	var first error
 	select {
@@ -363,8 +387,14 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 			_ = srv.Close()
 		}
 	}
+	if gw != nil {
+		if err := gw.Shutdown(sctx); err != nil {
+			s.logger.Warn("gateway shutdown incomplete", "error", err)
+		}
+	}
 	rcancel()
 	<-regDone
+	pkiWait()
 	obsWait()
 	webWait()
 	ingWait()
@@ -401,6 +431,18 @@ func RunServer(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logge
 			return fmt.Errorf("app: listen metrics: %w", lerr)
 		}
 		s.opts.MetricsListener = ln
+	}
+	if s.pki != nil && s.opts.GatewayListener == nil {
+		ln, lerr := lc.Listen(ctx, "tcp", cfg.Listen.AgentGateway)
+		if lerr != nil {
+			_ = proxyLn.Close()
+			_ = adminLn.Close()
+			if s.opts.MetricsListener != nil {
+				_ = s.opts.MetricsListener.Close()
+			}
+			return fmt.Errorf("app: listen agent_gateway: %w", lerr)
+		}
+		s.opts.GatewayListener = ln
 	}
 	return s.Serve(ctx, proxyLn, adminLn)
 }

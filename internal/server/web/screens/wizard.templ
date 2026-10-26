@@ -1,0 +1,358 @@
+package screens
+
+import (
+	"strconv"
+
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/views"
+)
+
+var pendingHeaders = []string{"Агент", "Вес", "Действует до", views.ActionsHeader}
+
+var wizSteps = []string{"Хост и доступ", "Ключ хоста", "Установка"}
+
+// WizardPage — мастер «Новый агент»: выбор ветки и первый шаг.
+templ WizardPage(vm WizardVM) {
+	<div class="wiz">
+		<div class="wiz-head">
+			<a class="wiz-back" href="/agents">← Агенты</a>
+			<h1 class="wiz-title">Новый агент</h1>
+		</div>
+		<div class="wiz-modes" role="radiogroup" aria-label="Режим связи">
+			@wizMode("/agents/new?mode=ssh", "Сервер → агент, установка по SSH", "у агента открыт порт 8443 для IP сервера", vm.Mode == "ssh")
+			@wizMode("/agents/new?mode=nat", "Агент → сервер, агент за NAT", "агент сам подключается к порту 8444 сервера", vm.Mode == "nat")
+		</div>
+		<div class="wiz-cols">
+			<section class="card wiz-main" id="wiz-main" aria-live="polite">
+				if vm.Mode == "nat" {
+					@NATBody(vm.NAT, nil, vm.Pending, vm.NATConfigured)
+				} else {
+					@WizSteps(1)
+					@SSHForm(vm.SSH)
+				}
+			</section>
+			@wizAside()
+		</div>
+		@WizModal(false)
+	</div>
+}
+
+templ wizMode(href, title, text string, active bool) {
+	<a class={ "wiz-mode", templ.KV("wiz-mode-on", active) } href={ templ.SafeURL(href) } role="radio" aria-checked={ strconv.FormatBool(active) }>
+		<span class="wiz-mode-title">{ title }</span>
+		<span class="muted small">{ text }</span>
+	</a>
+}
+
+templ wizAside() {
+	<aside class="card wiz-aside" aria-label="Что сделает установщик">
+		<h2 class="card-title">Что сделает установщик</h2>
+		<ol class="wiz-list">
+			<li>Закрепит ключ хоста после подтверждения</li>
+			<li>Зальёт deb той же версии, что у сервера</li>
+			<li>Создаст пользователей tgproxy-agent и tgproxy-deploy</li>
+			<li>Выпустит сертификат: ключ создаётся на агенте</li>
+			<li>Запустит службу и проверит связь до api.telegram.org</li>
+			<li>Добавит агента в балансировку с выбранным весом</li>
+		</ol>
+		<p class="muted small">Требования: Debian 11+ / Ubuntu 22.04+, x86_64, открытый TCP-порт агента для IP сервера.</p>
+	</aside>
+}
+
+// WizSteps — индикатор шагов ветки SSH.
+templ WizSteps(cur int) {
+	<ol class="wiz-steps" aria-label="Шаги">
+		for i, label := range wizSteps {
+			<li
+				class={ "wiz-step", templ.KV("wiz-step-now", i+1 == cur), templ.KV("wiz-step-done", i+1 < cur) }
+				if i+1 == cur {
+					aria-current="step"
+				}
+			>
+				<span class="wiz-step-dot mono">
+					if i+1 < cur {
+						✓
+					} else {
+						{ strconv.Itoa(i + 1) }
+					}
+				</span>
+				<span>{ label }</span>
+			</li>
+		}
+	</ol>
+}
+
+// SSHForm — шаг 1: хост и доступ. Секреты никогда не подставляются обратно.
+templ SSHForm(f SSHFormVM) {
+	if f.Disabled {
+		@views.EmptyState("Установка по SSH не настроена", "Установщик не подключён на этом сервере.")
+	} else {
+		<form
+			class="stack"
+			method="post"
+			action="/agents/new/ssh"
+			hx-post="/agents/new/ssh"
+			hx-target="#wiz-main"
+			hx-swap="innerHTML"
+			hx-disabled-elt="find button[type=submit]"
+			autocomplete="off"
+			novalidate
+		>
+			if f.Errors["_"] != "" {
+				<div class="alert alert-err" role="alert">{ f.Errors["_"] }</div>
+			}
+			if f.Retype {
+				<div class="alert alert-warn" role="status">Ключ, пароль и passphrase не возвращаются на страницу: введите их заново.</div>
+			}
+			<div class="wiz-grid">
+				@views.Field(views.FieldProps{ID: "w-name", Name: "name", Label: "Имя агента", Value: f.Name, Error: f.Errors["name"], Required: true, Attrs: textAttrs(63)})
+				@views.Field(views.FieldProps{ID: "w-host", Name: "host", Label: "Хост или IP", Value: f.Host, Error: f.Errors["host"], Required: true, Attrs: textAttrs(253)})
+				@views.Field(views.FieldProps{ID: "w-sshport", Name: "ssh_port", Label: "SSH-порт", Value: f.SSHPort, Error: f.Errors["ssh_port"], Attrs: numAttrs()})
+				@views.Field(views.FieldProps{ID: "w-user", Name: "user", Label: "Пользователь (sudo)", Value: f.User, Error: f.Errors["user"], Attrs: textAttrs(32)})
+				@views.Field(views.FieldProps{ID: "w-agentport", Name: "agent_port", Label: "Порт агента (mTLS)", Value: f.AgentPort, Error: f.Errors["agent_port"], Attrs: numAttrs()})
+				@views.Field(views.FieldProps{ID: "w-weight", Name: "weight", Label: "Вес в балансировке", Value: f.Weight, Error: f.Errors["weight"], Attrs: numAttrs()})
+			</div>
+			<fieldset class="wiz-auth">
+				<legend class="field-label">Аутентификация</legend>
+				<div class="wiz-auth-sw">
+					<label class="check"><input type="radio" name="auth" id="auth-key" value="key" checked?={ f.Auth != "password" }/><span>Приватный ключ</span></label>
+					<label class="check"><input type="radio" name="auth" id="auth-pw" value="password" checked?={ f.Auth == "password" }/><span>Пароль</span></label>
+				</div>
+				if f.Errors["auth"] != "" {
+					<div class="field-error" role="alert">{ f.Errors["auth"] }</div>
+				}
+				<div class="wiz-auth-key stack">
+					<div class={ "field", templ.KV("field-invalid", f.Errors["private_key"] != "") }>
+						<label class="field-label" for="w-key">Ключ (OpenSSH, PEM)</label>
+						<textarea class="textarea mono" id="w-key" name="private_key" rows="4" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+						if f.Errors["private_key"] != "" {
+							<div class="field-error" role="alert">{ f.Errors["private_key"] }</div>
+						}
+					</div>
+					@views.Field(views.FieldProps{
+						ID: "w-pass", Name: "passphrase", Label: "Passphrase (если есть)", Type: "password", Autocomplete: "new-password",
+						Error: f.Errors["passphrase"], Attrs: templ.Attributes{"spellcheck": "false", "autocapitalize": "off"},
+					})
+				</div>
+				<div class="wiz-auth-pw">
+					@views.Field(views.FieldProps{
+						ID: "w-pw", Name: "password", Label: "Пароль", Type: "password", Autocomplete: "new-password",
+						Error: f.Errors["password"], Attrs: templ.Attributes{"spellcheck": "false", "autocapitalize": "off"},
+					})
+				</div>
+			</fieldset>
+			<div class="wiz-note">Ключ и пароль используются один раз для этой установки и не сохраняются. Дальше сервер управляет агентом через отдельного пользователя tgproxy-deploy с ограниченным sudo.</div>
+			<div class="form-actions">
+				<button type="submit" class="btn btn-primary">Подключиться</button>
+			</div>
+		</form>
+	}
+}
+
+func textAttrs(maxLen int) templ.Attributes {
+	return templ.Attributes{"maxlength": strconv.Itoa(maxLen), "autocomplete": "off", "spellcheck": "false", "autocapitalize": "off"}
+}
+
+func numAttrs() templ.Attributes {
+	return templ.Attributes{"inputmode": "numeric", "maxlength": "5", "autocomplete": "off"}
+}
+
+// HostKeyStep — шаг 2: подтверждение отпечатка ключа хоста.
+templ HostKeyStep(h HostKeyVM) {
+	@WizSteps(2)
+	<div class="stack">
+		<h2 class="form-title">Проверьте ключ хоста</h2>
+		<p>Хост <span class="mono">{ h.Addr }</span> подключается впервые. Сверьте отпечаток с выводом <span class="mono">ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</span> на самом сервере.</p>
+		<div class="wiz-fp">
+			<div class="muted small">{ h.Algo } · SHA256</div>
+			<div class="mono wiz-fp-val" id="wiz-fp">{ h.Fingerprint }</div>
+		</div>
+		<div class="form-actions">
+			<form method="post" action="/agents/new/ssh/confirm" hx-post="/agents/new/ssh/confirm" hx-target="#wiz-main" hx-swap="innerHTML">
+				<input type="hidden" name="pending" value={ h.PendingID }/>
+				<input type="hidden" name="action" value="reject"/>
+				<button type="submit" class="btn">Отклонить</button>
+			</form>
+			<form method="post" action="/agents/new/ssh/confirm" hx-post="/agents/new/ssh/confirm" hx-target="#wiz-main" hx-swap="innerHTML" hx-disabled-elt="find button[type=submit]">
+				<input type="hidden" name="pending" value={ h.PendingID }/>
+				<input type="hidden" name="action" value="confirm"/>
+				<button type="submit" class="btn btn-primary">Отпечаток совпадает, установить</button>
+			</form>
+		</div>
+	</div>
+}
+
+// NATBody — ветка NAT: форма (или выпущенная команда) и список ожидающих токенов.
+templ NATBody(f NATFormVM, issued *NATIssuedVM, pending []PendingRowVM, configured bool) {
+	if !configured {
+		@views.EmptyState("Подключение за NAT не настроено", "Выпуск токенов не подключён на этом сервере.")
+	} else {
+		if issued != nil {
+			@natIssued(*issued)
+		} else {
+			@NATForm(f)
+		}
+		<div class="wiz-sep"></div>
+		@NATPending(pending, false)
+	}
+}
+
+templ NATForm(f NATFormVM) {
+	<form
+		class="stack"
+		method="post"
+		action="/agents/new/nat"
+		hx-post="/agents/new/nat"
+		hx-target="#wiz-main"
+		hx-swap="innerHTML"
+		hx-disabled-elt="find button[type=submit]"
+		novalidate
+	>
+		if f.Errors["_"] != "" {
+			<div class="alert alert-err" role="alert">{ f.Errors["_"] }</div>
+		}
+		<div class="wiz-grid">
+			@views.Field(views.FieldProps{ID: "n-name", Name: "name", Label: "Имя агента", Value: f.Name, Error: f.Errors["name"], Required: true, Attrs: textAttrs(63)})
+			@views.Field(views.FieldProps{ID: "n-weight", Name: "weight", Label: "Вес в балансировке", Value: f.Weight, Error: f.Errors["weight"], Attrs: numAttrs()})
+			<div class={ "field", templ.KV("field-invalid", f.Errors["ttl"] != "") }>
+				<label class="field-label" for="n-ttl">Срок действия токена</label>
+				<select class="select" id="n-ttl" name="ttl">
+					for _, o := range ttlOpts {
+						<option value={ strconv.Itoa(o.Minutes) } selected?={ o.Minutes == f.TTL }>{ o.Label }</option>
+					}
+				</select>
+				if f.Errors["ttl"] != "" {
+					<div class="field-error" role="alert">{ f.Errors["ttl"] }</div>
+				}
+			</div>
+		</div>
+		<div class="wiz-note">SSH не нужен. Агент проверит сервер по отпечатку CA, создаст ключ у себя и получит сертификат. Пакет tgproxy должен быть уже установлен на хосте агента.</div>
+		<div class="form-actions">
+			<button type="submit" class="btn btn-primary">Выпустить токен</button>
+		</div>
+	</form>
+}
+
+templ natIssued(v NATIssuedVM) {
+	<div class="stack">
+		<h2 class="form-title">Токен для «{ v.Name }» выпущен</h2>
+		<div class="alert alert-warn" role="status">Команда содержит токен и показана один раз. Токен одноразовый, действует до { v.Expires }.</div>
+		<div class="field">
+			<span class="field-label">Выполните на хосте агента</span>
+			<div class="copy-row">
+				<pre class="mono code-box wiz-cmd" id="enroll-cmd">{ v.Cmdline }</pre>
+				@views.IconButton("Копировать команду установки", "copy", false, templ.Attributes{"data-copy": "enroll-cmd"})
+			</div>
+		</div>
+		<div class="form-actions">
+			<a class="btn" href="/agents/new?mode=nat">Выпустить ещё</a>
+			@views.IconButton("Отозвать токен: "+v.Name, "trash", true, templ.Attributes{
+				"hx-get": "/agents/enroll/" + v.ID + "/revoke", "hx-target": "#wiz-modal-body", "hx-swap": "innerHTML", "data-modal-open": "wiz-modal",
+			})
+		</div>
+	</div>
+}
+
+// NATPending — ожидающие токены; обновляется опросом. С oob=true заменяет список на странице.
+templ NATPending(rows []PendingRowVM, oob bool) {
+	<section
+		id="nat-pending"
+		class="stack"
+		aria-label="Ожидающие токены"
+		hx-get="/agents/new/nat/pending"
+		hx-trigger="every 10s"
+		hx-swap="outerHTML"
+		hx-history="false"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		<h2 class="card-title">Ожидающие подключения</h2>
+		if len(rows) == 0 {
+			<p class="muted">Неиспользованных токенов нет.</p>
+		} else {
+			@views.Table("Ожидающие токены", pendingHeaders) {
+				for _, r := range rows {
+					<tr>
+						<td class="cell-name">{ r.Name }</td>
+						<td class="mono">{ r.Weight }</td>
+						<td class="mono">{ r.Expires } <span class="muted small">{ r.Left }</span></td>
+						<td class="col-actions">
+							<div class="row-actions">
+								@views.IconButton("Отозвать токен: "+r.Name, "trash", true, templ.Attributes{
+									"hx-get": "/agents/enroll/" + r.ID + "/revoke", "hx-target": "#wiz-modal-body", "hx-swap": "innerHTML", "data-modal-open": "wiz-modal",
+								})
+							</div>
+						</td>
+					</tr>
+				}
+			}
+		}
+	</section>
+}
+
+// WizModal — диалог подтверждения отзыва токена. С oob=true заменяет открытый диалог закрытым.
+templ WizModal(oob bool) {
+	<div
+		id="wiz-modal-wrap"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		@views.Modal("wiz-modal", "Токен подключения") {
+			<div id="wiz-modal-body"></div>
+		}
+	</div>
+}
+
+// InstallPage — шаг 3: установка с логом в реальном времени (SSE).
+templ InstallPage(j JobVM) {
+	<div class="wiz">
+		<div class="wiz-head">
+			<a class="wiz-back" href="/agents">← Агенты</a>
+			<h1 class="wiz-title">Новый агент</h1>
+		</div>
+		<div class="wiz-cols">
+			<section class="card wiz-main" id="wiz-main">
+				@WizSteps(3)
+				<div
+					id="install-job"
+					class="stack"
+					data-job-id={ j.ID }
+					data-events-url={ j.EventsURL }
+					data-status-url={ j.StatusURL }
+					data-started={ strconv.FormatInt(j.StartedMS, 10) }
+					data-finished={ strconv.FormatInt(j.FinishedMS, 10) }
+					data-state={ j.State }
+				>
+					<div class="job-head">
+						<h2 class="form-title">Установка { j.Title }</h2>
+						<span class="job-state" id="job-state">{ j.stateLabel() }</span>
+						<span class="job-time mono muted" id="job-time"></span>
+						<span class="job-conn muted small" id="job-conn" hidden>переподключение…</span>
+					</div>
+					<ol class="job-steps" id="job-steps">
+						for _, s := range j.Steps {
+							<li class="job-step" data-step={ s.Key } data-status={ s.Status }>
+								<span class="job-mark mono" aria-hidden="true"></span>
+								<span class="job-label">{ s.Label }</span>
+								<span class="sr-only job-status">{ s.Status }</span>
+							</li>
+						}
+					</ol>
+					<pre class="job-log mono" id="job-log" aria-label="Журнал установки" tabindex="0"></pre>
+					<div id="job-ok" class="alert alert-ok" role="status" hidden>
+						Агент установлен и включён в балансировку.
+						<a href="/agents">К списку агентов</a>
+					</div>
+					<div id="job-fail" class="alert alert-err" role="alert" hidden>
+						<span id="job-fail-text">Установка не удалась, изменения откачены.</span>
+						<a href="/agents/new">Начать заново</a>
+					</div>
+					<noscript><p class="muted">Для отображения хода установки нужен JavaScript.</p></noscript>
+				</div>
+			</section>
+			@wizAside()
+		</div>
+		<script src={ views.Asset("js/install.js") } defer></script>
+	</div>
+}

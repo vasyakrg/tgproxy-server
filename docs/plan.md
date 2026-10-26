@@ -229,43 +229,46 @@
 
 Цель: агент ставится из UI по SSH на чистый Debian (локально — контейнер `sshd-debian` из `dev/docker-compose.yml`), сертификаты ротируются.
 
-- [ ] **M5-T1 · PKI полностью** (S-core)
+- [x] **M5-T1 · PKI полностью** (S-core)
   - Файлы: `internal/pki/kek.go` (KEK из `/etc/tgproxy/kek`, права 0400, иначе отказ старта; `Seal/Open` AES-256-GCM с AAD = назначение), `store.go` (CA-ключ в БД зашифрован KEK), `csr.go` (`SignAgentCSR(csr, agentID) (certPEM, serial)`: только P-256, только SAN `spiffe://tgproxy/agent/<id>`, KU/EKU clientAuth+serverAuth, TTL 90д), `denylist.go`, `rotation.go` (`DueForRotation(cert, now)` — на 2/3 срока); команда `tgproxy pki init`.
   - Тесты первыми: CSR с RSA / P-384 / лишними SAN / CA:true → отказ; серийник из denylist отклоняется в `VerifyAgentPeer`; KEK с правами 0644 → ошибка; неверный KEK → ошибка расшифровки CA, а не паника; `DueForRotation` на границах 59/60/61 дня.
-- [ ] **M5-T2 · CSR-флоу агента** (S-agent) · зависит от M5-T1
+- [x] **M5-T2 · CSR-флоу агента** (S-agent) · зависит от M5-T1
   - Файлы: `internal/agent/csr.go` (`POST /_agent/csr` — агент генерирует ключ P-256 локально (0600), возвращает CSR; `PUT /_agent/cert` — принимает подписанный, проверяет соответствие ключу, атомарно меняет `tls.Config.GetCertificate`), `internal/agent/bootstrap.go` (одноразовый bootstrap-токен для первой выдачи по mTLS с временным сертом — см. M5-T3).
   - Тесты: серт не к тому ключу → 400; горячая замена без обрыва активных соединений; ключ агента никогда не покидает процесс (нет в ответах).
-- [ ] **M5-T3 · `installer`** (S-ops) · зависит от M5-T1, M5-T2
+- [x] **M5-T3 · `installer`** (S-ops) · зависит от M5-T1, M5-T2
   - Файлы: `internal/server/installer/ssh.go` (`Dial(ctx, Target, Auth, HostKeyPolicy)`: TOFU — первое подключение возвращает `ErrHostKeyUnknown{Fingerprint: ssh.FingerprintSHA256(key)}`; после подтверждения — `ssh.FixedHostKey(pinned)`; несовпадение → `ErrHostKeyMismatch` + алерт `hostkey_mismatch`; `ParsePrivateKeyWithPassphrase` при `*ssh.PassphraseMissingError`), `job.go` (`Installer{Install, Upgrade, Rollback, Uninstall}`; `Job` с шагами и событиями), `steps.go` (шаги мастера: SSH-подключение (ключ хоста закреплён) → Загрузка deb (SFTP в `/var/lib/tgproxy/packages/`) → Установка пакета и пользователей (`dpkg -i`, `tgproxy-deploy` + ed25519-ключ сервера + sudoers из §8) → Выпуск сертификата агента (CSR-флоу) → Запуск `tgproxy-agent` → Проверка mTLS и доступа к Telegram → Включение в балансировку), `sudoers.tmpl`, `remote.go` (шелл-экранирование, только фиксированные команды).
   - Креды админа: только в памяти `Job`, обнуляются после шага 3; не логируются, не пишутся в БД (проверка тестом).
   - Тесты первыми: in-process SSH-сервер (`ssh.NewServerConn` в тесте) — TOFU/FixedHostKey/mismatch; ключ с passphrase без passphrase → понятная ошибка; запись команд фейкового сервера — ровно ожидаемый список; sudoers проходит `visudo -c` (интеграционный тест в контейнере, тег `integration`); падение на шаге N → откат шагов N-1..1 по описанию; события джобы пишутся в `install_job_events` без секретов.
-- [ ] **M5-T4 · Ротация сертификатов и отзыв** (S-proxy) · зависит от M5-T1, M5-T2
+- [x] **M5-T4 · Ротация сертификатов и отзыв** (S-proxy) · зависит от M5-T1, M5-T2
   - Файлы: `internal/server/agents/certrotate.go` (по `cert_not_after` из статуса: 2/3 срока → CSR → подпись → PUT), `remove.go` (удаление агента → серийник в denylist, drain, отзыв доступа).
   - Тесты: fake clock — ротация вызывается один раз; denylist-агент отклоняется транспортом.
-- [ ] **M5-T5 · Экран Агенты** (S-web) · зависит от M2-T6, M5-T4
+- [x] **M5-T5 · Экран Агенты** (S-web) · зависит от M2-T6, M5-T4
   - По `Agents.dc.html`: заголовок «N агентов · M в работе · версия сервера», «Обновить отстающие до vX» (в M6), «+ Добавить агента»; фильтры Поиск/Статус (Все, В работе, Деградация, Недоступен, Drain); таблица (Агент, Связь: «→ агент» / «агент →» (reverse, число соединений), Статус, Вес, rps, p95, Ошибки 5м, In-flight, Версия, Сертификат, Опрос, Drain/Обновить/⋯); меню «⋯»: Изменить вес, Перевыпустить сертификат, Откатить на предыдущую версию, Метрики агента, Удалить (сертификат в denylist); блок «Пороги алертов». API: `agents` CRUD, `agents/{id}/{drain,metrics}`.
   - Тесты: подтверждение для деструктивных действий (htmx `hx-confirm` + серверная проверка); федерация `/api/v1/agents/{id}/metrics`.
-- [ ] **M5-T6 · Мастер «Новый агент»** (S-web) · зависит от M5-T3
+- [x] **M5-T6 · Мастер «Новый агент»** (S-web) · зависит от M5-T3
   - По `AgentAdd.dc.html`, 3 шага: (1) Хост и доступ — Имя, Хост/IP, SSH-порт, Пользователь (sudo), Порт агента (mTLS), Вес; Аутентификация: Приватный ключ (+Passphrase) | Пароль; предупреждение «используются один раз…»; (2) Проверьте ключ хоста — `ED25519 · SHA256:…`, «Отклонить» / «Отпечаток совпадает, установить»; (3) Установка — чеклист шагов + лог в реальном времени по SSE `GET /api/v1/install-jobs/{id}/events` (htmx `sse`-расширение вендорится вместе с htmx 2.0.11). API: `POST /api/v1/ssh/hostkey`, `POST /api/v1/install-jobs`.
   - Тесты: секреты из формы не попадают в логи/БД/SSE; SSE переподключение (`Last-Event-ID`) отдаёт пропущенные события.
-- [ ] **M5-T7 · Wiring + dev-стенд** (S-wire, S-pkg)
+- [x] **M5-T7 · Wiring + dev-стенд** (S-wire, S-pkg)
   - `dev/docker-compose.yml`: сервис `sshd-debian` (debian:12 + openssh-server + systemd), `make dev-target-up`; локальный deb — `make snapshot` (goreleaser `--snapshot`).
   - Приёмка среза: из UI на macOS ставится агент в контейнер, он появляется в балансировке, `getMe` через него проходит; повторное подключение с подменённым host key → отказ + алерт.
 
 ---
 
-- [ ] **M5-T8 · Режим `reverse`: агент дозванивается до сервера** (S-agent + S-proxy, разные файлы — параллельно) · зависит от M1-T6, M5-T1
+- [x] **M5-T8 · Режим `reverse`: агент дозванивается до сервера** (S-agent + S-proxy, разные файлы — параллельно) · зависит от M1-T6, M5-T1
   - S-proxy: `internal/server/gateway/gateway.go` (listener `agent_gateway` `:8444`, TLS 1.3, `ClientAuth: VerifyClientCertIfGiven` — без серта пускается только на `/enroll`; после хендшейка сверка SAN `agent/<id>` с БД и denylist), `internal/transport/reverse.go` (`ReversePool`: на агента до 2 `*http2.ClientConn` из `(&http2.Transport{}).NewClientConn(conn)`, выбор живого, вытеснение старого соединения при повторном подключении, `RoundTrip`/`Status` через тот же `AgentTransport`), `internal/transport/ping.go` (h2 PING 15s, 2 пропуска → `down`).
   - S-agent: `internal/agent/connector.go` (держит 2 исходящих TLS-соединения к `server_url`, на каждом `http2.Server.ServeConn(conn, &http2.ServeConnOpts{Handler: agentMux})`; backoff 1s→60s + jitter; при `PUT /_agent/config` — переключение режима без рестарта процесса), `internal/agent/listener.go` (выделить текущий `dial`-листенер, режим `both` для миграции).
   - Тесты первыми: интеграционный — агент за «NAT» (у агента нет листенера) получает `sendMessage` через reverse-канал, тело байт-в-байт, стрим 20 МБ файла без буферизации; обрыв одного из 2 соединений → запросы идут по второму, 0 ошибок для safe-методов; убить оба → агент `down` за ≤35s, переподключение → `up`; чужой сертификат / серт из denylist → соединение закрыто до первого запроса; второе подключение с тем же id и валидным сертом вытесняет первое; фазы ошибок (`dial`/`write`/…) классифицируются так же, как в `dial`-режиме (общий table-test на обе реализации `AgentTransport`).
-- [ ] **M5-T9 · Enrollment агента за NAT** (S-proxy + S-agent + S-web) · зависит от M5-T8
+- [x] **M5-T9 · Enrollment агента за NAT** (S-proxy + S-agent + S-web) · зависит от M5-T8
   - Файлы: `internal/server/gateway/enroll.go` (`POST /enroll {token, csr}`: токен — SHA-256 в таблице `enrollments` (TTL 1ч, одно использование, `name`, `weight`), rate-limit 5/мин на IP, подпись CSR через `pki`, аудит, алерт `agent_enrolled`), `internal/agent/enroll.go` + `cmd/tgproxy/agent_enroll.go` (`tgproxy agent enroll --server --token --ca-fingerprint`: pinning CA по отпечатку, ключ генерируется локально 0600, пишет `/etc/tgproxy/agent.yaml` с `mode: reverse`, `systemctl enable --now tgproxy-agent`), миграция `enrollments`. UI — вторая ветка мастера `AgentAdd.dc.html` («Агент за NAT»: имя, вес → команда установки с токеном и отпечатком CA, ожидание подключения через SSE). API: `POST/DELETE /api/v1/enrollments`.
   - Тесты первыми: токен повторно → 403; просрочен → 403; неверный отпечаток CA на агенте → отказ до отправки CSR; CSR с чужим CN/SAN → сервер выставляет SAN сам; 6-я попытка в минуту → 429; токен не попадает в логи (`redact`).
   - Приёмка среза: агент в docker-сети без проброса портов (`dev/docker-compose.yml`, сервис `nat-agent`) подключается командой из UI и обслуживает трафик.
 
+**Срез M5:** агент `ssh1` поставлен из UI по SSH в контейнер `sshd-debian` (7/7 шагов, лог по SSE, откат проверен на отсутствии пакета и на падении юнита), `nat1` подключён через enrollment в docker без проброса портов; трафик распределяется по весам между dial, reverse и SSH-агентами. Подмена host key → отказ; сброс пина — только CLI `tgproxy hostkeys forget`. Отклонения от §8: sudo у `tgproxy-deploy` — только `tgproxy deploy-helper` (шаблоны `dpkg`/`systemctl` из исходной редакции давали root). Не проверено: установка на amd64 под Rosetta (hardening юнита скрывает `/proc/sys` — ограничение эмуляции, dev-стенд работает в нативной архитектуре).
+В M7: токен enrollment виден в `ps` во время `sudo TGP_ENROLL_TOKEN=…` (читать из stdin); подтверждение `hostkeys forget` без проверки tty.
+
 ## M6 — Пакет, самообновление сервера, раскатка агентов, экран Система · объём **L**
 
-- [ ] **M6-T1 · goreleaser + nfpm** (S-pkg)
+- [x] **M6-T1 · goreleaser + nfpm** (сделано в рамках M5: deb, юниты с hardening 1.2, smoke, CI `deb-smoke`) (S-pkg)
   - Файлы: `.goreleaser.yaml` (`version: 2`; builds linux/amd64, darwin/arm64, darwin/amd64, `CGO_ENABLED=0`, `-trimpath`, ldflags buildinfo; archives tar.gz; `nfpms` deb: `contents` — бинарь `/usr/bin/tgproxy`, юниты `/lib/systemd/system/`, `/etc/tgproxy/server.yaml` и `agent.yaml` с `type: "config|noreplace"`, `/var/lib/tgproxy` (dir, owner tgproxy, 0750); `scripts` preinstall/postinstall/preremove/postremove; `checksum`; `signs` — minisign), `packaging/systemd/{tgproxy-server.service,tgproxy-agent.service,tgproxy-update.path,tgproxy-update.service}` (hardening из §8), `packaging/scripts/{preinst,postinst,prerm,postrm}.sh`, `packaging/etc/{server,agent}.yaml`.
   - Тесты: `goreleaser check`; CI-джоба smoke в `debian:12` (systemd-контейнер): install → `systemctl start tgproxy-server` → `/healthz`; upgrade поверх → изменённый конфиг сохранён; `remove` → юниты остановлены; `purge` → данные и юзер удалены; `systemd-analyze security tgproxy-server.service` ≤ 2.0 (парсинг вывода).
 - [ ] **M6-T2 · `updater`: источники релизов и minisign** (S-ops)

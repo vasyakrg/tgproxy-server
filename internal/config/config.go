@@ -50,6 +50,9 @@ const (
 
 	AgentModeDial    AgentMode = "dial"
 	AgentModeReverse AgentMode = "reverse"
+	// AgentModeBoth — dial-листенер и reverse-коннектор одновременно (миграция
+	// агента между режимами без простоя). Только для конфигурации агента.
+	AgentModeBoth AgentMode = "both"
 
 	WebhookDeny        WebhookPolicy = "deny"
 	WebhookPassthrough WebhookPolicy = "passthrough"
@@ -247,6 +250,7 @@ type AgentConfig struct {
 	Logging          LoggingConfig `yaml:"logging"`
 
 	telegramAPIURL string
+	path           string // файл, из которого загружен конфиг (пусто — не из файла)
 }
 
 // AgentListen — адреса листенеров агента.

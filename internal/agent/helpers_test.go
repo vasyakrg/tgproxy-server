@@ -76,6 +76,14 @@ func newPKI(t *testing.T) (*pki.CA, tls.Certificate, tls.Certificate, string) {
 // newEnv поднимает агента с mTLS и фейковым Telegram (TLS-сервер).
 func newEnv(t *testing.T, tg http.Handler) *env {
 	t.Helper()
+	e, upPool := newEnvNoAgent(t, tg)
+	e.startAgent(t, WithUpstreamRootCAs(upPool))
+	return e
+}
+
+// newEnvNoAgent готовит PKI, конфиг и фейковый Telegram без запуска агента.
+func newEnvNoAgent(t *testing.T, tg http.Handler) (*env, *x509.CertPool) {
+	t.Helper()
 	ca, srvCert, agCert, dir := newPKI(t)
 	e := &env{ca: ca, pool: ca.Pool(), srvCert: srvCert, agCert: agCert}
 	e.upstream = httptest.NewTLSServer(tg)
@@ -95,8 +103,7 @@ func newEnv(t *testing.T, tg http.Handler) *env {
 
 	upPool := x509.NewCertPool()
 	upPool.AddCert(e.upstream.Certificate())
-	e.startAgent(t, WithUpstreamRootCAs(upPool))
-	return e
+	return e, upPool
 }
 
 func (e *env) startAgent(t *testing.T, opts ...Option) {

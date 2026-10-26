@@ -42,6 +42,7 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, logger *slog.Logger,
 	if err != nil {
 		return err
 	}
+	mrec.WatchReverseConns(a.ReverseConns)
 	var msrv *agentMetricsServer
 	if cfg.Listen.Metrics != "" {
 		msrv, err = startAgentMetrics(ctx, cfg.Listen.Metrics, cfg.Metrics.Bearer.Reveal(), reg, logger)
@@ -66,7 +67,7 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, logger *slog.Logger,
 			logger.Info("config reloaded (only log level is applied at runtime)")
 		})
 	}
-	logger.Info("agent starting", "api", cfg.Listen.API)
+	logger.Info("agent starting", "mode", cfg.Mode, "api", cfg.Listen.API, "server_url", cfg.ServerURL)
 	if o.Listener != nil {
 		return a.Serve(ctx, o.Listener)
 	}

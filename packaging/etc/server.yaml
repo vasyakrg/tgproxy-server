@@ -1,0 +1,81 @@
+# tgproxy server — прод-шаблон (/etc/tgproxy/server.yaml, root:tgproxy 0640).
+# Схема: internal/config/config.go. Проверка:
+#   tgproxy config validate --mode server -c /etc/tgproxy/server.yaml
+# Пакет НЕ перезаписывает этот файл при обновлении (conffile, noreplace).
+#
+# Перед первым запуском:
+#   1. Укажите server.public_base_url и tls (сертификат/ключ или acme).
+#   2. Создайте KEK (владелец tgproxy, 0400):
+#        tgproxy pki kek-init --out /etc/tgproxy/kek && chown tgproxy:tgproxy /etc/tgproxy/kek
+#   3. Создайте /etc/tgproxy/users_database.yml (root:tgproxy 0640, хеш: `tgproxy hashpw`); TOTP обязателен.
+#   4. Добавьте хотя бы одно правило доступа (access_rules) — без правил прокси отвечает отказом всем.
+
+server:
+  # Публичный base URL прокси: показывается в UI «Доступ» (https).
+  public_base_url: "https://tg.example.com"
+
+# Порты >= 1024: юнит работает с пустым CapabilityBoundingSet. Для :443 добавьте drop-in
+# (systemctl edit tgproxy-server):  [Service] AmbientCapabilities=CAP_NET_BIND_SERVICE
+#                                             CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+listen:
+  proxy: ":8443"                  # прокси для ботов (TLS на входе)
+  admin: "127.0.0.1:8090"         # Web-UI + /api/v1 + /healthz — только loopback; наружу через reverse proxy
+  metrics: "127.0.0.1:9090"       # /metrics; не-loopback требует metrics.bearer_file
+  agent_gateway: ":8444"          # reverse-соединения агентов (mTLS) и /enroll
+
+tls:
+  mode: files                     # off | files | acme
+  cert_file: /etc/tgproxy/tls/server.crt   # ПЛЕЙСХОЛДЕР: положите свой сертификат
+  key_file: /etc/tgproxy/tls/server.key    # ПЛЕЙСХОЛДЕР: права 0600/0640 (root:tgproxy)
+
+# Встроенный CA для mTLS server <-> agent; ключ CA шифруется KEK. Сервер ожидает в pki.dir
+# ca.crt, server-client.crt и server-client.key (автовыпуск CA — M5; до этого — `tgproxy pki dev-init`).
+pki:
+  dir: /var/lib/tgproxy/pki
+  kek_file: /etc/tgproxy/kek
+
+auth:
+  users_file: /etc/tgproxy/users_database.yml   # формат Authelia, 0640 root:tgproxy; TOTP обязателен
+
+store:
+  driver: sqlite
+  sqlite_path: /var/lib/tgproxy/tgproxy.db
+
+update:
+  enabled: true
+  repo: vasyakrg/tgproxy-server
+  staging_dir: /var/lib/tgproxy/updates
+  # min_version: "0.1.0"          # даунгрейд ниже запрещён
+  # http_proxy: http://proxy.internal:3128
+
+# Токены Telegram-ботов приходят от клиентов в запросах и нигде не хранятся.
+webhook_policy: deny              # deny | passthrough
+
+# Агенты засеваются в БД только при пустых таблицах (первый старт); дальше — UI/CLI.
+agents: []
+# agents:
+#   - id: eu-1
+#     mode: dial                  # сервер сам подключается
+#     url: https://203.0.113.10:8443
+#   - id: nat-1
+#     mode: reverse               # агент подключается к agent_gateway
+
+# Подходящее хотя бы одно правило пропускает запрос. Без правил доступ закрыт (не open relay).
+# Правило без сетей и без ключа, а также 0.0.0.0/0 без ключа — ошибка валидации.
+access_rules: []
+# access_rules:
+#   - name: office                # только сеть: /bot<token>/<method>
+#     cidrs: [203.0.113.0/24]
+#     rps: 50
+#   - name: ci-key                # только ключ: /k/<ключ>/bot<token>/<method>
+#     key_sha256: "<sha256 hex ключа; получить: printf '%s' \"$KEY\" | sha256sum>"
+#   - name: backend               # ключ из файла (хешируется при загрузке)
+#     key_file: /etc/tgproxy/keys/backend.key   # 0640 root:tgproxy, не короче 16 символов
+
+# Алерты в Telegram (опционально): файл с токеном бота-уведомителя, 0640 root:tgproxy.
+# notify:
+#   bot_token_file: /etc/tgproxy/notify-token
+
+logging:
+  level: info
+  format: json                    # journald: journalctl -u tgproxy-server -o cat

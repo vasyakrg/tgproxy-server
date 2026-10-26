@@ -1,0 +1,308 @@
+package screens
+
+import (
+	"strconv"
+
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/views"
+)
+
+var agentHeaders = []string{"Агент", "Связь", "Статус", "Вес", "rps", "RTT", "In-flight", "Версия", "Сертификат", "Опрос", views.ActionsHeader}
+
+// AgentsPage — экран «Агенты».
+templ AgentsPage(vm AgentsVM) {
+	@views.PageHeader("Агенты", vm.Summary()) {
+		<a class="btn btn-primary" href="/agents/new">+ Добавить агента</a>
+	}
+	<section class="card card-flush" aria-label="Агенты">
+		<form
+			id="agents-filter"
+			class="errs-filters"
+			method="get"
+			action="/agents"
+			hx-get="/agents"
+			hx-trigger="submit, input delay:300ms, change"
+			hx-target="#agents-body"
+			hx-swap="outerHTML"
+		>
+			<div class="field ag-f-q">
+				<label class="field-label" for="ag-q">Поиск</label>
+				<input class="input" id="ag-q" name="q" type="search" placeholder="имя или адрес" autocomplete="off" value={ vm.Query }/>
+			</div>
+			<div class="field ag-f-status">
+				<label class="field-label" for="ag-status">Статус</label>
+				<select class="select" id="ag-status" name="status">
+					for _, o := range vm.StatusOpts {
+						<option value={ o.Value } selected?={ o.Value == vm.Status }>{ o.Label }</option>
+					}
+				</select>
+			</div>
+		</form>
+		@AgentsBody(vm, false)
+	</section>
+	@AgentModal(false)
+}
+
+// AgentsBody — таблица агентов; обновляется опросом htmx (outerHTML). С oob=true заменяет таблицу на странице.
+templ AgentsBody(vm AgentsVM, oob bool) {
+	<div
+		id="agents-body"
+		hx-get="/agents"
+		hx-trigger={ "every " + vm.pollMS() }
+		hx-include="#agents-filter"
+		hx-swap="outerHTML"
+		hx-history="false"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		if len(vm.Rows) == 0 {
+			if vm.Total == 0 {
+				@views.EmptyState("Агентов пока нет", "Добавьте первый агент, чтобы проксировать трафик ботов.") {
+					<a class="btn btn-primary" href="/agents/new">+ Добавить агента</a>
+				}
+			} else {
+				@views.EmptyState("Ничего не найдено", "Измените поиск или фильтр по статусу.")
+			}
+		} else {
+			@views.Table("Агенты", agentHeaders) {
+				for _, r := range vm.Rows {
+					@agentRow(r, vm)
+				}
+			}
+		}
+	</div>
+}
+
+templ agentRow(r AgentRowVM, vm AgentsVM) {
+	<tr>
+		<td>
+			<div class="cell-stack">
+				<span class="cell-name">{ r.Name }</span>
+				<span class="cell-sub col-id" title={ r.Addr }>{ r.Addr }</span>
+			</div>
+		</td>
+		<td>
+			@views.Chip(r.LinkLabel, r.LinkTone)
+			if r.LinkConns != "" {
+				<span class="muted small">{ r.LinkConns }</span>
+			}
+		</td>
+		<td>@views.StatusPill(r.Status, "")</td>
+		<td class="mono">{ r.Weight }</td>
+		<td class="mono">{ r.RPS }</td>
+		<td class="mono">{ r.RTT }</td>
+		<td class="mono">{ r.Inflight }</td>
+		<td class={ "mono", templ.KV("ver-stale", r.VersionStale) }>{ r.Version }</td>
+		<td class={ "mono", templ.KV("tone-warn", r.CertTone == "warn"), templ.KV("tone-err", r.CertTone == "err") }>{ r.Cert }</td>
+		<td class={ "mono", templ.KV("muted", r.SeenMuted) }>{ r.Seen }</td>
+		<td class="col-actions">
+			<div class="row-actions">
+				if vm.Can.Drain {
+					if r.Draining {
+						@views.IconButton("Вернуть в балансировку (undrain): "+r.Name, "undrain", false, templ.Attributes{
+							"hx-post": "/agents/" + r.ID + "/undrain", "hx-target": "#agents-body", "hx-swap": "outerHTML",
+							"hx-include": "#agents-filter", "hx-disabled-elt": "this",
+						})
+					} else {
+						@views.IconButton("Вывести из балансировки (drain): "+r.Name, "drain", false, templ.Attributes{
+							"hx-post": "/agents/" + r.ID + "/drain", "hx-target": "#agents-body", "hx-swap": "outerHTML",
+							"hx-include": "#agents-filter", "hx-disabled-elt": "this",
+						})
+					}
+				}
+				if vm.Can.Rotate {
+					@views.IconButton("Перевыпустить сертификат: "+r.Name, "refresh", false, modalOpen("/agents/"+r.ID+"/rotate"))
+				}
+				if vm.Can.Mode {
+					@views.IconButton("Сменить режим связи: "+r.Name, "swap", false, modalOpen("/agents/"+r.ID+"/mode"))
+				}
+				if vm.Can.Weight {
+					@views.IconButton("Изменить вес: "+r.Name, "edit", false, modalOpen("/agents/"+r.ID+"/weight"))
+				}
+				@views.IconButton("Ещё действия: "+r.Name, "more", false, modalOpen("/agents/"+r.ID+"/more"))
+			</div>
+		</td>
+	</tr>
+}
+
+func modalOpen(getURL string) templ.Attributes {
+	return templ.Attributes{
+		"hx-get": getURL, "hx-target": "#agent-modal-body", "hx-swap": "innerHTML", "data-modal-open": "agent-modal",
+	}
+}
+
+// AgentModal — диалог действий (тело подгружается htmx). С oob=true заменяет открытый диалог закрытым.
+templ AgentModal(oob bool) {
+	<div
+		id="agent-modal-wrap"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		@views.Modal("agent-modal", "Агент") {
+			<div id="agent-modal-body"></div>
+		}
+	</div>
+}
+
+// AgentsNotConfigured — экран, когда управление агентами не подключено.
+templ AgentsNotConfigured() {
+	@views.PageHeader("Агенты", "")
+	@views.EmptyState("Управление агентами не настроено", "Реестр агентов на этом сервере не подключён.")
+}
+
+// ConfirmDialog — подтверждение опасного действия; сервер дополнительно требует confirm=yes.
+templ ConfirmDialog(c ConfirmVM) {
+	<form
+		class="stack"
+		method="post"
+		action={ templ.SafeURL(c.Action) }
+		hx-post={ c.Action }
+		hx-target={ c.target() }
+		hx-swap="innerHTML"
+		hx-include="#agents-filter"
+		hx-disabled-elt="find button[type=submit]"
+	>
+		<input type="hidden" name="confirm" value="yes"/>
+		<h3 class="form-title">{ c.Title }</h3>
+		<p>{ c.Text }</p>
+		if c.Note != "" {
+			<p class="muted">{ c.Note }</p>
+		}
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class={ "btn", templ.KV("btn-danger", c.Danger), templ.KV("btn-primary", !c.Danger) }>{ c.Label }</button>
+		</div>
+	</form>
+}
+
+// MoreCard — сведения об агенте и переход к удалению.
+templ MoreCard(m MoreVM) {
+	<div class="stack">
+		<h3 class="form-title">{ m.Row.Name }</h3>
+		<dl class="kv">
+			<dt>Идентификатор</dt>
+			<dd class="mono">{ m.Row.ID }</dd>
+			<dt>Адрес</dt>
+			<dd class="mono">{ m.Row.Addr }</dd>
+			<dt>Связь</dt>
+			<dd>{ m.Row.LinkLabel } { m.Row.LinkConns }</dd>
+			<dt>Сертификат</dt>
+			<dd class="mono">{ m.Row.Cert }</dd>
+			<dt>Версия</dt>
+			<dd class="mono">{ m.Row.Version }</dd>
+		</dl>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Закрыть</button>
+			if m.CanRemove {
+				@views.Button("Удалить агента…", views.ButtonDanger, templ.Attributes{
+					"hx-get": "/agents/" + m.Row.ID + "/delete", "hx-target": "#agent-modal-body", "hx-swap": "innerHTML",
+				})
+			}
+		</div>
+	</div>
+}
+
+// ModeForm — смена режима связи агента.
+templ ModeForm(f ModeFormVM) {
+	<form
+		class="stack"
+		method="post"
+		action={ templ.SafeURL("/agents/" + f.ID + "/mode") }
+		hx-post={ "/agents/" + f.ID + "/mode" }
+		hx-target="#agent-modal-body"
+		hx-swap="innerHTML"
+		hx-include="#agents-filter"
+		hx-disabled-elt="find button[type=submit]"
+		novalidate
+	>
+		<h3 class="form-title">Режим связи: { f.Name }</h3>
+		if f.Errors["_"] != "" {
+			<div class="alert alert-err" role="alert">{ f.Errors["_"] }</div>
+		}
+		<fieldset class="radio-group">
+			<legend class="field-label">Как сервер и агент соединяются</legend>
+			@modeRadio("dial", "→ агент (dial)", "сервер сам подключается к порту агента", f.Mode)
+			@modeRadio("reverse", "агент → (reverse)", "агент сам подключается к порту 8444 сервера, подходит для NAT", f.Mode)
+			@modeRadio("both", "оба (миграция)", "агент принимает подключения и сам подключается к серверу", f.Mode)
+			if f.Errors["mode"] != "" {
+				<div class="field-error" role="alert">{ f.Errors["mode"] }</div>
+			}
+		</fieldset>
+		@views.Field(views.FieldProps{
+			ID: "mode-url", Name: "agent_url", Label: "Адрес агента для режимов «→ агент» и «оба»", Value: f.AgentURL,
+			Placeholder: "https://203.0.113.10:8443", Error: f.Errors["agent_url"],
+			Hint:  "Нужен, если у агента нет адреса (подключён через NAT). Для текущего адреса оставьте как есть.",
+			Attrs: templ.Attributes{"autocomplete": "off", "spellcheck": "false", "maxlength": "200", "inputmode": "url"},
+		})
+		<p class="form-note">Безопасный путь миграции: «оба» → дождитесь соединений агента → «агент →». Прямой переход на «агент →» без соединений отклоняется.</p>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-primary">Применить</button>
+		</div>
+	</form>
+}
+
+// WeightForm — вес агента в балансировке (1..100).
+templ WeightForm(f WeightFormVM) {
+	<form
+		class="stack"
+		method="post"
+		action={ templ.SafeURL("/agents/" + f.ID + "/weight") }
+		hx-post={ "/agents/" + f.ID + "/weight" }
+		hx-target="#agent-modal-body"
+		hx-swap="innerHTML"
+		hx-include="#agents-filter"
+		hx-disabled-elt="find button[type=submit]"
+		novalidate
+	>
+		<h3 class="form-title">Вес: { f.Name }</h3>
+		@views.Field(views.FieldProps{
+			ID: "agent-weight", Name: "weight", Label: "Вес в балансировке (1–100)", Value: f.Weight, Type: "number",
+			Error: f.Errors["weight"], Required: true,
+			Hint:  "Доля трафика пропорциональна весу; изменение применяется сразу.",
+			Attrs: templ.Attributes{"min": "1", "max": "100", "step": "1", "inputmode": "numeric", "autocomplete": "off"},
+		})
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-primary">Сохранить</button>
+		</div>
+	</form>
+}
+
+templ modeRadio(value, label, hint, cur string) {
+	<label class="radio-opt">
+		<input type="radio" name="mode" value={ value } checked?={ value == cur }/>
+		<span class="radio-text">
+			<span>{ label }</span>
+			<span class="muted small">{ hint }</span>
+		</span>
+	</label>
+}
+
+// RemovedPanel — итог удаления агента.
+templ RemovedPanel(v RemovedVM) {
+	<div class="stack">
+		<h3 class="form-title">Агент «{ v.Name }» удалён</h3>
+		<p>Отозвано сертификатов: <strong>{ strconv.Itoa(v.Revoked) }</strong>. Серийники добавлены в denylist.</p>
+		if v.DrainTimedOut {
+			<div class="alert alert-warn" role="status">Не все запросы завершились за таймаут drain: часть могла оборваться.</div>
+		}
+		if v.DrainUnchecked {
+			<div class="alert alert-warn" role="status">Агент был недоступен: завершение запросов не проверялось.</div>
+		}
+		<div class="form-actions">
+			<button type="button" class="btn btn-primary" data-modal-close>Готово</button>
+		</div>
+	</div>
+}
+
+// ModalError — ошибка действия внутри диалога.
+templ ModalError(msg string) {
+	<div class="stack">
+		<div class="alert alert-err" role="alert">{ msg }</div>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Закрыть</button>
+		</div>
+	</div>
+}

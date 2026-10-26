@@ -82,3 +82,7 @@ func (r enrollmentRepo) ListPending(ctx context.Context, now time.Time) ([]store
 func (r enrollmentRepo) DeleteExpired(ctx context.Context, now time.Time) (int, error) {
 	return r.s.execCount(ctx, `DELETE FROM enrollments WHERE expires_at <= ?`, ms(now))
 }
+
+func (r enrollmentRepo) Delete(ctx context.Context, id string) error {
+	return r.s.execAffected(ctx, `DELETE FROM enrollments WHERE id = ? AND used_at IS NULL`, id)
+}

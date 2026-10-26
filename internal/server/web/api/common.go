@@ -5,6 +5,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/auth"
 )
 
 // Wrap оборачивает хендлер (RequireAuth, Protect и т.п.). nil — без обёртки.
@@ -31,4 +33,22 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, code int, kind, msg string) {
 	writeJSON(w, code, errBody{Error: kind, Message: msg})
+}
+
+// actorOf — кто делает запрос: логин из сессии и IP клиента.
+func actorOf(r *http.Request, clientIP func(*http.Request) string) Actor {
+	ip := ""
+	if clientIP != nil {
+		ip = clientIP(r)
+	}
+	s, _ := auth.SessionFromContext(r.Context())
+	if s == nil {
+		return Actor{IP: ip}
+	}
+	return Actor{User: s.User, IP: ip}
+}
+
+// Registrar — то, куда регистрируются маршруты API (*http.ServeMux).
+type Registrar interface {
+	Handle(pattern string, h http.Handler)
 }

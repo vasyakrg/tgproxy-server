@@ -35,6 +35,8 @@ func newAgentCmd() *cobra.Command {
 			})
 		},
 	}
+	cmd.AddCommand(newAgentCSRCmd())
+	cmd.AddCommand(newAgentEnrollCmd())
 	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "путь к agent.yaml")
 	_ = cmd.MarkFlagRequired("config")
 	cmd.Flags().StringVar(&tgURL, "telegram-api-url", "", "подмена upstream (только e2e)")

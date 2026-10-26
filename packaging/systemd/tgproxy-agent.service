@@ -1,0 +1,55 @@
+[Unit]
+Description=tgproxy agent (egress to Telegram Bot API)
+Documentation=https://github.com/vasyakrg/tgproxy-server
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/tgproxy/agent.yaml
+
+[Service]
+Type=simple
+User=tgproxy
+Group=tgproxy
+ExecStart=/usr/bin/tgproxy agent -c /etc/tgproxy/agent.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=40s
+LimitNOFILE=65536
+
+# Каталоги: /var/lib/tgproxy (tgproxy:tgproxy 0750), /etc/tgproxy — read-only.
+StateDirectory=tgproxy
+StateDirectoryMode=0750
+ConfigurationDirectory=tgproxy
+ConfigurationDirectoryMode=0750
+UMask=0077
+
+# Hardening (docs/architecture.md §8).
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

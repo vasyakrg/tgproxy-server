@@ -1,0 +1,18 @@
+# Сгенерировано tgproxy-server при установке агента. Схема: internal/config.
+listen:
+  api: "0.0.0.0:{{.Port}}"
+  metrics: "127.0.0.1:9443"
+
+mode: dial
+
+tls:
+  cert_file: {{.CertFile}}
+  key_file: {{.KeyFile}}
+  ca_file: {{.CAFile}}
+allowed_client_san: {{.SAN}}
+
+data_dir: /var/lib/tgproxy/agent
+
+logging:
+  level: info
+  format: json

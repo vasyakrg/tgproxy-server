@@ -22,6 +22,7 @@ type Store interface {
 	Certs() CertRepo
 	Enrollments() EnrollmentRepo
 	Errors() ErrorEventRepo
+	InstallJobs() InstallJobRepo
 	Close() error
 }
 
@@ -110,6 +111,8 @@ type HostKeyRepo interface {
 	Get(ctx context.Context, host string) (HostKey, error)
 	Put(ctx context.Context, k HostKey) error
 	Delete(ctx context.Context, host string) error
+	// List — все пины, по host (для CLI `tgproxy hostkeys list`).
+	List(ctx context.Context) ([]HostKey, error)
 }
 
 // CertRepo — сертификаты, denylist серийников, CA.
@@ -134,6 +137,8 @@ type EnrollmentRepo interface {
 	// (причина намеренно не различается).
 	Consume(ctx context.Context, tokenHash []byte, now time.Time) (Enrollment, error)
 	ListPending(ctx context.Context, now time.Time) ([]Enrollment, error)
+	// Delete отзывает неиспользованный токен по ID: ErrNotFound, если записи нет или токен уже использован.
+	Delete(ctx context.Context, id string) error
 	DeleteExpired(ctx context.Context, now time.Time) (int, error)
 }
 
@@ -143,4 +148,18 @@ type ErrorEventRepo interface {
 	List(ctx context.Context, q ErrorQuery) ([]ErrorEvent, error)
 	// Trim оставляет последние keep записей и удаляет всё старше before (zero — не ограничивать по времени).
 	Trim(ctx context.Context, keep int, before time.Time) (int64, error)
+}
+
+// InstallJobRepo — задачи SSH-установки и их события.
+type InstallJobRepo interface {
+	Create(ctx context.Context, j InstallJob) error
+	Get(ctx context.Context, id string) (InstallJob, error)
+	// SetState обновляет состояние; для финальных (не running) выставляется finished_at.
+	SetState(ctx context.Context, id, state, errMsg string) error
+	// SetAgent привязывает задачу к агенту.
+	SetAgent(ctx context.Context, id, agentID string) error
+	// AppendEvent добавляет событие и возвращает его с присвоенным монотонным ID.
+	AppendEvent(ctx context.Context, e InstallJobEvent) (InstallJobEvent, error)
+	// Events — события с ID > afterID по возрастанию.
+	Events(ctx context.Context, jobID string, afterID int64) ([]InstallJobEvent, error)
 }

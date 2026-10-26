@@ -12,6 +12,7 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/config"
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
+	"github.com/vasyakrg/tgproxy-server/internal/server/installer"
 	"github.com/vasyakrg/tgproxy-server/internal/server/proxy"
 	"github.com/vasyakrg/tgproxy-server/internal/server/router"
 	"github.com/vasyakrg/tgproxy-server/internal/server/web"
@@ -166,8 +167,8 @@ func (s *Server) wireWeb(cfg *config.ServerConfig) error {
 		ServerVersion: buildinfo.Version, Log: s.logger})))
 	rt.Mount("GET /errors", protected(screens.NewErrors(screens.ErrorsDeps{
 		Shell: rt, Source: s.obs.hq, Agents: s.reg, Log: s.logger})))
+	agentsAPI := s.mountAgents(rt, a, cfg)
 	for _, st := range []struct{ path, title, nav, when string }{
-		{"/agents", "Агенты", views.NavAgents, "M5"},
 		{"/system", "Система", views.NavSystem, "M6"},
 	} {
 		rt.Mount("GET "+st.path, protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +182,7 @@ func (s *Server) wireWeb(cfg *config.ServerConfig) error {
 		Routes(muxMounter{apiMux}, wrapRefresh(protected, refresh))
 	(&api.StatsAPI{Stats: s.obs.hq, Agents: s.reg, Live: liveInflight{s.obs.inflight}, Log: s.logger}).Routes(apiMux, protected)
 	(&api.ErrorsAPI{Source: s.obs.hq, Log: s.logger}).Routes(apiMux, protected)
+	agentsAPI(apiMux, protected)
 	rt.Mount("/api/v1/", apiMux)
 
 	s.web = &webState{users: users, auth: a, handler: rt}
@@ -242,5 +244,75 @@ func (s *Server) reloadUsers() {
 	}
 	if err := s.web.users.Reload(); err != nil {
 		s.logger.Error("users file reload rejected, keeping previous", "error", redact.Error(err))
+	}
+}
+
+// observedInstaller считает итоги задач установки (tgp_install_jobs_total{result}) поверх installer.Installer.
+type observedInstaller struct {
+	*installer.Installer
+	observe func(result string)
+}
+
+// installWatchTimeout — потолок ожидания итога задачи установки для метрики.
+const installWatchTimeout = time.Hour
+
+func (o observedInstaller) Install(ctx context.Context, req installer.Request) (string, error) {
+	id, err := o.Installer.Install(ctx, req)
+	if err != nil {
+		o.observe("rejected")
+		return id, err
+	}
+	go func() { //nolint:gosec,contextcheck // наблюдение за задачей живёт дольше HTTP-запроса
+		wctx, cancel := context.WithTimeout(context.Background(), installWatchTimeout)
+		defer cancel()
+		_ = o.Wait(wctx, id)
+		st, serr := o.Status(wctx, id)
+		switch {
+		case serr != nil:
+			o.observe("unknown")
+		case st.State == store.InstallDone:
+			o.observe("ok")
+		default:
+			o.observe("failed")
+		}
+	}()
+	return id, nil
+}
+
+// mountAgents подключает экран «Агенты» и мастер; возвращает функцию монтирования REST API.
+// Без PKI-режима (статические agent_tls) нет ротации, удаления, смены режима, установки и enrollment:
+// экран показывает эти части как «не настроено».
+func (s *Server) mountAgents(rt *web.Router, a *auth.Auth, cfg *config.ServerConfig) func(*http.ServeMux, func(http.Handler) http.Handler) {
+	acfg := api.AgentsConfig{
+		Agents: s.reg, Drainer: s.reg, Weight: s.reg, Audit: s.st.Audit(), Logger: s.logger,
+	}
+	deps := screens.AgentsDeps{Auth: a, ServerVersion: buildinfo.Version, ClientIP: s.checker.ClientIP, Logger: s.logger}
+	if p := s.pki; p != nil {
+		acfg.Rotator, acfg.Remover, acfg.Reverse = p.rotator, p.remover, p.pool
+		acfg.Mode = api.TransportModeSetter{Agents: s.st.Agents(), Refs: s.reg, Transport: s.tr, Refresh: s.reg.Refresh}
+		if u, ok := gatewayURL(cfg, s.opts.GatewayURL); ok {
+			acfg.GatewayURL = u
+		}
+		deps.Install = api.NewInstallService(api.InstallConfig{
+			Installer: observedInstaller{Installer: p.inst, observe: s.obs.m.InstallJob},
+			HostKeys:  s.st.HostKeys(), Audit: s.st.Audit(), Logger: s.logger,
+		})
+		if p.enroll != nil {
+			deps.Enroll = api.NewEnrollService(api.EnrollConfig{
+				Issuer: p.enroll, Enrollments: s.st.Enrollments(), Audit: s.st.Audit(), Logger: s.logger,
+			})
+		}
+	}
+	deps.Service = api.NewAgentsService(acfg)
+	screens.MountAgents(rt, deps)
+	return func(mux *http.ServeMux, wrap func(http.Handler) http.Handler) {
+		w := api.Wrap(wrap)
+		(&api.AgentsAPI{Service: deps.Service, ClientIP: s.checker.ClientIP, Log: s.logger}).Routes(mux, w)
+		if deps.Install != nil {
+			(&api.InstallAPI{Service: deps.Install, ClientIP: s.checker.ClientIP, Log: s.logger}).Routes(mux, w)
+		}
+		if deps.Enroll != nil {
+			(&api.EnrollAPI{Service: deps.Enroll, ClientIP: s.checker.ClientIP, Log: s.logger}).Routes(mux, w)
+		}
 	}
 }

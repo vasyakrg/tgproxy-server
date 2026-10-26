@@ -13,14 +13,10 @@ listen:
 tls:
   mode: "off"                      # off | files | acme; в dev TLS на входе нет (loopback)
 
-# mTLS-материалы сервера для связи с агентами (создаёт `make dev-certs`).
-agent_tls:
-  ca_file: ./dev/tls/ca.crt
-  cert_file: ./dev/tls/server-client.crt
-  key_file: ./dev/tls/server-client.key
-
+# agent_tls не задан: сервер берёт CA из БД под KEK (`make dev-setup` = kek-init + pki init) и сам
+# выпускает себе mTLS-сертификат; agent_gateway (:8444) принимает reverse-агентов и /enroll.
+# Публичный URL gateway для команды enrollment: хост server.public_base_url + порт listen.agent_gateway.
 pki:
-  dir: ./dev/tls
   kek_file: ./dev/data/kek
 
 auth:

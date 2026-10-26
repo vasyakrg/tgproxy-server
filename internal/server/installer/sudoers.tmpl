@@ -1,0 +1,4 @@
+# Managed by tgproxy-server. Do not edit.
+# {{.User}} может запускать только хелпер: он сам валидирует аргументы
+# (версия semver, фиксированные пути, единственный юнит tgproxy-agent), без оболочки.
+{{.User}} ALL=(root) NOPASSWD: /usr/bin/tgproxy deploy-helper *

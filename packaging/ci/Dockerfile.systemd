@@ -1,0 +1,10 @@
+# Debian 12 с systemd как PID 1 — для smoke-теста deb (packaging/ci/smoke.sh).
+FROM debian:12
+ENV container=docker DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends systemd systemd-sysv dbus ca-certificates curl procps \
+ && rm -rf /var/lib/apt/lists/* \
+ && systemctl mask getty.target console-getty.service systemd-logind.service systemd-udev-trigger.service \
+      systemd-udevd.service systemd-remount-fs.service sys-kernel-debug.mount sys-kernel-tracing.mount
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

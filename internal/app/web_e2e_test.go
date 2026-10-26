@@ -111,10 +111,11 @@ func TestE2EAdminUI(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(body, "Обзор") || !strings.Contains(body, "admin") {
 		t.Fatalf("GET /: %d\n%.400s", resp.StatusCode, body)
 	}
-	for _, p := range []string{"/agents", "/system"} {
-		if resp, body = c.do("GET", p, nil, nil); resp.StatusCode != 200 || !strings.Contains(body, "Будет в") {
-			t.Fatalf("stub %s: %d", p, resp.StatusCode)
-		}
+	if resp, body = c.do("GET", "/system", nil, nil); resp.StatusCode != 200 || !strings.Contains(body, "Будет в") {
+		t.Fatalf("stub /system: %d", resp.StatusCode)
+	}
+	if resp, body = c.do("GET", "/agents", nil, nil); resp.StatusCode != 200 || strings.Contains(body, "Будет в") || !strings.Contains(body, "local") {
+		t.Fatalf("/agents: %d\n%.400s", resp.StatusCode, body)
 	}
 	resp, body = c.do("GET", "/api/v1/stats/summary", nil, nil)
 	var sum map[string]any

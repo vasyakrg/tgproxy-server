@@ -37,6 +37,8 @@ type dialOpts struct {
 	statusTimeout    time.Duration
 	pingEvery        time.Duration
 	pingTimeout      time.Duration
+	clientCert       func(*tls.CertificateRequestInfo) (*tls.Certificate, error)
+	peerChecks       []pki.Check
 }
 
 // Option настраивает Dial.
@@ -59,6 +61,18 @@ func WithStatusTimeout(d time.Duration) Option { return func(o *dialOpts) { o.st
 // WithHTTP2Ping — период h2 PING простаивающего соединения и таймаут ответа.
 func WithHTTP2Ping(every, timeout time.Duration) Option {
 	return func(o *dialOpts) { o.pingEvery, o.pingTimeout = every, timeout }
+}
+
+// WithClientCertFunc заменяет статический клиентский сертификат динамическим
+// (pki.Authority.ServerCert перевыпускает его по сроку): сертификат берётся
+// при каждом новом рукопожатии.
+func WithClientCertFunc(f func(*tls.CertificateRequestInfo) (*tls.Certificate, error)) Option {
+	return func(o *dialOpts) { o.clientCert = f }
+}
+
+// WithPeerChecks добавляет проверки листа агента (denylist: pki.Denylist.Check).
+func WithPeerChecks(c ...pki.Check) Option {
+	return func(o *dialOpts) { o.peerChecks = append(o.peerChecks, c...) }
 }
 
 type agentConn struct {
@@ -110,9 +124,13 @@ func (d *Dial) transportFor(a AgentRef) (*http.Transport, error) {
 		}
 		c.tr.CloseIdleConnections() // агент переехал на другой адрес
 	}
-	cfg, err := pki.ClientTLSConfig(d.cert, d.ca, pki.VerifyAgentPeer(d.ca, a.ID))
+	cfg, err := pki.ClientTLSConfig(d.cert, d.ca, pki.VerifyAgentPeer(d.ca, a.ID, d.opts.peerChecks...))
 	if err != nil {
 		return nil, err
+	}
+	if d.opts.clientCert != nil {
+		cfg.Certificates = nil
+		cfg.GetClientCertificate = d.opts.clientCert
 	}
 	tr := &http.Transport{
 		// Прокси не используем: канал server → agent прямой.
@@ -187,8 +205,15 @@ func (d *Dial) RoundTrip(ctx context.Context, agent AgentRef, req *http.Request)
 	if err != nil {
 		return nil, err
 	}
+	return trip(ctx, tr.RoundTrip, req, agentURL(agent.URL, req.URL), false)
+}
+
+// trip — общая часть RoundTrip для Dial и ReversePool: подмена URL,
+// трассировка стадии и классификация ошибки по фазам. connected=true, если
+// соединение с агентом уже есть (reverse): «нет соединения» тогда невозможно.
+func trip(ctx context.Context, rt func(*http.Request) (*http.Response, error), req *http.Request, u *url.URL, connected bool) (*http.Response, error) {
 	out := req.Clone(ctx)
-	out.URL = agentURL(agent.URL, req.URL)
+	out.URL = u
 	out.Host = ""
 	out.RequestURI = ""
 	var cb *countingBody
@@ -197,9 +222,10 @@ func (d *Dial) RoundTrip(ctx context.Context, agent AgentRef, req *http.Request)
 		out.Body = cb
 	}
 	st := &stage{}
+	st.gotConn.Store(connected)
 	out = out.WithContext(httptrace.WithClientTrace(ctx, st.trace()))
 
-	resp, err := tr.RoundTrip(out)
+	resp, err := rt(out)
 	if err == nil {
 		return resp, nil
 	}
@@ -250,13 +276,17 @@ func agentURL(base, in *url.URL) *url.URL {
 // Status запрашивает GET /_agent/status. Транспортные ошибки возвращаются как
 // *PhaseError; не-200 — обычной ошибкой.
 func (d *Dial) Status(ctx context.Context, agent AgentRef) (*AgentStatus, error) {
-	ctx, cancel := context.WithTimeout(ctx, d.opts.statusTimeout)
+	return fetchStatus(ctx, d.opts.statusTimeout, d, agent)
+}
+
+func fetchStatus(ctx context.Context, timeout time.Duration, t AgentTransport, agent AgentRef) (*AgentStatus, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, StatusPath, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := d.RoundTrip(ctx, agent, req)
+	resp, err := t.RoundTrip(ctx, agent, req)
 	if err != nil {
 		return nil, err
 	}

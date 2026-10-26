@@ -26,7 +26,37 @@ services:
     volumes:
       - ./tls/redis:/tls:ro
 
+  # Цель SSH-установки агента из UI: debian:12 + systemd + sshd (admin / adminpw, sudo по паролю).
+  # Хост 127.0.0.1, SSH-порт 2222, порт агента 18443. Деб — `make dev-packages`.
   sshd-debian:
-    build: ./sshd-debian
+    build:
+      context: ../internal/server/installer/testdata
+      dockerfile: Dockerfile.sshd-systemd
+    # Платформа = архитектура docker-хоста: amd64 под Rosetta не проходит hardening юнита (скрыт /proc/sys).
+    privileged: true
+    cgroup: host
+    stop_signal: SIGRTMIN+3
+    tmpfs: [/run, /run/lock, /tmp]
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
     ports:
       - "127.0.0.1:2222:22"
+      - "127.0.0.1:18443:18443"
+
+  # Агент «за NAT»: порты не публикуются, сам дозванивается до agent_gateway сервера на хосте.
+  # Enrollment: команда из UI (или TGP_ENROLL_TOKEN/TGP_SERVER_URL/TGP_CA_FINGERPRINT в окружении).
+  nat-agent:
+    build: ./nat-agent
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TGP_ENROLL_TOKEN: ${TGP_ENROLL_TOKEN:-}
+      TGP_SERVER_URL: ${TGP_SERVER_URL:-https://host.docker.internal:8444}
+      TGP_CA_FINGERPRINT: ${TGP_CA_FINGERPRINT:-}
+    volumes:
+      - nat-agent-etc:/etc/tgproxy
+      - nat-agent-var:/var/lib/tgproxy
+
+volumes:
+  nat-agent-etc:
+  nat-agent-var:

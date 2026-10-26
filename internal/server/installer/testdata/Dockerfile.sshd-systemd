@@ -1,0 +1,17 @@
+# Цель установки для integration-теста installer: Debian 12 + systemd (PID 1) + sshd + sudo.
+# Админ admin / adminpw с sudo ПО ПАРОЛЮ (как на обычном сервере). Только тесты.
+FROM debian:12
+ENV container=docker DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends systemd systemd-sysv dbus openssh-server sudo ca-certificates procps \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /run/sshd \
+ && systemctl enable ssh \
+ && systemctl mask getty.target console-getty.service systemd-logind.service systemd-udev-trigger.service \
+      systemd-udevd.service systemd-remount-fs.service sys-kernel-debug.mount sys-kernel-tracing.mount \
+ && useradd -m -s /bin/bash admin \
+ && echo 'admin:adminpw' | chpasswd \
+ && echo 'admin ALL=(ALL) ALL' > /etc/sudoers.d/admin \
+ && chmod 0440 /etc/sudoers.d/admin
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

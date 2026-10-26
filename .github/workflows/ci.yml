@@ -78,6 +78,24 @@ jobs:
           version: "~> v2"
           args: check
 
+  deb-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean --skip=sign,archive
+      # debian:12 + systemd как PID 1 (docker --privileged): install -> start -> /healthz ->
+      # upgrade (конфиг сохранён) -> remove -> purge + systemd-analyze security <= 2.0.
+      - run: packaging/ci/smoke.sh dist/tgproxy_*_amd64.deb
+
   vendor:
     runs-on: ubuntu-latest
     steps:

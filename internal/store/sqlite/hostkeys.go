@@ -37,6 +37,26 @@ func (r hostKeyRepo) Put(ctx context.Context, k store.HostKey) error {
 	return mapErr(err)
 }
 
+func (r hostKeyRepo) List(ctx context.Context) ([]store.HostKey, error) {
+	rows, err := r.s.r.QueryContext(ctx,
+		`SELECT host, agent_id, algo, fingerprint, public_key, created_at FROM agent_hostkeys ORDER BY host`)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []store.HostKey
+	for rows.Next() {
+		var k store.HostKey
+		var c int64
+		if err := rows.Scan(&k.Host, &k.AgentID, &k.Algo, &k.Fingerprint, &k.PublicKey, &c); err != nil {
+			return nil, mapErr(err)
+		}
+		k.CreatedAt = fromMS(c)
+		out = append(out, k)
+	}
+	return out, mapErr(rows.Err())
+}
+
 func (r hostKeyRepo) Delete(ctx context.Context, host string) error {
 	return r.s.execAffected(ctx, `DELETE FROM agent_hostkeys WHERE host = ?`, host)
 }

@@ -8,12 +8,14 @@ import (
 
 // Действия аудита.
 const (
-	AuditLoginOK       = "login.ok"
-	AuditLoginFail     = "login.fail"
-	AuditLogout        = "logout"
-	AuditLoginLockout  = "login.lockout"
-	AuditLoginBlocked  = "login.blocked"
-	AuditLoginNoTOTP   = "login.totp_not_configured"
+	AuditLoginOK      = "login.ok"
+	AuditLoginFail    = "login.fail"
+	AuditLogout       = "logout"
+	AuditLoginLockout = "login.lockout"
+	AuditLoginBlocked = "login.blocked"
+	AuditLoginNoTOTP  = "login.totp_not_configured"
+	// AuditHostKeyForget — CLI-сброс закреплённого SSH host key (actor = cli:<user>).
+	AuditHostKeyForget = "hostkey.forget"
 	auditUnknownActor  = "-"
 	auditMaxFieldBytes = 128
 )

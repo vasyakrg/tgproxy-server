@@ -78,6 +78,8 @@ func TestClassifyMatrix(t *testing.T) {
 		phase   string
 		source  string
 		notSent bool
+		// alt — допустимый альтернативный исход (гонка TLS 1.3, см. кейс).
+		alt *Outcome
 	}{
 		{
 			name: "агент не слушает: refused -> dial",
@@ -109,6 +111,12 @@ func TestClassifyMatrix(t *testing.T) {
 				return NewDial(serverCert(t, foreign), e.pool), ref, 0
 			},
 			kind: KindTransport, phase: tgapi.PhaseTLS, source: SourceServerAgent, notSent: true,
+			// TLS 1.3: сервер отвергает клиентский сертификат уже после того, как
+			// клиент счёл рукопожатие завершённым. Если клиент успел записать
+			// заголовки до прихода alert, ошибка всплывает как write/broken pipe;
+			// надёжно отличить это от обрыва после записи нельзя, а write —
+			// консервативная (безопасная) классификация. Допускаем оба исхода.
+			alt: &Outcome{Kind: KindTransport, Phase: tgapi.PhaseWrite, Source: SourceServerAgent},
 		},
 		{
 			name: "агент 502 + X-TGP-Error-Phase: dial -> dial/agent",
@@ -184,6 +192,10 @@ func TestClassifyMatrix(t *testing.T) {
 				defer func() { _ = resp.Body.Close() }()
 			}
 			got := Classify(resp, err, true)
+			if tc.alt != nil && got.Kind == tc.alt.Kind && got.Phase == tc.alt.Phase &&
+				got.Source == tc.alt.Source && got.NotSent == tc.alt.NotSent {
+				return
+			}
 			if got.Kind != tc.kind || got.Phase != tc.phase || got.Source != tc.source || got.NotSent != tc.notSent {
 				t.Fatalf("got %+v (err=%v), want kind=%v phase=%q source=%q notSent=%v",
 					got, err, tc.kind, tc.phase, tc.source, tc.notSent)

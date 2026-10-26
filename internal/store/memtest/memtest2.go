@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/store"
@@ -254,6 +255,18 @@ func (r hostKeyRepo) Put(_ context.Context, k store.HostKey) error {
 	return nil
 }
 
+func (r hostKeyRepo) List(_ context.Context) ([]store.HostKey, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	out := make([]store.HostKey, 0, len(r.s.hostKeys))
+	for _, k := range r.s.hostKeys {
+		k.PublicKey = clone(k.PublicKey)
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
+	return out, nil
+}
+
 func (r hostKeyRepo) Delete(_ context.Context, host string) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
@@ -452,6 +465,17 @@ func (r enrollRepo) ListPending(_ context.Context, now time.Time) ([]store.Enrol
 	return out, nil
 }
 
+func (r enrollRepo) Delete(_ context.Context, id string) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	e, ok := r.s.enrolls[id]
+	if !ok || e.UsedAt != nil {
+		return store.ErrNotFound
+	}
+	delete(r.s.enrolls, id)
+	return nil
+}
+
 func (r enrollRepo) DeleteExpired(_ context.Context, now time.Time) (int, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
@@ -522,4 +546,102 @@ func (r errRepo) Trim(_ context.Context, keep int, before time.Time) (int64, err
 		r.s.errs = slices.DeleteFunc(r.s.errs, func(e store.ErrorEvent) bool { return e.At.Before(trunc(before)) })
 	}
 	return int64(n0 - len(r.s.errs)), nil
+}
+
+// ---- install jobs ----
+
+type jobRepo struct{ s *Store }
+
+func (r jobRepo) Create(_ context.Context, j store.InstallJob) error {
+	if err := j.Validate(); err != nil {
+		return err
+	}
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if _, ok := r.s.jobs[j.ID]; ok {
+		return store.ErrConflict
+	}
+	if j.CreatedAt.IsZero() {
+		j.CreatedAt = time.Now()
+	}
+	j.CreatedAt = trunc(j.CreatedAt)
+	r.s.jobs[j.ID] = j
+	return nil
+}
+
+func (r jobRepo) Get(_ context.Context, id string) (store.InstallJob, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	j, ok := r.s.jobs[id]
+	if !ok {
+		return store.InstallJob{}, store.ErrNotFound
+	}
+	return j, nil
+}
+
+func (r jobRepo) SetState(_ context.Context, id, state, errMsg string) error {
+	if state == "" {
+		return store.ErrInvalid
+	}
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	j, ok := r.s.jobs[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	j.State, j.Error = state, errMsg
+	if state != store.InstallRunning {
+		t := nowMS()
+		j.FinishedAt = &t
+	} else {
+		j.FinishedAt = nil
+	}
+	r.s.jobs[id] = j
+	return nil
+}
+
+func (r jobRepo) SetAgent(_ context.Context, id, agentID string) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	j, ok := r.s.jobs[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	j.AgentID = agentID
+	r.s.jobs[id] = j
+	return nil
+}
+
+func (r jobRepo) AppendEvent(_ context.Context, e store.InstallJobEvent) (store.InstallJobEvent, error) {
+	if err := e.Validate(); err != nil {
+		return store.InstallJobEvent{}, err
+	}
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if _, ok := r.s.jobs[e.JobID]; !ok {
+		return store.InstallJobEvent{}, store.ErrConflict // FK как в SQLite
+	}
+	if e.At.IsZero() {
+		e.At = time.Now()
+	}
+	e.At = trunc(e.At)
+	if e.Level == "" {
+		e.Level = "info"
+	}
+	r.s.jobEvID++
+	e.ID = r.s.jobEvID
+	r.s.jobEvents = append(r.s.jobEvents, e)
+	return e, nil
+}
+
+func (r jobRepo) Events(_ context.Context, jobID string, afterID int64) ([]store.InstallJobEvent, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	var out []store.InstallJobEvent
+	for _, e := range r.s.jobEvents {
+		if e.JobID == jobID && e.ID > afterID {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }

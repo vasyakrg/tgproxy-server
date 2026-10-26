@@ -8,6 +8,9 @@ import (
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
+		if code, ok := exitCode(err); ok {
+			os.Exit(code)
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}

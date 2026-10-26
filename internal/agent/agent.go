@@ -4,14 +4,18 @@
 package agent
 
 import (
+	"context"
+	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,7 +32,13 @@ type Agent struct {
 	upstream *url.URL
 	tlsCfg   *tls.Config
 	upTLS    *tls.Config // TLS до Telegram
-	notAfter time.Time
+	certs    certHolder  // действующий сертификат (горячая подмена)
+	pendMu   sync.Mutex
+	pending  *ecdsa.PrivateKey // ключ, ожидающий подписанный сертификат (/_agent/csr)
+	caPool   *x509.CertPool
+	mgr      *manager
+	connOpts []ConnectorOption
+	saveConn func(path string, mode config.AgentMode, serverURL string) error
 
 	transport *http.Transport
 	proxy     *proxy
@@ -50,6 +60,11 @@ func WithUpstreamRootCAs(pool *x509.CertPool) Option {
 	return func(a *Agent) { a.upTLS.RootCAs = pool }
 }
 
+// WithConnectorOptions задаёт опции reverse-коннектора (backoff и т.п.; тесты).
+func WithConnectorOptions(o ...ConnectorOption) Option {
+	return func(a *Agent) { a.connOpts = append(a.connOpts, o...) }
+}
+
 // New загружает TLS-материалы и собирает агента. Сеть не открывается.
 func New(cfg *config.AgentConfig, logger *slog.Logger, opts ...Option) (*Agent, error) {
 	if cfg == nil {
@@ -64,7 +79,7 @@ func New(cfg *config.AgentConfig, logger *slog.Logger, opts ...Option) (*Agent, 
 	if err != nil || up.Scheme != "https" || up.Host == "" {
 		return nil, fmt.Errorf("agent: bad telegram api url %q", redact.String(cfg.TelegramAPIURL()))
 	}
-	cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+	cert, err := loadKeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("agent: load key pair: %w", redact.Error(err))
 	}
@@ -80,6 +95,12 @@ func New(cfg *config.AgentConfig, logger *slog.Logger, opts ...Option) (*Agent, 
 	if err != nil {
 		return nil, fmt.Errorf("agent: tls config: %w", err)
 	}
+	held, err := newHeldCert(cert)
+	if err != nil {
+		return nil, err
+	}
+	// Сертификат отдаётся через GetCertificate: ротация без рестарта.
+	tlsCfg.Certificates = nil
 	// h1 оставлен для curl/диагностики; идентичность клиента проверяется так же.
 	tlsCfg.NextProtos = []string{"h2", "http/1.1"}
 
@@ -88,19 +109,19 @@ func New(cfg *config.AgentConfig, logger *slog.Logger, opts ...Option) (*Agent, 
 		logger:   logger,
 		upstream: up,
 		tlsCfg:   tlsCfg,
+		caPool:   caPool,
+		saveConn: config.SaveAgentConnection,
 		upTLS:    &tls.Config{MinVersion: tls.VersionTLS12},
 		stats:    newStats(time.Now),
 		rec:      noopRecorder{},
 		now:      time.Now,
 	}
-	if len(cert.Certificate) > 0 {
-		if leaf, perr := x509.ParseCertificate(cert.Certificate[0]); perr == nil {
-			a.notAfter = leaf.NotAfter
-		}
-	}
+	a.certs.set(held)
+	tlsCfg.GetCertificate = a.certs.serverCert
 	for _, o := range opts {
 		o(a)
 	}
+	a.mgr = newManager(a)
 	a.started = a.now()
 	a.transport = newUpstreamTransport(a.upTLS)
 	a.proxy = newProxy(a)
@@ -124,3 +145,31 @@ func writeAgentError(w http.ResponseWriter, code int, phase, desc string) {
 }
 
 func closeIdle(a *Agent) { a.transport.CloseIdleConnections() }
+
+// Run работает в режиме cfg.Mode (dial слушает cfg.Listen.API, reverse
+// дозванивается до cfg.ServerURL, both — оба) до отмены ctx, затем gracefully
+// завершается. Режим меняется на лету через PUT /_agent/config.
+func (a *Agent) Run(ctx context.Context) error { return a.Serve(ctx, nil) }
+
+// Serve — как Run, но dial-листенер использует готовый ln (nil — слушать
+// cfg.Listen.API).
+func (a *Agent) Serve(ctx context.Context, ln net.Listener) error {
+	m := a.mgr
+	m.mu.Lock()
+	m.ctx, m.preset = ctx, ln
+	mode, url := m.mode, m.url
+	m.mu.Unlock()
+	_, err := m.switchTo(mode, url) //nolint:contextcheck // ctx сохранён в менеджере
+	if err != nil {
+		_ = m.stopAll()
+		return err
+	}
+	select {
+	case err := <-m.fatal:
+		_ = m.stopAll()
+		return err
+	case <-ctx.Done():
+	}
+	a.logger.Info("agent shutting down")
+	return m.stopAll()
+}

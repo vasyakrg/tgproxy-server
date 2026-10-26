@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build generate test test-race lint vuln snapshot dev-certs dev-setup run-server run-agent run-agent2 redis-up vendor-verify deploy
+.PHONY: help build generate test test-race lint vuln snapshot deb dev-certs dev-setup run-server run-agent run-agent2 redis-up dev-target-up dev-target-down dev-packages vendor-verify deploy
 
 help: ## Список целей
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -32,16 +32,21 @@ lint: ## golangci-lint
 vuln: ## govulncheck
 	go tool govulncheck ./...
 
-snapshot: ## goreleaser snapshot
-	goreleaser release --snapshot --clean
+snapshot: ## goreleaser snapshot (архивы + deb в dist/, без подписи)
+	goreleaser release --snapshot --clean --skip=sign
 
-dev-certs: build ## Dev-сертификаты (агенты local, local2) в dev/tls (идемпотентно)
-	./bin/tgproxy pki dev-init --out dev/tls --agent local --agent local2
+deb: ## Только deb (linux/amd64) в dist/, без архивов и подписи
+	goreleaser release --snapshot --clean --skip=sign,archive
 
-dev-setup: dev-certs ## dev-certs + KEK + права dev/users.yml (после этого `make run-server` без ручных шагов)
-	@mkdir -p dev/data
-	chmod 0640 dev/users.yml
+dev-certs: build ## CA в dev/data/tgproxy.db (KEK + `pki init`) и сертификаты dev-агентов local, local2 в dev/tls (идемпотентно)
+	@mkdir -p dev/data dev/tls
+	@rm -f dev/tls/ca.key dev/tls/server-client.crt dev/tls/server-client.key
 	./bin/tgproxy pki kek-init --out dev/data/kek
+	./bin/tgproxy pki init -c dev/server.yaml
+	./bin/tgproxy pki dev-agents -c dev/server.yaml --out dev/tls --agent local --agent local2
+
+dev-setup: dev-certs ## dev-certs + права dev/users.yml (после этого `make run-server` без ручных шагов)
+	chmod 0640 dev/users.yml
 
 run-server: build ## Запустить сервер с dev/server.yaml
 	./bin/tgproxy server -c dev/server.yaml
@@ -54,6 +59,20 @@ run-agent2: build ## Запустить второй агент с dev/agent2.ya
 
 redis-up: ## Поднять dev-Redis (TLS)
 	docker compose -f dev/docker-compose.yml up -d redis
+
+bin/tgproxy-linux: $(shell find cmd internal -name '*.go' -not -name '*_test.go')
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(shell go env GOARCH) go build -trimpath -ldflags "$(LDFLAGS)" -o bin/tgproxy-linux ./cmd/tgproxy
+
+dev-target-up: bin/tgproxy-linux ## Поднять sshd-debian (debian:12+systemd, :2222) и nat-agent (reverse, без портов)
+	cp bin/tgproxy-linux dev/nat-agent/tgproxy
+	docker compose -f dev/docker-compose.yml up -d --build sshd-debian nat-agent
+
+dev-target-down: ## Остановить sshd-debian и nat-agent
+	docker compose -f dev/docker-compose.yml rm -sf sshd-debian nat-agent
+
+dev-packages: ## Собрать deb под архитектуру docker и положить в dev/data/packages (кэш установщика)
+	@mkdir -p dev/data/packages
+	cp "$$(packaging/ci/native-deb.sh)" dev/data/packages/
 
 vendor-verify: ## Проверить sha256 вендорных ассетов
 	@cd web/static/vendor && \

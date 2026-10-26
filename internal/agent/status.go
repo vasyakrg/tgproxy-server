@@ -18,9 +18,13 @@ type statusResponse struct {
 	UpstreamRTTMs float64          `json:"upstream_rtt_ms"`
 	Draining      bool             `json:"draining"`
 	CertNotAfter  time.Time        `json:"cert_not_after"`
+	Mode          string           `json:"mode"`
+	ReverseConns  int              `json:"reverse_conns"`
+	ReverseState  string           `json:"reverse_state,omitempty"`
 }
 
 func (a *Agent) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	mode, _, conns, state := a.mgr.snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(statusResponse{
 		Version:       buildinfo.Version,
@@ -31,6 +35,9 @@ func (a *Agent) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		ErrorsByPhase: a.stats.errorsByPhase(),
 		UpstreamRTTMs: a.stats.upstreamRTT(),
 		Draining:      a.draining.Load(),
-		CertNotAfter:  a.notAfter.UTC(),
+		CertNotAfter:  a.certNotAfter().UTC(),
+		Mode:          string(mode),
+		ReverseConns:  conns,
+		ReverseState:  state,
 	})
 }

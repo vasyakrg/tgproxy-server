@@ -10,3 +10,5 @@ dev/tls/
 coverage.*
 .DS_Store
 docs/diagrams/*.visual-check.*
+dist-smoke-arm64/
+dev/nat-agent/tgproxy

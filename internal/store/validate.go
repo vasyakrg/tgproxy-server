@@ -37,9 +37,9 @@ func (a Agent) Validate() error {
 		return fmt.Errorf("%w: agent id and name are required", ErrInvalid)
 	}
 	switch a.Mode {
-	case ModeDial:
+	case ModeDial, ModeBoth:
 		if a.URL == "" {
-			return fmt.Errorf("%w: dial agent needs url", ErrInvalid)
+			return fmt.Errorf("%w: dial/both agent needs url", ErrInvalid)
 		}
 	case ModeReverse:
 	default:
@@ -86,6 +86,22 @@ func (o OutboxItem) Validate() error {
 func (e Enrollment) Validate() error {
 	if e.ID == "" || len(e.TokenHash) != HashLen || strings.TrimSpace(e.Name) == "" || e.Weight < 0 {
 		return fmt.Errorf("%w: enrollment", ErrInvalid)
+	}
+	return nil
+}
+
+// Validate проверяет задачу установки.
+func (j InstallJob) Validate() error {
+	if j.ID == "" || j.Host == "" || j.Kind == "" || j.State == "" {
+		return fmt.Errorf("%w: install job id, host, kind and state are required", ErrInvalid)
+	}
+	return nil
+}
+
+// Validate проверяет событие задачи установки.
+func (e InstallJobEvent) Validate() error {
+	if e.JobID == "" || e.Kind == "" {
+		return fmt.Errorf("%w: install event job id and kind are required", ErrInvalid)
 	}
 	return nil
 }

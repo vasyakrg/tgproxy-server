@@ -39,7 +39,14 @@ func Load[T any, P loadable[T]](path string) (*T, error) {
 func LoadServer(path string) (*ServerConfig, error) { return Load[ServerConfig](path) }
 
 // LoadAgent загружает и валидирует конфигурацию агента.
-func LoadAgent(path string) (*AgentConfig, error) { return Load[AgentConfig](path) }
+func LoadAgent(path string) (*AgentConfig, error) {
+	cfg, err := Load[AgentConfig](path)
+	if err != nil {
+		return nil, err
+	}
+	cfg.path = path
+	return cfg, nil
+}
 
 func parse[T any, P loadable[T]](data []byte, source string, environ []string) (*T, error) {
 	cfg := new(T)

@@ -37,4 +37,65 @@ checksum:
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot"
 
-# nfpms, signs — M6-T1
+
+nfpms:
+  - id: tgproxy-deb
+    package_name: tgproxy
+    ids: [tgproxy]
+    formats: [deb]
+    vendor: tgproxy
+    maintainer: "vasyakrg <vasyakrg@gmail.com>"
+    homepage: https://github.com/vasyakrg/tgproxy-server
+    description: Telegram Bot API proxy (server and agent in one binary)
+    section: net
+    priority: optional
+    file_name_template: "{{ .PackageName }}_{{ .Version }}_{{ .Arch }}"
+    bindir: /usr/bin
+    dependencies:
+      - ca-certificates
+    recommends: []
+    contents:
+      # Юниты (hardening — docs/architecture.md §8)
+      - src: packaging/systemd/tgproxy-server.service
+        dst: /lib/systemd/system/tgproxy-server.service
+        file_info: {mode: 0644}
+      - src: packaging/systemd/tgproxy-agent.service
+        dst: /lib/systemd/system/tgproxy-agent.service
+        file_info: {mode: 0644}
+      - src: packaging/systemd/tgproxy-update.path
+        dst: /lib/systemd/system/tgproxy-update.path
+        file_info: {mode: 0644}
+      - src: packaging/systemd/tgproxy-update.service
+        dst: /lib/systemd/system/tgproxy-update.service
+        file_info: {mode: 0644}
+      # Конфиги: dpkg спрашивает/сохраняет локальные правки при upgrade
+      - dst: /etc/tgproxy
+        type: dir
+        file_info: {mode: 0750, owner: root, group: tgproxy}
+      - src: packaging/etc/server.yaml
+        dst: /etc/tgproxy/server.yaml
+        type: config|noreplace
+        file_info: {mode: 0640, owner: root, group: tgproxy}
+      - src: packaging/etc/agent.yaml
+        dst: /etc/tgproxy/agent.yaml
+        type: config|noreplace
+        file_info: {mode: 0640, owner: root, group: tgproxy}
+      # Данные
+      - dst: /var/lib/tgproxy
+        type: dir
+        file_info: {mode: 0750, owner: tgproxy, group: tgproxy}
+    scripts:
+      preinstall: packaging/scripts/preinst.sh
+      postinstall: packaging/scripts/postinst.sh
+      preremove: packaging/scripts/prerm.sh
+      postremove: packaging/scripts/postrm.sh
+
+# Подпись checksums.txt (minisign) подключается в M6: ключ хранится в защищённом
+# environment CI. Пока блок закомментирован, `goreleaser check` и snapshot работают без ключа.
+# signs:
+#   - id: minisign
+#     artifacts: checksum
+#     cmd: minisign
+#     args: ["-S", "-s", "{{ .Env.MINISIGN_KEY_FILE }}", "-m", "${artifact}", "-x", "${signature}"]
+#     signature: "${artifact}.minisig"
+#     stdin: "{{ .Env.MINISIGN_PASSWORD }}"
