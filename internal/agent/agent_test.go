@@ -179,12 +179,9 @@ func TestPhaseRead(t *testing.T) {
 
 func TestPhaseTimeout(t *testing.T) {
 	release := make(chan struct{})
-	e := newEnv(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		select {
-		case <-release:
-		case <-r.Context().Done():
-		}
-	}))
+	// Апстрим молчит до конца теста: выход по r.Context() отдавал бы пустой 200,
+	// который при гонке с дедлайном агент законно принимал как ответ.
+	e := newEnv(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
 	t.Cleanup(func() { close(release) })
 	start := time.Now()
 	resp := e.do(t, http.MethodGet, "/tg/bot1:a/getUpdates", map[string]string{tgapi.HeaderTimeoutMs: "200"}, nil)
