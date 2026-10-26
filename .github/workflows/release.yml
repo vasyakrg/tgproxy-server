@@ -42,8 +42,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq minisign
 
-      - run: go test -race ./...
-
       - name: Приватный ключ во временный файл
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}

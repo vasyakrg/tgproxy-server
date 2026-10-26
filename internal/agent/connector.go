@@ -36,6 +36,8 @@ const (
 	dialTimeout        = 10 * time.Second
 	handshakeTimeout   = 10 * time.Second
 	tcpKeepAlive       = 30 * time.Second
+	// gracefulRetryInterval — период повторного graceful shutdown в serve.
+	gracefulRetryInterval = 50 * time.Millisecond
 )
 
 // ConnectorOption настраивает Connector (в основном для тестов).
@@ -242,13 +244,25 @@ func (c *Connector) serve(ctx context.Context, conn net.Conn) {
 		case <-done:
 		case <-ctx.Done():
 			// Graceful: GOAWAY всем h2-соединениям base, затем жёсткий предел.
+			// Хук http2 видит только уже зарегистрированные в ServeConn
+			// соединения, а base своих соединений не держит, поэтому Shutdown
+			// возвращается сразу. Если ctx отменён до регистрации, один вызов
+			// соединение пропустит — повторяем (хуки срабатывают на каждый
+			// вызов, GOAWAY идемпотентен), пока serve не завершится.
 			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 			defer cancel()
-			_ = base.Shutdown(sctx)
-			select {
-			case <-done:
-			case <-sctx.Done():
-				_ = conn.Close()
+			t := time.NewTicker(gracefulRetryInterval)
+			defer t.Stop()
+			for {
+				_ = base.Shutdown(sctx)
+				select {
+				case <-done:
+					return
+				case <-sctx.Done():
+					_ = conn.Close()
+					return
+				case <-t.C:
+				}
 			}
 		}
 	}()

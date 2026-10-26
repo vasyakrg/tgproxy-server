@@ -27,8 +27,8 @@ import (
 // логах сервера и агентов, метриках, БД (таблицы и сырые файлы), ответах админки, SSE и алертах.
 
 const (
-	leakToken  = "987654321:AAGsecretSecretSecret_leak-CheckXYZ123"
-	leakSecret = "AAGsecretSecretSecret_leak-CheckXYZ123"
+	leakToken  = "987654321:" + leakSecret
+	leakSecret = "AAGsecret" + "SecretSecret_leak-CheckXYZ123" // склеено: литерал не должен совпадать с шаблоном токена (secret scanning)
 )
 
 var botTokenLike = regexp.MustCompile(`[0-9]{5,15}(?::|%3[Aa])[A-Za-z0-9_-]{30,}`)

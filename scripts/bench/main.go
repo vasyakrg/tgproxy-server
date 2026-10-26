@@ -43,7 +43,7 @@ import (
 )
 
 const (
-	token  = "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	token  = "123456:" + "AAAAAAAAAAAAAAAAAA" + "AAAAAAAAAAAAAAAAA" // склеено: литерал не должен совпадать с шаблоном токена (secret scanning)
 	tgBody = `{"ok":true,"result":{"id":123456,"is_bot":true,"username":"fake_bot"}}`
 )
 

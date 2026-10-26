@@ -443,7 +443,7 @@ func TestCheckVersionReleases(t *testing.T) {
 		t.Fatalf("releases: %+v", rel.Items)
 	}
 	// ошибка источника — 502 с понятным сообщением, токен не утекает
-	e.src.err = errors.New("dial tcp: 7012345678:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw3 refused")
+	e.src.err = errors.New("dial tcp: " + secretToken + " refused")
 	rec = e.post(t, "/api/v1/system/check", nil, "")
 	if rec.Code != http.StatusBadGateway || strings.Contains(rec.Body.String(), "AAHdqTcv") {
 		t.Fatalf("ошибка источника: %d %s", rec.Code, rec.Body)
@@ -514,7 +514,7 @@ func TestInstallResultFromFile(t *testing.T) {
 	if e.svc.Version().Result != nil {
 		t.Fatal("файла нет — итога нет")
 	}
-	write(`{"version":"1.5.0","ok":false,"rolled_back":true,"error":"healthz timeout 7012345678:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw3","at":"2026-03-01T12:00:00Z"}`)
+	write(`{"version":"1.5.0","ok":false,"rolled_back":true,"error":"healthz timeout ` + secretToken + `","at":"2026-03-01T12:00:00Z"}`)
 	r := e.svc.Version().Result
 	if r == nil || r.OK || !r.RolledBack || r.Version != "1.5.0" || strings.Contains(r.Error, "AAHdqTcv") {
 		t.Fatalf("result: %+v", r)

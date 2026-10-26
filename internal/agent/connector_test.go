@@ -627,3 +627,30 @@ func TestReverseGracefulStop(t *testing.T) {
 		t.Fatal("request after stop must fail")
 	}
 }
+
+// TestServeCanceledBeforeRegister — регрессия: ctx отменён до того, как
+// h2s.ServeConn зарегистрировал соединение; graceful-хук обязан дойти до него
+// повторным Shutdown, а не ждать shutdownTimeout.
+func TestServeCanceledBeforeRegister(t *testing.T) {
+	a := &Agent{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	c := &Connector{a: a, handler: http.NewServeMux()}
+	srvSide, cliSide := net.Pipe()
+	defer func() { _ = cliSide.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		c.serve(ctx, srvSide)
+		close(done)
+	}()
+	//nolint:staticcheck // deprecated-обёртка, но API x/net из задачи
+	if _, err := (&http2.Transport{}).NewClientConn(cliSide); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		_ = srvSide.Close()
+		t.Fatal("serve did not stop after canceled ctx")
+	}
+}

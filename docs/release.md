@@ -34,7 +34,11 @@ GitHub -> Settings -> Environments -> New environment `release`:
 
 ## Выпуск
 
+Юнит-тесты в CI и в release-workflow не запускаются — перед тегом прогон обязателен локально
+(гонки ловит только `-race`; запускайте несколько раз на коммите тега):
+
 ```sh
+make test-race && golangci-lint run ./...
 git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
 ```
 

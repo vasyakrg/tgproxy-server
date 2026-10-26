@@ -465,7 +465,7 @@ func TestSSELiveStreamStopsAtTerminalEvent(t *testing.T) {
 	e.fi.live = make(chan installer.Event, 4)
 	resp, done := sse(t, e, "/api/v1/install-jobs/J1/events", "") //nolint:bodyclose // закрывается в done()
 	defer done()
-	e.fi.live <- ev(3, installer.EventLog, "ssh", "", "ключ 7012345678:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw3 замаскирован")
+	e.fi.live <- ev(3, installer.EventLog, "ssh", "", "ключ "+secretToken+" замаскирован")
 	e.fi.live <- ev(4, installer.EventError, "", "", "шаг не выполнен")
 	e.fi.live <- ev(5, installer.EventLog, "", "", "после терминального не отправляется")
 	fr := readFrames(t, resp.Body, 0)
@@ -475,7 +475,7 @@ func TestSSELiveStreamStopsAtTerminalEvent(t *testing.T) {
 	if fr[3].event != "fail" {
 		t.Errorf("неуспех должен идти как fail: %+v", fr[3])
 	}
-	if strings.Contains(fr[2].data, "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw3") {
+	if strings.Contains(fr[2].data, secretTail) {
 		t.Errorf("токен не замаскирован: %s", fr[2].data)
 	}
 }

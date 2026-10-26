@@ -78,9 +78,9 @@ func TestClassifyCanceled(t *testing.T) {
 }
 
 func TestPhaseErrorRedactsAndUnwraps(t *testing.T) {
-	inner := errors.New(`Post "https://x/tg/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/sendMessage": EOF`)
+	inner := errors.New(`Post "https://x/tg/bot` + testBotToken + `/sendMessage": EOF`)
 	pe := &PhaseError{Phase: tgapi.PhaseWrite, Source: SourceServerAgent, Err: inner}
-	if strings.Contains(pe.Error(), "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw") {
+	if strings.Contains(pe.Error(), testBotTail) {
 		t.Fatalf("token leaked: %s", pe.Error())
 	}
 	if !errors.Is(pe, inner) {

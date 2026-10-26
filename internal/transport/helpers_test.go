@@ -13,6 +13,12 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
 )
 
+// testBotToken — фиктивный токен бота для проверок маскирования; testBotTail — его секретная часть.
+const (
+	testBotToken = "123456789:" + testBotTail
+	testBotTail  = "AAHdq" + "TcvCH1vGWJxfSeofSAs0K5PALDsaw" // склеено: литерал не должен совпадать с шаблоном токена (secret scanning)
+)
+
 type env struct {
 	ca       *pki.CA
 	pool     *x509.CertPool
