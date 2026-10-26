@@ -18,3 +18,5 @@ deploy/.env
 *.key
 /keys/
 deploy/known_hosts
+# отчёты валидации: адреса и домены прод-стенда — не в публичный репозиторий
+/swarm-report/

@@ -3,15 +3,15 @@
 # Блок tcp: — на верхнем уровне файла, рядом с http:, не внутри него.
 tcp:
   routers:
-    tgfarm-gw-bildme-ru-route:
+    tgproxy-gw-route:
       entryPoints:
       - https
-      rule: HostSNI(`tgfarm-gw.bildme.ru`)
-      service: tgfarm-gw-bildme-ru-service
+      rule: HostSNI(`gw.tg.example.com`)
+      service: tgproxy-gw-service
       tls:
         passthrough: true
   services:
-    tgfarm-gw-bildme-ru-service:
+    tgproxy-gw-service:
       loadBalancer:
         servers:
-        - address: 192.168.23.94:8444
+        - address: 10.0.0.10:8444

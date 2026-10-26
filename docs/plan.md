@@ -309,7 +309,7 @@
     5. health check: `curl -fsS $PROD_ADMIN_URL/healthz` (до 30s), `/readyz` ≥1 агент, `systemctl is-active` на агентах; ненулевой код при провале.
   - Тест: `shellcheck`; dry-run режим `DEPLOY_DRY_RUN=1` печатает план.
 - [x] **M7-T4 · Документация** (S-pkg): `README.md` (быстрый старт, конфиг, порты, бутстрап: `pki init`, `hashpw`, `totp enroll`), `docs/operations.md` (бэкап БД/KEK, ротация minisign-ключа, восстановление после потери KEK). Правка `architecture.md`: `/_agent/egress`, порты §0.2.
-- [ ] **M7-T5 · Релиз v0.1.0**: тег, release-workflow зелёный, deb в GitHub Releases.
+- [x] **M7-T5 · Релиз v0.1.0**: тег, release-workflow зелёный, deb в GitHub Releases.
 
 ---
 
