@@ -17,7 +17,7 @@ if [ -f "$ENV_FILE" ]; then
   # Файл оператора (deploy/.env, не коммитится); уже заданные в окружении переменные приоритетнее.
   for _v in PROD_SERVER_HOST PROD_SERVER_SSH_USER PROD_SERVER_SSH_PORT PROD_SSH_KEY PROD_PUBLIC_URL \
     PROD_ADMIN_URL PROD_AGENT_HOSTS PROD_AGENT_SSH_USER DEPLOY_MODE DEPLOY_TAG DEPLOY_REPO DEPLOY_DEB \
-    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT DEPLOY_KNOWN_HOSTS; do
+    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT DEPLOY_KNOWN_HOSTS DEPLOY_DOWNLOADS_DIR; do
     if [ -n "${!_v+x}" ]; then eval "_keep_$_v=\${$_v}"; fi
   done
   set -a
@@ -26,7 +26,7 @@ if [ -f "$ENV_FILE" ]; then
   set +a
   for _v in PROD_SERVER_HOST PROD_SERVER_SSH_USER PROD_SERVER_SSH_PORT PROD_SSH_KEY PROD_PUBLIC_URL \
     PROD_ADMIN_URL PROD_AGENT_HOSTS PROD_AGENT_SSH_USER DEPLOY_MODE DEPLOY_TAG DEPLOY_REPO DEPLOY_DEB \
-    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT DEPLOY_KNOWN_HOSTS; do
+    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT DEPLOY_KNOWN_HOSTS DEPLOY_DOWNLOADS_DIR; do
     _k="_keep_$_v"
     if [ -n "${!_k+x}" ]; then export "$_v=${!_k}"; fi
   done
@@ -179,6 +179,18 @@ SRV "sudo -n dpkg -i '$REMOTE_DEB' && sudo -n systemctl restart tgproxy-server"
 got_ver="$(SRV "dpkg-query -W -f='\${Version}' tgproxy")"
 [ "$got_ver" = "$NEW_VER" ] || die "после установки версия $got_ver, ожидалась $NEW_VER"
 SRV "systemctl is-active --quiet tgproxy-server" || die "tgproxy-server не active (journalctl -u tgproxy-server)"
+
+# Release: проверенный набор (deb + checksums.txt + .minisig) — в кэш загрузок сервера. Из него
+# ставятся агенты (мастер SSH, enrollment-команда) и идёт раскатка; сервер перепроверяет подпись
+# перед каждой выдачей. Без этого в закрытом контуре пакет пришлось бы загружать вручную через UI.
+if [ "$MODE" = release ]; then
+  DL="${DEPLOY_DOWNLOADS_DIR:-/var/lib/tgproxy/updates/downloads}/$NEW_VER"
+  rscp "$WORK/checksums.txt" "$WORK/checksums.txt.minisig" "$PROD_SERVER_SSH_USER@$PROD_SERVER_HOST:$REMOTE_TMP/"
+  SRV "sudo -n install -d -o tgproxy -g tgproxy -m 0700 '$DL' && \
+    sudo -n install -o tgproxy -g tgproxy -m 0600 '$REMOTE_DEB' '$REMOTE_TMP/checksums.txt' '$REMOTE_TMP/checksums.txt.minisig' '$DL/'" \
+    || die "не удалось положить пакет в кэш агентов $DL"
+  log "кэш агентов: $DL"
+fi
 
 # ---------- 5. health ----------
 wait_ok() { # path
