@@ -7,8 +7,10 @@
 #   1. Укажите server.public_base_url и tls (сертификат/ключ или acme).
 #   2. Создайте KEK (владелец tgproxy, 0400):
 #        tgproxy pki kek-init --out /etc/tgproxy/kek && chown tgproxy:tgproxy /etc/tgproxy/kek
-#   3. Создайте /etc/tgproxy/users_database.yml (root:tgproxy 0640, хеш: `tgproxy hashpw`); TOTP обязателен.
-#   4. Добавьте хотя бы одно правило доступа (access_rules) — без правил прокси отвечает отказом всем.
+#   3. Создайте CA в БД (один раз, от имени tgproxy):
+#        runuser -u tgproxy -- tgproxy pki init -c /etc/tgproxy/server.yaml
+#   4. Создайте /etc/tgproxy/users_database.yml (root:tgproxy 0640, хеш: `tgproxy hashpw`); TOTP обязателен.
+#   5. Добавьте хотя бы одно правило доступа (access_rules) — без правил прокси отвечает отказом всем.
 
 server:
   # Публичный base URL прокси: показывается в UI «Доступ» (https).
@@ -28,8 +30,7 @@ tls:
   cert_file: /etc/tgproxy/tls/server.crt   # ПЛЕЙСХОЛДЕР: положите свой сертификат
   key_file: /etc/tgproxy/tls/server.key    # ПЛЕЙСХОЛДЕР: права 0600/0640 (root:tgproxy)
 
-# Встроенный CA для mTLS server <-> agent; ключ CA шифруется KEK. Сервер ожидает в pki.dir
-# ca.crt, server-client.crt и server-client.key (автовыпуск CA — M5; до этого — `tgproxy pki dev-init`).
+# Встроенный CA для mTLS server <-> agent хранится в БД, ключ CA шифруется KEK (`tgproxy pki init`).
 pki:
   dir: /var/lib/tgproxy/pki
   kek_file: /etc/tgproxy/kek

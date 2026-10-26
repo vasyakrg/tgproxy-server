@@ -62,9 +62,8 @@ chown root:tgproxy /etc/tgproxy/server.yaml /etc/tgproxy/users_database.yml
 chmod 0640 /etc/tgproxy/server.yaml /etc/tgproxy/users_database.yml
 tgproxy pki kek-init --out /etc/tgproxy/kek
 chown tgproxy:tgproxy /etc/tgproxy/kek
-# До M5 (выпуск CA сервером) сервер требует готовые mTLS-материалы в pki.dir: берём dev-PKI.
-tgproxy pki dev-init --out /var/lib/tgproxy/pki --agent smoke
-chown -R tgproxy:tgproxy /var/lib/tgproxy/pki
+# CA создаётся один раз в БД сервера (ключ CA под KEK); от имени tgproxy — БД принадлежит ему.
+runuser -u tgproxy -- tgproxy pki init -c /etc/tgproxy/server.yaml
 tgproxy config validate --mode server -c /etc/tgproxy/server.yaml
 
 step "systemd-analyze verify"
