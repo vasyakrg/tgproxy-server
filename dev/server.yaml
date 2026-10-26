@@ -1,19 +1,19 @@
-# Черновой dev-конфиг server. Схема уточняется в M1-T1.
+# Dev-конфиг server (macOS, всё на 127.0.0.1). Схема: internal/config/config.go.
+# Проверка: tgproxy config validate --mode server -c dev/server.yaml
 listen:
-  proxy: ":8080"              # прокси для ботов
-  admin: "127.0.0.1:8090"     # Web-UI + /api/v1 + /healthz
-  metrics: ":9090"            # /metrics (bearer)
-  agent_gateway: ":8444"      # reverse-соединения агентов (mTLS), /enroll
+  proxy: "127.0.0.1:8080"          # прокси для ботов
+  admin: "127.0.0.1:8090"          # Web-UI + /api/v1 + /healthz
+  metrics: "127.0.0.1:9090"        # /metrics (bearer не нужен только на loopback)
+  agent_gateway: "127.0.0.1:8444"  # reverse-соединения агентов (mTLS), /enroll
 
 tls:
-  mode: "off"                 # off | files | acme; для dev — off
-  cert_file: ./dev/tls/server.crt
-  key_file: ./dev/tls/server.key
+  mode: "off"                      # off | files | acme; в dev TLS на входе нет (loopback)
 
-storage:
-  driver: sqlite              # sqlite | redis (только эфемерное)
-  sqlite_path: ./dev/data/tgproxy.db
-  # redis_url: rediss://tgproxy:dev-redis-password@127.0.0.1:6380/0
+# mTLS-материалы сервера для связи с агентами (создаёт `make dev-certs`).
+agent_tls:
+  ca_file: ./dev/tls/ca.crt
+  cert_file: ./dev/tls/server-client.crt
+  key_file: ./dev/tls/server-client.key
 
 pki:
   dir: ./dev/tls
@@ -22,15 +22,30 @@ pki:
 auth:
   users_file: ./dev/users.yml
 
+store:
+  driver: sqlite                   # sqlite | redis (redis — только rediss://)
+  sqlite_path: ./dev/data/tgproxy.db
+  # driver: redis
+  # redis_url: rediss://tgproxy@127.0.0.1:6380/0
+  # redis_password_file: ./dev/data/redis-password   # права 0600/0640
+
+update:
+  enabled: false                   # в dev самообновление не нужно
+  staging_dir: ./dev/data/updates
+
+webhook_policy: deny               # deny | passthrough
+
 agents:
   - id: local
     url: https://127.0.0.1:8443
+    mode: dial
 
+# Подходящее хотя бы одно правило пропускает запрос. См. dev/README.md.
 access_rules:
-  - name: localhost
-    type: network
-    cidr: 127.0.0.0/8
-    action: allow
+  - name: localhost                # только сеть: /bot<token>/<method>
+    cidrs: [127.0.0.0/8]
+  - name: dev-key                  # только ключ: /k/tgp_devkey_local_only/bot<token>/<method>
+    key_sha256: 5d920d4d62626d92a41b29c61d704f31857190681e0f521e08d22ce671082be7
 
 logging:
   level: debug

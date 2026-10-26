@@ -78,7 +78,7 @@
 - [x] **M0-T2 · Makefile и dev-окружение** (S-pkg)
   - Создать: `Makefile` (цели `build`, `generate` (= `go tool templ generate`), `test`, `test-race`, `lint`, `vuln`, `snapshot`, `dev-certs`, `run-server`, `run-agent`, `redis-up`, `vendor-verify`, `deploy`(заглушка до M7)), `dev/server.yaml`, `dev/agent.yaml`, `dev/users.yml` (пример, хеш тестового пароля), `dev/.env.example` (`TGP_DEV_BOT_TOKEN=`), `dev/docker-compose.yml` (redis с TLS+ACL, `sshd-debian` для M5).
   - Приёмка: `make build test lint` проходит локально.
-- [x] **M0-T3 · CI** (локально проверено; зелёный прогон в GitHub — после первого push) (S-pkg)
+- [x] **M0-T3 · CI** (CI зелёный: run 40338806616) (S-pkg)
   - Создать: `.github/workflows/ci.yml` (golangci-lint v2.15.0, `go test -race`, govulncheck, `templ generate` + `git diff --exit-code`, `goreleaser check`, `make vendor-verify`), `.github/dependabot.yml` (gomod, github-actions), `.golangci.yml` (v2: `errcheck, govet, staticcheck, gosec, revive, bodyclose, noctx, contextcheck, forbidigo` — запрет `fmt.Print*`/`log.*` в `internal/`).
   - Actions закреплены по SHA.
   - Приёмка: зелёный CI на первом PR.
@@ -97,37 +97,37 @@
 
 Цель: реальный `getMe`/`sendMessage` тестового бота проходит через сервер и агента по mTLS с dev-сертификатами; агенты и client-key — статически в конфиге.
 
-- [ ] **M1-T1 · `internal/config`** (S-core)
+- [x] **M1-T1 · `internal/config`** (S-core)
   - Файлы: `config.go` (`ServerConfig`, `AgentConfig`, `ListenConfig`, `TLSFiles`, `RouterConfig{MaxAttempts=3, Budget=25s, LongPollExtra=15s, MaxLongPoll=65s}`, `BufferConfig{RAMMax=1MiB, DiskMax=10MiB, BodyMax=51MB}`, `StoreConfig`, `UpdateConfig`, `NotifyConfig`), `load.go` (`Load(path) (*T, error)`: YAML `KnownFields(true)` → env `TGPROXY_*` → `*_file` секреты), `validate.go`, `defaults.go`.
   - Команда `tgproxy config validate --mode server|agent -c file` (S-wire).
   - Тесты первыми: неизвестное поле → ошибка с путём; приоритет env > yaml; `token_file` читается, права файла шире 0600 → ошибка; `redis.url` не `rediss://` → ошибка старта; дефолты; `webhook_policy` ∈ {deny,passthrough}; отрицательные таймауты.
   - Приёмка: `dev/*.yaml` валидны; покрытие ≥ 85%.
-- [ ] **M1-T2 · `internal/redact`** (S-core)
+- [x] **M1-T2 · `internal/redact`** (S-core)
   - Файлы: `redact.go` (`Token(s string) string` → `bot123456:***`, `String(s)` заменяет все вхождения regex `\d{5,}:[A-Za-z0-9_-]{30,}`), `slog.go` (`NewHandler(h slog.Handler) slog.Handler` — маскирует атрибуты и сообщение), `url.go` (`URL(u *url.URL) string`, маска client-key `tgp_xxxx…`).
   - Тесты первыми: таблица токенов (в пути, query, JSON-ошибке, multipart-имени файла, `url.Error`); client-key маскируется до префикса; **fuzz** `FuzzRedactNeverLeaks` — для любого входа с вставленным токеном выход не матчит regex токена; slog-группы и вложенные `error`.
   - Приёмка: fuzz 60s без находок в CI (короткий прогон 10s).
-- [ ] **M1-T3 · `internal/tgapi`** (S-core)
+- [x] **M1-T3 · `internal/tgapi`** (S-core)
   - Файлы: `methods.go` (`type Class int {Safe, Semi, Unsafe}`; `Classify(method string) Class` — точная таблица + префиксы из §6 архитектуры; неизвестный метод → `Unsafe`; `setWebhook` отдельно), `path.go` (`ParsePath(p string) (Route{ClientKey, Token, BotID int64, Method, IsFile, FilePath}, error)` для `/k/<key>/bot<token>/<method>`, `/k/<key>/file/bot<token>/<path>`, `/bot<token>/...`), `response.go` (`Envelope{OK bool; ErrorCode int; Description string; Parameters{RetryAfter int; MigrateToChatID int64}}`, `ParseEnvelope(io.Reader, limit)`), `errors.go` (`WriteError(w, code, desc)` в формате Telegram), `methodlabel.go` (нормализация `method` для метрик: известные ~150 + `other`).
   - Тесты первыми: classify-таблица на каждый метод из §6 + регистр (`SendMessage` ≡ `sendMessage`); неизвестный → Unsafe; путь с `..`/`%2F` → ошибка; извлечение `bot_id` из токена; `editMessageText` с «message is not modified» распознаётся `IsNotModified(env)`; envelope > лимита не читается целиком.
-- [ ] **M1-T4 · Dev-PKI** (S-core)
+- [x] **M1-T4 · Dev-PKI** (S-core)
   - Файлы: `internal/pki/ca.go` (`NewCA(subject) (*CA, error)`, ECDSA P-256), `internal/pki/issue.go` (`IssueServerClient(ca)`, `IssueAgent(ca, csr, agentID, ttl)`), `internal/pki/verify.go` (`VerifyAgentPeer(id)`, `VerifyServerPeer()` — проверка SAN `spiffe://tgproxy/agent/<id>` / `tgproxy-server`); команда `tgproxy pki dev-init --out dev/certs` (S-wire) → `make dev-certs`.
   - Тесты первыми: выпущенный сертификат агента проходит `VerifyAgentPeer(id)` и падает для другого id; клиент без SAN `tgproxy-server` отклоняется; TTL 90 дней; ключи P-256; CSR с чужой подписью отклоняется.
   - Полная PKI (KEK, ротация, denylist) — M5.
-- [ ] **M1-T5 · Агент** (S-agent)
+- [x] **M1-T5 · Агент** (S-agent)
   - Файлы: `internal/agent/server.go` (`New(cfg, reg) *Agent`, `Run(ctx)`; TLS 1.3, `ClientAuth: RequireAndVerifyClientCert`, `VerifyPeerCertificate` = `pki.VerifyServerPeer`), `proxy.go` (`httputil.ReverseProxy` на жёстко `https://api.telegram.org`, `Rewrite` (не `Director`), `FlushInterval: -1`, чистка hop-by-hop/`X-Forwarded-*`/`Forwarded`/`Via`/`Cookie`/`Authorization`, `X-TGP-*` не уходят в Telegram), `phase.go` (разметка фаз через `httptrace.ClientTrace`: `dial`, `tls`, `pre-send` (до `WroteHeaders`), `write`, `read`, `timeout`; `ErrorHandler` пишет 502 + `X-TGP-Source: agent`, `X-TGP-Error-Phase`), `timeout.go` (`X-TGP-Timeout-Ms` → `context.WithTimeout`), `health.go` (`/_agent/healthz` с кэшем TLS-пробы 10s), `status.go` (`/_agent/status` JSON: `version, commit, uptime_s, inflight, rps_1m, errors_by_phase, upstream_rtt_ms, draining, cert_not_after`), `drain.go` (`POST /_agent/drain` → `atomic.Bool`, новые `/tg/*` → 503 `X-TGP-Error-Phase: pre-send`).
   - Тесты первыми (через `httptest.NewTLSServer` вместо Telegram, upstream подменяется только в тестах через неэкспортируемое поле): фазы — сервер Telegram недоступен → `dial`; плохой сертификат → `tls`; закрытие соединения до заголовков ответа после отправки тела → `read`; дедлайн → `timeout`; заголовки чистятся в обе стороны; клиент без mTLS-серта → handshake error; клиент с сертом агента (не сервера) → отказ; drain → 503 pre-send; стриминг: ответ 5 МБ отдаётся без буферизации (проверка первого байта до конца апстрима).
   - Приёмка: `make run-agent`; `curl --cert dev/certs/server.pem ... https://127.0.0.1:8443/tg/bot$TOKEN/getMe` → `{"ok":true}`.
-- [ ] **M1-T6 · `internal/transport`** (S-agent)
+- [x] **M1-T6 · `internal/transport`** (S-agent)
   - Файлы: `client.go` (`type AgentTransport interface{ RoundTrip(ctx, agent AgentRef, req *http.Request) (*http.Response, error); Status(ctx, agent) (*AgentStatus, error) }`; реализация `dial.go`: `http.Transport` с `ForceAttemptHTTP2`, TLS 1.3, клиентский серт сервера, пиннинг SAN агента; пул на агента; `registry.go` — `AgentRef.Mode` (`dial`|`reverse`) выбирает реализацию, reverse добавляется в M5-T8 без изменения интерфейса), `errors.go` (`type PhaseError struct{ Phase Phase; Source Source; Err error }`; `Phase` = `dial|tls|pre_send|write|read|timeout`; `Classify(resp, err) (Outcome)` — объединяет ошибку соединения server→agent и `X-TGP-Error-Phase` от агента; ошибка server→agent после записи тела в агента = `write` (агент мог отправить в Telegram)).
   - Тесты первыми: таблица «что случилось» → `Phase`: refused к агенту → `dial`; handshake fail → `tls`; агент ответил 502 + `X-TGP-Error-Phase: dial` → `dial/agent`; RST после отправки тела агенту → `write`; таймаут чтения ответа агента → `timeout`; 5xx от Telegram (`X-TGP-Source: telegram`) → не транспортная ошибка.
-- [ ] **M1-T7 · Минимальный прокси сервера** (S-proxy)
+- [x] **M1-T7 · Минимальный прокси сервера** (S-proxy)
   - Файлы: `internal/server/proxy/handler.go` (`Handler{Access, Router}`; `ServeHTTP`: `MaxBytesReader(51MB)` → 413 в формате Telegram, `X-Request-ID` ULID, `webhook_policy`), `internal/server/proxy/headers.go`, `internal/server/access/static.go` (временные правила доступа из конфига: CIDR и/или ключ, SHA-256 сравнение constant-time; ботов не проверяем), `internal/server/router/router.go` — пока одна попытка, один агент из конфига.
   - Тесты первыми: `/bot<token>/getMe` из сети правила → проходит без ключа; из чужой сети без ключа → 403 Telegram-формат; `/k/<key>/bot...` с верным ключом из любой сети → проходит; ключ не тот → 403; `X-Proxy-Key` для `/bot...`; правило без сети и ключа → отказ старта; `setWebhook` при `deny` → 403 с описанием из §3; тело 52 МБ → 413; ответ содержит `X-Request-ID`; токен не попадает в логи (проверка через захват slog-буфера + regex).
-- [ ] **M1-T8 · Wiring `server`/`agent`** (S-wire)
+- [x] **M1-T8 · Wiring `server`/`agent`** (S-wire)
   - Файлы: `internal/app/server.go`, `internal/app/agent.go`, `cmd/tgproxy/server.go`, `cmd/tgproxy/agent.go`; graceful shutdown по SIGTERM (drain inflight до 30s), SIGHUP — reload.
   - Приёмка среза: `make run-agent`, `make run-server`; `curl http://127.0.0.1:8080/bot$TOKEN/getMe` (правило `127.0.0.0/8`) и `curl http://127.0.0.1:8080/k/$KEY/bot$TOKEN/getMe` → `ok:true`; `sendMessage` в тестовый чат доходит; `getFile` + `/file/...` скачивает файл; в логах нет токена.
 
-**Срез M1:** реальный бот работает через `127.0.0.1:8080`.
+**Срез M1:** реальный бот работает через `127.0.0.1:8080`. Статус: сквозной путь до api.telegram.org подтверждён (getMe с фейковым токеном → 401 от Telegram по обоим правилам доступа); проверка `sendMessage`/`getFile` с реальным ботом — ждёт `TGP_DEV_BOT_TOKEN` в `dev/.env`.
 
 ---
 

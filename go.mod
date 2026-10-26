@@ -4,7 +4,11 @@ go 1.26.0
 
 toolchain go1.27.3
 
-require github.com/spf13/cobra v1.10.2
+require (
+	github.com/oklog/ulid/v2 v2.1.2
+	github.com/spf13/cobra v1.10.2
+	go.yaml.in/yaml/v3 v3.0.5
+)
 
 require (
 	github.com/a-h/parse v0.0.0-20250122154542-74294addb73e // indirect

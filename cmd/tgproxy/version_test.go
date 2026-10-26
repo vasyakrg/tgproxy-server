@@ -32,16 +32,3 @@ func TestVersionCommand(t *testing.T) {
 		}
 	}
 }
-
-func TestStubCommandsNotImplemented(t *testing.T) {
-	for _, name := range []string{"server", "agent"} {
-		cmd := newRootCmd()
-		cmd.SetOut(&bytes.Buffer{})
-		cmd.SetErr(&bytes.Buffer{})
-		cmd.SetArgs([]string{name})
-		err := cmd.Execute()
-		if err == nil || !strings.Contains(err.Error(), "not implemented") {
-			t.Errorf("%s: err = %v, want not implemented", name, err)
-		}
-	}
-}

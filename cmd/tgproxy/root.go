@@ -1,12 +1,13 @@
 package main
 
 import (
-	"errors"
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
-
-var errNotImplemented = errors.New("not implemented")
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
@@ -16,19 +17,19 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(
-		newStubCmd("server", "Запустить сервер (реализуется в M1)"),
-		newStubCmd("agent", "Запустить агент (реализуется в M1)"),
+		newServerCmd(),
+		newAgentCmd(),
+		newConfigCmd(),
+		newPKICmd(),
 		newVersionCmd(),
 	)
 	return root
 }
 
-func newStubCmd(use, short string) *cobra.Command {
-	return &cobra.Command{
-		Use:   use,
-		Short: short,
-		RunE: func(*cobra.Command, []string) error {
-			return errNotImplemented
-		},
+// signalContext возвращает контекст, отменяемый по SIGINT/SIGTERM.
+func signalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
 	}
+	return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 }

@@ -35,14 +35,14 @@ vuln: ## govulncheck
 snapshot: ## goreleaser snapshot
 	goreleaser release --snapshot --clean
 
-dev-certs: ## Dev-сертификаты (M1)
-	@echo "dev-certs: реализуется в M1" >&2; exit 1
+dev-certs: build ## Dev-сертификаты в dev/tls (идемпотентно)
+	./bin/tgproxy pki dev-init --out dev/tls --agent local
 
-run-server: ## Запустить сервер с dev-конфигом (M1)
-	@echo "run-server: реализуется в M1" >&2; exit 1
+run-server: build ## Запустить сервер с dev/server.yaml
+	./bin/tgproxy server -c dev/server.yaml
 
-run-agent: ## Запустить агент с dev-конфигом (M1)
-	@echo "run-agent: реализуется в M1" >&2; exit 1
+run-agent: build ## Запустить агент с dev/agent.yaml
+	./bin/tgproxy agent -c dev/agent.yaml
 
 redis-up: ## Поднять dev-Redis (TLS)
 	docker compose -f dev/docker-compose.yml up -d redis
