@@ -1,0 +1,19 @@
+package views
+
+// OverviewStub — заглушка экрана «Обзор» (заменяется в M4-T5).
+templ OverviewStub() {
+	@PageHeader("Обзор", "Трафик ботов через пул агентов")
+	@EmptyState("Данных пока нет", "Экран «Обзор» появится в следующем срезе.")
+}
+
+// NotFound — страница 404.
+templ NotFound() {
+	@PageHeader("Страница не найдена", "")
+	@EmptyState("404", "Такой страницы нет. Выберите раздел в меню слева.")
+}
+
+// ComingSoon — заглушка раздела, который появится в одном из следующих срезов.
+templ ComingSoon(title, subtitle, when string) {
+	@PageHeader(title, subtitle)
+	@EmptyState("Будет в "+when, "Раздел появится в одном из следующих срезов.")
+}

@@ -36,12 +36,14 @@ const (
 	PhaseWrite   = "write"
 	PhaseRead    = "read"
 	PhaseTimeout = "timeout"
+	// PhaseNoAgents — отказ роутера: нет ни одного здорового агента (запрос никуда не ушёл).
+	PhaseNoAgents = "no_agents"
 )
 
 // PhaseNotSent сообщает, что при такой фазе запрос точно не дошёл до Telegram.
 func PhaseNotSent(phase string) bool {
 	switch phase {
-	case PhaseDial, PhaseTLS, PhasePreSend:
+	case PhaseDial, PhaseTLS, PhasePreSend, PhaseNoAgents:
 		return true
 	}
 	return false

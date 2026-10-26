@@ -126,8 +126,12 @@ func TestMetricsNoHealthyAndTelegram429(t *testing.T) {
 	if last != fmt.Sprintf("a1/%d/false", history.OutcomeTG429) {
 		t.Fatal(last)
 	}
-	if len(errs.ev) != 1 || errs.ev[0].Outcome != store.OutcomePassedToBot || errs.ev[0].Code != 429 {
+	if len(errs.ev) != 2 || errs.ev[1].Outcome != store.OutcomePassedToBot || errs.ev[1].Code != 429 {
 		t.Fatalf("%+v", errs.ev)
+	}
+	// отказ «нет агентов» пишется в журнал: phase=no_agents, без агента
+	if ev := errs.ev[0]; ev.Phase != tgapi.PhaseNoAgents || ev.AgentID != "" || ev.Code != 502 || ev.Outcome != store.OutcomeFailedToBot || ev.Description != DescNoAgents {
+		t.Fatalf("no_agents event: %+v", ev)
 	}
 }
 

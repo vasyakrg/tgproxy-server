@@ -1,5 +1,9 @@
 # Dev-конфиг server (macOS, всё на 127.0.0.1). Схема: internal/config/config.go.
 # Проверка: tgproxy config validate --mode server -c dev/server.yaml
+server:
+  # Публичный base URL прокси: подставляется в UI «Доступ» (https; http — только loopback).
+  public_base_url: "http://127.0.0.1:8080"
+
 listen:
   proxy: "127.0.0.1:8080"          # прокси для ботов
   admin: "127.0.0.1:8090"          # Web-UI + /api/v1 + /healthz
@@ -20,7 +24,9 @@ pki:
   kek_file: ./dev/data/kek
 
 auth:
-  users_file: ./dev/users.yml
+  users_file: ./dev/users.yml     # права не шире 0640 (`make dev-setup`)
+  # ТОЛЬКО DEV; в проде TOTP обязателен. Включение TOTP: см. dev/README.md («Веб-UI»).
+  allow_password_only: true
 
 store:
   driver: sqlite                   # sqlite | redis (redis — только rediss://)

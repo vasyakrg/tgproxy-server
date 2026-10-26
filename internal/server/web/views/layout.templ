@@ -1,0 +1,87 @@
+package views
+
+// Layout — общий каркас страницы: head, сайдбар, <main>, область тостов.
+templ Layout(p PageMeta, body templ.Component) {
+	<!doctype html>
+	<html lang="ru">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="color-scheme" content="dark"/>
+			<meta name="theme-color" content="#0F1115"/>
+			<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true,"responseHandling":[{"code":"^204$","swap":false},{"code":"^[23]..$","swap":true},{"code":"^(404|422)$","swap":true,"error":false},{"code":"^[45]..$","swap":false,"error":true}]}'/>
+			<title>{ p.Title } — tgproxy</title>
+			<link rel="icon" href={ templ.SafeURL(Asset("img/favicon.ico")) } sizes="any"/>
+			<link rel="icon" type="image/png" sizes="192x192" href={ templ.SafeURL(Asset("img/icon-192.png")) }/>
+			<link rel="apple-touch-icon" href={ templ.SafeURL(Asset("img/apple-touch-icon.png")) }/>
+			<script src={ Asset("js/early.js") }></script>
+			<link rel="stylesheet" href={ templ.SafeURL(Asset("css/fonts.css")) }/>
+			<link rel="stylesheet" href={ templ.SafeURL(Asset("css/app.css")) }/>
+			<script src={ Asset("vendor/htmx/htmx.min.js") } defer></script>
+			<script src={ Asset("js/app.js") } defer></script>
+		</head>
+		<body>
+			<a class="skip-link" href="#main">К содержимому</a>
+			<div class="app">
+				@sidebar(p)
+				<main id="main" class="main" tabindex="-1">
+					if body != nil {
+						@body
+					}
+				</main>
+			</div>
+			<div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+		</body>
+	</html>
+}
+
+templ sidebar(p PageMeta) {
+	<aside class="sidebar" aria-label="Боковое меню">
+		<button
+			type="button"
+			id="sb-toggle"
+			class="sb-toggle"
+			aria-expanded="true"
+			aria-controls="sb-nav"
+			aria-label="Свернуть меню"
+			title="Свернуть меню"
+			data-label-open="Свернуть меню"
+			data-label-closed="Развернуть меню"
+		>
+			<img class="sb-logo" src={ Asset("img/logo-64.png") } alt="" width="32" height="32"/>
+			<span class="sb-name">tgproxy</span>
+			if p.Version != "" {
+				<span class="sb-version">{ p.Version }</span>
+			}
+			<svg class="icon sb-chevron" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>
+		</button>
+		<nav id="sb-nav" class="sb-nav" aria-label="Разделы">
+			for _, it := range navItems {
+				<a class="nav-link" href={ templ.SafeURL(it.Href) } aria-label={ it.Label } title={ it.Label } aria-current={ ariaCurrent(p.Active, it.Key) }>
+					@Icon(it.Icon, 20)
+					<span class="sb-label">{ it.Label }</span>
+				</a>
+			}
+		</nav>
+		<div class="sb-user">
+			<form method="post" action="/logout">
+				if p.CSRF != "" {
+					<input type="hidden" name="csrf" value={ p.CSRF }/>
+				}
+				<button type="submit" class="sb-logout" aria-label={ logoutLabel(p.User) } title="Выйти">
+					@Icon("logout", 20)
+				</button>
+			</form>
+			if p.User != "" {
+				<span class="sb-username">{ p.User }</span>
+			}
+		</div>
+	</aside>
+}
+
+func logoutLabel(user string) string {
+	if user == "" {
+		return "Выйти"
+	}
+	return "Выйти (" + user + ")"
+}

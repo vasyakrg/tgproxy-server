@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build generate test test-race lint vuln snapshot dev-certs run-server run-agent run-agent2 redis-up vendor-verify deploy
+.PHONY: help build generate test test-race lint vuln snapshot dev-certs dev-setup run-server run-agent run-agent2 redis-up vendor-verify deploy
 
 help: ## Список целей
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -37,6 +37,11 @@ snapshot: ## goreleaser snapshot
 
 dev-certs: build ## Dev-сертификаты (агенты local, local2) в dev/tls (идемпотентно)
 	./bin/tgproxy pki dev-init --out dev/tls --agent local --agent local2
+
+dev-setup: dev-certs ## dev-certs + KEK + права dev/users.yml (после этого `make run-server` без ручных шагов)
+	@mkdir -p dev/data
+	chmod 0640 dev/users.yml
+	./bin/tgproxy pki kek-init --out dev/data/kek
 
 run-server: build ## Запустить сервер с dev/server.yaml
 	./bin/tgproxy server -c dev/server.yaml

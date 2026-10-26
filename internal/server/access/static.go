@@ -154,3 +154,12 @@ func (c *Checker) clientIP(r *http.Request) netip.Addr {
 	}
 	return remote
 }
+
+// ClientIP возвращает адрес клиента с учётом trusted_proxies (та же логика, что при проверке
+// доступа); пустая строка — адрес не определён.
+func (c *Checker) ClientIP(r *http.Request) string {
+	if ip := c.clientIP(r); ip.IsValid() {
+		return ip.String()
+	}
+	return ""
+}

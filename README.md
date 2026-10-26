@@ -11,7 +11,7 @@
 
 ## Make-цели
 
-`make help` — полный список. Основные: `build`, `generate`, `test`, `test-race`, `lint`, `vuln`, `snapshot`, `dev-certs`, `run-server`, `run-agent`, `redis-up`, `vendor-verify`, `deploy`.
+`make help` — полный список. Основные: `build`, `generate`, `test`, `test-race`, `lint`, `vuln`, `snapshot`, `dev-certs`, `dev-setup`, `run-server`, `run-agent`, `redis-up`, `vendor-verify`, `deploy`.
 
 ```sh
 make build && ./bin/tgproxy version

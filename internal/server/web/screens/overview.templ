@@ -1,0 +1,142 @@
+package screens
+
+import (
+	"strconv"
+
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/views"
+)
+
+// OverviewPage — полная страница: подключает uPlot и charts.js, затем тело.
+templ OverviewPage(vm OverviewVM) {
+	<link rel="stylesheet" href={ views.Asset("vendor/uplot/uPlot.min.css") }/>
+	<script src={ views.Asset("vendor/uplot/uPlot.iife.min.js") } defer></script>
+	<script src={ views.Asset("js/charts.js") } defer></script>
+	@OverviewBody(vm)
+}
+
+// OverviewBody — содержимое #overview; именно оно подменяется при смене периода (htmx).
+templ OverviewBody(vm OverviewVM) {
+	<div id="overview" class="ov" hx-history="false">
+		@views.PageHeader("Обзор", "Трафик ботов через пул агентов") {
+			<div class="seg" role="group" aria-label="Период">
+				for _, ro := range vm.Ranges {
+					<button
+						type="button"
+						class="seg-btn"
+						aria-pressed={ strconv.FormatBool(ro.Active) }
+						hx-get={ "/?range=" + ro.Value }
+						hx-target="#overview"
+						hx-swap="outerHTML"
+						hx-push-url="true"
+					>{ ro.Label }</button>
+				}
+			</div>
+		}
+		<section class="kpi-grid" aria-label="Ключевые показатели">
+			for _, k := range vm.KPIs {
+				@ovKPI(k)
+			}
+		</section>
+		@chartCard(vm)
+		<div class="ov-cols">
+			<section class="card ov-agents">
+				<div class="card-head">
+					<h2 class="card-title">Агенты</h2>
+					<a class="card-link" href="/agents">Все агенты →</a>
+				</div>
+				if len(vm.Agents) == 0 {
+					@views.EmptyState("Агентов пока нет", "Добавьте первый агент, чтобы проксировать трафик ботов.") {
+						<a class="btn btn-primary" href="/agents">Перейти к агентам</a>
+					}
+				} else {
+					@views.Table("Агенты", []string{"Агент", "Статус", "rps", "p95", "Ошибки", "In-flight", "Версия"}) {
+						for _, a := range vm.Agents {
+							<tr>
+								<td>
+									<div class="cell-stack">
+										<span class="cell-name">{ a.Name }</span>
+										<span class="cell-sub col-id" title={ a.Addr }>{ a.Addr }</span>
+									</div>
+								</td>
+								<td>@views.StatusPill(a.Status, "")</td>
+								<td class="mono">{ a.RPS }</td>
+								<td class="mono">{ a.P95 }</td>
+								<td class="mono">{ a.Err }</td>
+								<td class="mono">{ a.Inflight }</td>
+								<td class={ "mono", templ.KV("ver-stale", a.VersionStale) }>{ a.Version }</td>
+							</tr>
+						}
+					}
+				}
+			</section>
+			<section class="card ov-events">
+				<div class="card-head">
+					<h2 class="card-title">События</h2>
+					<span class="card-note">уведомления отправлены в Telegram</span>
+				</div>
+				if len(vm.Events) == 0 {
+					<p class="ov-events-empty muted">Событий пока не было.</p>
+				} else {
+					<ul class="events">
+						for _, e := range vm.Events {
+							<li class="event">
+								<span class={ "event-dot", "event-" + e.Tone } aria-hidden="true"></span>
+								<div class="event-body">
+									<div class="event-text">{ e.Text }</div>
+									<div class="event-meta mono">{ e.Meta }</div>
+								</div>
+							</li>
+						}
+					</ul>
+				}
+			</section>
+		</div>
+	</div>
+}
+
+templ ovKPI(k KPIView) {
+	<div class={ "kpi", kpiToneClass(k.Tone) } data-kpi-card={ k.Key }>
+		<div class="kpi-label">{ k.Label }</div>
+		<div class="kpi-value" data-kpi={ k.Key }>{ k.Value }</div>
+		<div class="kpi-hint" data-kpi-hint={ k.Key }>{ k.Hint }</div>
+	</div>
+}
+
+templ chartCard(vm OverviewVM) {
+	<section class="card ov-chart">
+		<div class="ov-chart-head">
+			<h2 class="card-title">Запросы и ошибки, rps</h2>
+			<button type="button" class="live-btn" data-live-toggle aria-pressed="true" title="Остановить обновление">
+				<span class="live-dot dot-live" aria-hidden="true"></span>
+				<span data-live-label>{ "Live · опрос " + strconv.Itoa(vm.PollSec) + " с" }</span>
+			</button>
+			<span class="mono ov-updated" data-updated>обновлено 0 с назад</span>
+			<ul class="legend" aria-label="Серии графика">
+				<li><span class="legend-sw legend-ok" aria-hidden="true"></span>успешные</li>
+				<li><span class="legend-sw legend-err" aria-hidden="true"></span>ошибки прокси</li>
+				<li><span class="legend-sw legend-r429" aria-hidden="true"></span>429 Telegram</li>
+			</ul>
+		</div>
+		<div class="mono ov-tip" data-chart-tip>Наведите на график, чтобы увидеть значения</div>
+		<div
+			class="chart"
+			data-chart
+			data-range={ string(vm.Range) }
+			data-poll-ms={ strconv.Itoa(vm.PollMS) }
+			data-url={ vm.TimeseriesURL }
+			data-summary-url={ vm.SummaryURL }
+			role="img"
+			aria-label={ "График запросов в секунду за выбранный период, обновляется каждые " + strconv.Itoa(vm.PollSec) + " с" }
+		>
+			<div class="chart-plot" data-chart-plot></div>
+			<div class="chart-empty" data-chart-empty hidden>Данных пока нет</div>
+		</div>
+	</section>
+}
+
+func kpiToneClass(t views.Tone) string {
+	if t == views.ToneNeutral {
+		return ""
+	}
+	return "kpi-" + string(t)
+}

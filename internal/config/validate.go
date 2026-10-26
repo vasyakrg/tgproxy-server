@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -15,7 +14,7 @@ import (
 
 var (
 	idRe      = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	ruleRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	ruleRe    = regexp.MustCompile(`^[\p{L}\p{N} ._-]{1,64}$`)
 	repoRe    = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 	versionRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+([-+].+)?$`)
 )
@@ -72,6 +71,16 @@ func (v *validator) httpsURL(path, raw string) {
 	}
 }
 
+// CheckTLSOff проверяет допустимость tls.mode=off: возвращает описание
+// проблемы или "". Единый источник правила для validate и tlsin.
+func CheckTLSOff(trusted []netip.Prefix, proxyListen string) string {
+	if len(trusted) == 0 && !isLoopbackListen(proxyListen) {
+		return fmt.Sprintf("off requires trusted_proxies unless listen.proxy is loopback (got %q): "+
+			"terminate TLS on a reverse proxy and list it in trusted_proxies, or use files|acme", proxyListen)
+	}
+	return ""
+}
+
 // isLoopbackListen: слушает ли адрес только loopback. Пустой host (":8080") —
 // все интерфейсы, то есть не loopback.
 func isLoopbackListen(addr string) bool {
@@ -96,6 +105,7 @@ func ValidateServer(c *ServerConfig) error {
 	v.addr("listen.metrics", c.Listen.Metrics)
 	v.addr("listen.agent_gateway", c.Listen.AgentGateway)
 
+	v.publicBaseURL(c.Server.PublicBaseURL)
 	v.serverTLS(c)
 
 	for i, p := range c.TrustedProxies {
@@ -161,9 +171,8 @@ func (v *validator) serverTLS(c *ServerConfig) {
 		// (":8080", 0.0.0.0, внешний IP) — открытый plaintext-вход без TLS и без
 		// объявленного терминатора TLS; это ошибка, а не предупреждение: «мягкие»
 		// предупреждения в конфиге systemd-сервиса никто не читает.
-		if len(c.TrustedProxies) == 0 && !isLoopbackListen(c.Listen.Proxy) {
-			v.add("tls.mode", "off requires trusted_proxies unless listen.proxy is loopback (got %q): "+
-				"terminate TLS on a reverse proxy and list it in trusted_proxies, or use files|acme", c.Listen.Proxy)
+		if msg := CheckTLSOff(c.TrustedProxies, c.Listen.Proxy); msg != "" {
+			v.add("tls.mode", "%s", msg)
 		}
 	case TLSModeFiles:
 		if t.CertFile == "" {
@@ -186,6 +195,11 @@ func (v *validator) serverTLS(c *ServerConfig) {
 		}
 		if e := t.ACME.Email; e != "" && !strings.Contains(e, "@") {
 			v.add("tls.acme.email", "invalid email %q", e)
+		}
+		if l := t.ACME.HTTP01Listen; l != "" {
+			if _, _, err := net.SplitHostPort(l); err != nil {
+				v.add("tls.acme.http01_listen", "want host:port, got %q", l)
+			}
 		}
 		if u := t.ACME.DirectoryURL; u != "" {
 			if pu, err := url.Parse(u); err != nil || pu.Scheme != "https" || pu.Host == "" {
@@ -232,39 +246,13 @@ func (v *validator) accessRules(rules []AccessRule) {
 	seen := map[string]bool{}
 	for i, r := range rules {
 		p := fmt.Sprintf("access_rules[%d]", i)
-		switch {
-		case !ruleRe.MatchString(r.Name):
-			v.add(p+".name", "invalid name %q", r.Name)
-		case seen[r.Name]:
+		for _, is := range CheckAccessRule(r) {
+			v.add(p+is.path(), "%s", is.Msg)
+		}
+		if ValidRuleName(r.Name) && seen[r.Name] {
 			v.add(p+".name", "duplicate name %q", r.Name)
 		}
 		seen[r.Name] = true
-
-		if r.KeySHA256 != "" && r.KeyFile != "" {
-			v.add(p, "key_sha256 and key_file are mutually exclusive")
-		}
-		if r.KeySHA256 != "" {
-			if b, err := hex.DecodeString(r.KeySHA256); err != nil || len(b) != 32 {
-				v.add(p+".key_sha256", "want 64 hex characters (SHA-256)")
-			}
-		}
-		if len(r.CIDRs) == 0 && !r.HasKey() {
-			v.add(p, "rule without networks and without key is an open relay to the Bot API")
-		}
-		for j, n := range r.CIDRs {
-			cp := fmt.Sprintf("%s.cidrs[%d]", p, j)
-			switch {
-			case !n.IsValid():
-				v.add(cp, "invalid prefix")
-			case n.Bits() == 0 && !r.HasKey():
-				v.add(cp, "%s without a key is an open relay to the Bot API", n)
-			case n != n.Masked():
-				v.add(cp, "%s has host bits set, want %s", n, n.Masked())
-			}
-		}
-		if r.RPS < 0 {
-			v.add(p+".rps", "must not be negative, got %g", r.RPS)
-		}
 	}
 }
 
@@ -381,4 +369,38 @@ func ValidateAgent(c *AgentConfig) error {
 	}
 	v.logging(c.Logging)
 	return v.err()
+}
+
+// publicBaseURL: https://host[:port] или http://<loopback>[:port]; без пути, query и userinfo.
+func (v *validator) publicBaseURL(raw string) {
+	if raw == "" {
+		return
+	}
+	const path = "server.public_base_url"
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		v.add(path, "invalid URL %q", raw)
+		return
+	}
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		v.add(path, "must be scheme://host[:port] without path, query or credentials")
+		return
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !isLoopbackHost(u.Hostname()) {
+			v.add(path, "http is allowed only for loopback hosts, use https")
+		}
+	default:
+		v.add(path, "scheme must be https (or http on loopback), got %q", u.Scheme)
+	}
+}
+
+func isLoopbackHost(h string) bool {
+	if h == "localhost" {
+		return true
+	}
+	a, err := netip.ParseAddr(h)
+	return err == nil && a.IsLoopback()
 }

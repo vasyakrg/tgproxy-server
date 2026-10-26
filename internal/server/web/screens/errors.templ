@@ -1,0 +1,125 @@
+package screens
+
+import "github.com/vasyakrg/tgproxy-server/internal/server/web/views"
+
+// ErrorsPage — полная страница «Ошибки».
+templ ErrorsPage(vm ErrorsVM) {
+	<div id="errors" class="errs">
+		@views.PageHeader("Ошибки", "Отказы прокси и агентов. Тела запросов не сохраняются, токены замаскированы.")
+		<section class="phase-grid" aria-label="Сводка за 24 часа">
+			for _, k := range vm.KPIs {
+				<div class="phase-card">
+					<div class="phase-label mono">{ k.Label }</div>
+					<div class="phase-value mono">{ k.Value }</div>
+					<div class={ "phase-hint", "tone-" + k.Tone }>{ k.Hint }</div>
+				</div>
+			}
+		</section>
+		<section class="card errs-card" hx-history="false">
+			@errorsFilters(vm)
+			@ErrorsResults(vm)
+		</section>
+	</div>
+}
+
+templ errorsFilters(vm ErrorsVM) {
+	<form
+		class="errs-filters"
+		method="get"
+		action="/errors"
+		hx-get="/errors"
+		hx-trigger="submit, change"
+		hx-target="#errors-results"
+		hx-swap="outerHTML"
+		hx-push-url="true"
+	>
+		<div class="field errs-f-agent">
+			<label class="field-label" for="f-agent">Агент</label>
+			<select class="select" id="f-agent" name="agent">
+				<option value="">Все</option>
+				for _, a := range vm.AgentOpts {
+					<option value={ a } selected?={ a == vm.Filter.Agent }>{ a }</option>
+				}
+			</select>
+		</div>
+		<div class="field errs-f-bot">
+			<label class="field-label" for="f-bot_id">bot_id</label>
+			<input class="input mono" id="f-bot_id" name="bot_id" type="text" inputmode="numeric" autocomplete="off" placeholder="7012345678" value={ vm.Filter.BotID }/>
+		</div>
+		<div class="field errs-f-phase">
+			<label class="field-label" for="f-phase">Фаза</label>
+			<select class="select" id="f-phase" name="phase">
+				<option value="">Все</option>
+				for _, p := range vm.PhaseOpts {
+					<option value={ p } selected?={ p == vm.Filter.Phase }>{ p }</option>
+				}
+			</select>
+		</div>
+		<div class="field errs-f-code">
+			<label class="field-label" for="f-code">Код</label>
+			<select class="select" id="f-code" name="code">
+				<option value="">Все</option>
+				for _, c := range vm.CodeOpts {
+					<option value={ c } selected?={ c == vm.Filter.Code }>{ c }</option>
+				}
+			</select>
+		</div>
+		<div class="field errs-f-req">
+			<label class="field-label" for="f-request_id">Request ID</label>
+			<input class="input mono" id="f-request_id" name="request_id" type="text" autocomplete="off" placeholder="01JB…" value={ vm.Filter.RequestID }/>
+		</div>
+		<button type="submit" class="btn">Применить</button>
+	</form>
+}
+
+// ErrorsResults — таблица журнала (подменяется целиком при смене фильтров).
+templ ErrorsResults(vm ErrorsVM) {
+	<div id="errors-results" class="errs-results">
+		if len(vm.Rows) == 0 {
+			if vm.Filtered {
+				@views.EmptyState("Ничего не найдено", "Под выбранные фильтры записей нет. Сбросьте фильтры или расширьте условия.")
+			} else {
+				@views.EmptyState("Ошибок нет", "Журнал пуст — отказов прокси и агентов не было.")
+			}
+		} else {
+			@views.Table("Журнал ошибок", []string{"Время", "Request ID", "bot_id", "Метод", "Агент", "Фаза", "Код", "Итог"}) {
+				@ErrorRows(vm.Rows, vm.MoreURL)
+			}
+		}
+	</div>
+}
+
+// ErrorRows — строки таблицы и (если есть следующая страница) строка «Показать ещё».
+// Кнопка подменяет собственную строку строками следующей страницы.
+templ ErrorRows(rows []ErrorRow, moreURL string) {
+	for _, r := range rows {
+		<tr class={ templ.KV("errs-has-desc", r.Description != "") }>
+			<td class="mono muted">{ r.Time }</td>
+			<td class="mono col-id" title={ r.RequestIDFull }>{ r.RequestID }</td>
+			<td class="mono col-id" title={ r.BotID }>{ r.BotID }</td>
+			<td class="mono">{ r.Method }</td>
+			<td class="mono">{ r.Agent }</td>
+			<td class={ "mono", "phase-" + r.PhaseTone }>{ r.Phase }</td>
+			<td class="mono">{ r.Code }</td>
+			<td>@views.Chip(r.OutcomeText, r.OutcomeTone)</td>
+		</tr>
+		if r.Description != "" {
+			<tr class="errs-detail">
+				<td colspan="8" class="errs-desc"><span class="sr-only">Описание: </span>{ r.Description }</td>
+			</tr>
+		}
+	}
+	if moreURL != "" {
+		<tr class="errs-more-row">
+			<td colspan="8">
+				<button
+					type="button"
+					class="btn"
+					hx-get={ moreURL }
+					hx-target="closest tr"
+					hx-swap="outerHTML"
+				>Показать ещё</button>
+			</td>
+		</tr>
+	}
+}

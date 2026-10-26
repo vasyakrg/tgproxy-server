@@ -308,10 +308,10 @@ func TestTimeseriesResolutionAndSince(t *testing.T) {
 		t.Fatalf("since=last must be empty: %+v", none.Points)
 	}
 	day, _ := q.Timeseries(ctx, history.Range24h, "", time.Time{})
-	if len(day.Points) != 1 || day.StepSec != 300 || day.Points[0].OKRPS != 10 {
+	if len(day.Points) != 2 || day.StepSec != 300 || day.Points[0].OKRPS != 10 || day.Points[1].OKRPS != 0.4 { // 5m + хвост из 10s
 		t.Fatalf("24h %+v", day)
 	}
-	if w, _ := q.Timeseries(ctx, history.Range7d, "", time.Time{}); len(w.Points) != 1 {
+	if w, _ := q.Timeseries(ctx, history.Range7d, "", time.Time{}); len(w.Points) != 2 {
 		t.Fatalf("7d %+v", w)
 	}
 	ag, _ := q.Timeseries(ctx, history.Range1h, "a1", time.Time{})
@@ -330,6 +330,42 @@ func TestTimeseriesResolutionAndSince(t *testing.T) {
 	}
 	if _, err := bad.Summary(ctx); err == nil {
 		t.Fatal("want err")
+	}
+}
+
+// Свежая установка: 5m-окон ещё нет, 24h/7d обязаны показать 10s-хвост текущего окна.
+func TestTimeseriesOpenTailOnFreshInstall(t *testing.T) {
+	ctx := context.Background()
+	st := memtest.New()
+	now := t0.Add(2*time.Minute + 5*time.Second) // 12:02:05 — окно 12:00 не закрыто
+	q := &history.Query{History: st.History(), Now: func() time.Time { return now }}
+	_ = st.History().Append(ctx, store.Res10s, []store.Sample{
+		{At: t0, AgentID: history.AggregateID, OK: 100, Inflight: 2},
+		{At: t0.Add(10 * time.Second), AgentID: history.AggregateID, OK: 50, Err: 5, Inflight: 4},
+		{At: t0.Add(10 * time.Second), AgentID: "a1", OK: 7},
+	})
+	for _, rng := range []history.Range{history.Range24h, history.Range7d} {
+		s, err := q.Timeseries(ctx, rng, "", time.Time{})
+		if err != nil || len(s.Points) != 1 {
+			t.Fatalf("%s: %+v %v", rng, s, err)
+		}
+		p := s.Points[0]
+		if p.T != t0.Unix() || p.OKRPS != 150.0/125 || p.ErrRPS != 5.0/125 || p.Inflight != 4 {
+			t.Fatalf("%s: point %+v", rng, p)
+		}
+		// открытое окно отдаётся и при since == T (клиент перезаписывает последнюю точку)
+		inc, _ := q.Timeseries(ctx, rng, "", time.Unix(p.T, 0))
+		if len(inc.Points) != 1 {
+			t.Fatalf("%s since: %+v", rng, inc.Points)
+		}
+		if after, _ := q.Timeseries(ctx, rng, "", time.Unix(p.T+1, 0)); len(after.Points) != 0 {
+			t.Fatalf("%s since>T: %+v", rng, after.Points)
+		}
+	}
+	// закрытое окно уже в 5m — дубликата из 10s нет
+	_ = st.History().Append(ctx, store.Res5m, []store.Sample{{At: t0, AgentID: history.AggregateID, OK: 999}})
+	if s, _ := q.Timeseries(ctx, history.Range24h, "", time.Time{}); len(s.Points) != 1 || s.Points[0].OKRPS != 999.0/300 {
+		t.Fatalf("dup: %+v", s.Points)
 	}
 }
 

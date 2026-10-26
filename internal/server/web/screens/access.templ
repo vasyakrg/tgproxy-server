@@ -1,0 +1,270 @@
+package screens
+
+import (
+	"strconv"
+
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/views"
+)
+
+const rulesHeaderCaption = "Правила доступа"
+
+var ruleHeaders = []string{"Правило", "Тип", "Сети", "Ключ", "Лимит", "Запросов 24ч", "Последний запрос", views.ActionsHeader}
+
+// AccessPage — экран «Доступ».
+templ AccessPage(v AccessVM) {
+	@views.PageHeader("Доступ", "Откуда разрешено слать трафик. Боты не регистрируются: запросы уходят в api.telegram.org как есть.") {
+		<button type="button" class="btn btn-primary" data-modal-open="rule-modal" hx-get="/access/new" hx-target="#rule-modal-body" hx-swap="innerHTML">+ Новое правило</button>
+	}
+	<section class="howto" aria-label="Как подключить бота">
+		<div class="card howto-card">
+			<div class="howto-label">Из разрешённой сети — меняется только адрес</div>
+			<code class="mono code-wrap">{ v.BaseURL + "/bot<token>/sendMessage" }</code>
+		</div>
+		<div class="card howto-card">
+			<div class="howto-label">Из любой сети — скрытый ключ в адресе</div>
+			<code class="mono code-wrap">{ v.BaseURL + "/k/<ключ>/bot<token>/sendMessage" }</code>
+		</div>
+	</section>
+	@RulesSection(v.Rows, false)
+	@botsSection(v.Bots)
+	@RuleModal(false)
+}
+
+// RuleModal — диалог правила (тело подгружается htmx). С oob=true заменяет открытый диалог закрытым.
+templ RuleModal(oob bool) {
+	<div
+		id="rule-modal-wrap"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		@views.Modal("rule-modal", "Правило доступа") {
+			<div id="rule-modal-body"></div>
+		}
+	</div>
+}
+
+// RulesSection — таблица правил. С oob=true подменяет секцию на странице (htmx out-of-band).
+templ RulesSection(rows []RuleRow, oob bool) {
+	<section
+		id="rules-section"
+		class="card card-flush"
+		aria-label="Правила доступа"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		if len(rows) == 0 {
+			@views.EmptyState("Правил пока нет", "Пока нет ни одного правила, прокси отвечает 403 на любой запрос. Создайте первое правило.")
+		} else {
+			@views.Table(rulesHeaderCaption, ruleHeaders) {
+				for _, r := range rows {
+					@ruleRow(r)
+				}
+			}
+		}
+	</section>
+}
+
+templ ruleRow(r RuleRow) {
+	<tr>
+		<td class="cell-name">
+			{ r.Name }
+			if !r.Enabled {
+				@views.Chip("отключено", views.ToneWarn)
+			}
+		</td>
+		<td>@views.Chip(r.KindLabel, r.KindTone)</td>
+		<td class="col-wrap">
+			if len(r.CIDRs) == 0 {
+				<span class="muted">любые</span>
+			} else {
+				<div class="chips">
+					for _, c := range r.CIDRs {
+						<span class="chip chip-mono">{ c }</span>
+					}
+				</div>
+			}
+		</td>
+		<td class="mono">{ r.KeyPrefix }</td>
+		<td class="mono">{ r.Limit }</td>
+		<td class="mono">{ r.Requests }</td>
+		<td class={ "mono", templ.KV("muted", r.SeenMuted) }>{ r.LastSeen }</td>
+		<td class="col-actions">
+			<div class="row-actions">
+				@views.IconButton("Изменить правило "+r.Name, "edit", false, templ.Attributes{
+					"hx-get":          "/access/" + strconv.FormatInt(r.ID, 10) + "/edit",
+					"hx-target":       "#rule-modal-body",
+					"hx-swap":         "innerHTML",
+					"data-modal-open": "rule-modal",
+				})
+				@views.IconButton("Удалить правило "+r.Name, "trash", true, templ.Attributes{
+					"hx-get":          "/access/" + strconv.FormatInt(r.ID, 10) + "/delete",
+					"hx-target":       "#rule-modal-body",
+					"hx-swap":         "innerHTML",
+					"data-modal-open": "rule-modal",
+				})
+			</div>
+		</td>
+	</tr>
+}
+
+templ botsSection(bots []BotRow) {
+	<section class="card" aria-label="Активные боты за 24 часа">
+		<div class="card-head">
+			<h2 class="card-title">Активные боты за 24 часа</h2>
+			<span class="muted small">по трафику, без регистрации; токены не хранятся</span>
+		</div>
+		if len(bots) == 0 {
+			<p class="muted">Пока нет трафика.</p>
+		} else {
+			@views.Table("Активные боты за 24 часа", []string{"bot_id", "Правило", "Запросов", "Ошибки", "429"}) {
+				for _, b := range bots {
+					<tr>
+						<td class="mono col-id" title={ b.BotID }>{ b.BotID }</td>
+						<td>{ b.Rule }</td>
+						<td class="mono">{ b.Requests }</td>
+						<td class="mono">{ b.Errors }</td>
+						<td class={ "mono", templ.KV("tg-text", b.Limited), templ.KV("muted", !b.Limited) }>{ b.R429 }</td>
+					</tr>
+				}
+			}
+		}
+	</section>
+}
+
+// RuleForm — форма создания (ID == 0) или изменения правила.
+templ RuleForm(f RuleFormVM) {
+	<form
+		class="stack"
+		method="post"
+		action={ templ.SafeURL(f.Action()) }
+		hx-post={ f.Action() }
+		hx-target="#rule-modal-body"
+		hx-swap="innerHTML"
+		hx-disabled-elt="find button[type=submit]"
+		novalidate
+	>
+		<h3 class="form-title">
+			if f.IsNew() {
+				Новое правило
+			} else {
+				Изменить правило
+			}
+		</h3>
+		if f.Errors["_"] != "" {
+			<div class="alert alert-err" role="alert">{ f.Errors["_"] }</div>
+		}
+		@views.Field(views.FieldProps{
+			ID: "rule-name", Name: "name", Label: "Название", Value: f.Name, Error: f.Errors["name"],
+			Hint: "Латиница, цифры, «.», «_», «-»", Required: true,
+			Attrs: templ.Attributes{"maxlength": "64", "autocomplete": "off", "spellcheck": "false"},
+		})
+		<div class={ "field", templ.KV("field-invalid", f.Errors["cidrs"] != "") }>
+			<label class="field-label" for="rule-cidrs">Сети, CIDR по одному в строке (пусто — любые, но тогда нужен ключ)</label>
+			<textarea
+				class="textarea mono"
+				id="rule-cidrs"
+				name="cidrs"
+				rows="3"
+				spellcheck="false"
+				placeholder="10.20.0.0/16"
+				if f.Errors["cidrs"] != "" {
+					aria-invalid="true"
+					aria-describedby="rule-cidrs-error"
+				}
+			>{ f.CIDRs }</textarea>
+			if f.Errors["cidrs"] != "" {
+				<div class="field-error" id="rule-cidrs-error" role="alert">{ f.Errors["cidrs"] }</div>
+			}
+		</div>
+		if f.IsNew() {
+			<label class="check">
+				<input type="checkbox" name="with_key" value="1" checked?={ f.WithKey }/>
+				<span>Скрытый ключ в адресе</span>
+			</label>
+		} else {
+			<div class="field">
+				<span class="field-label">Скрытый ключ</span>
+				if f.KeyPrefix != "" {
+					<span class="mono">{ f.KeyPrefix }</span>
+					<span class="field-hint">Ключ изменить нельзя: создайте новое правило и удалите это.</span>
+				} else {
+					<span class="muted">нет — доступ только из указанных сетей</span>
+				}
+			</div>
+		}
+		@views.Field(views.FieldProps{
+			ID: "rule-rps", Name: "rps", Label: "Лимит, запросов/с", Value: f.RPS, Error: f.Errors["rps"],
+			Hint: "0 или пусто — без лимита",
+			Attrs: templ.Attributes{"inputmode": "decimal", "autocomplete": "off", "maxlength": "10"},
+		})
+		if !f.IsNew() {
+			<label class="check">
+				<input type="checkbox" name="enabled" value="1" checked?={ f.Enabled }/>
+				<span>Правило включено</span>
+			</label>
+		}
+		<p class="form-note">Правило без сетей и без ключа не создаётся: это открытый прокси, за который Telegram банит IP агентов.</p>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-primary">
+				if f.IsNew() {
+					Создать правило
+				} else {
+					Сохранить
+				}
+			</button>
+		</div>
+	</form>
+}
+
+// DeleteConfirm — подтверждение удаления (в модалке).
+templ DeleteConfirm(id int64, name string) {
+	<div class="stack">
+		<h3 class="form-title">Удалить правило?</h3>
+		<p>Правило <strong>{ name }</strong> будет удалено.</p>
+		<p class="muted">Клиенты, которые подходили только под это правило, начнут получать 403. Действие нельзя отменить.</p>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			@views.Button("Удалить", views.ButtonDanger, templ.Attributes{
+				"hx-post":   "/access/" + strconv.FormatInt(id, 10) + "/delete",
+				"hx-target": "#rule-modal-body",
+				"hx-swap":   "innerHTML",
+			})
+		</div>
+	</div>
+}
+
+// CreatedPanel — результат создания: ключ и Base URL показываются один раз.
+templ CreatedPanel(c CreatedVM) {
+	<div class="stack">
+		<h3 class="form-title">Правило «{ c.Name }» создано</h3>
+		if c.Key != "" {
+			<div class="alert alert-warn" role="status">Ключ показан один раз. На сервере хранится только его хеш.</div>
+		}
+		<div class="field">
+			<span class="field-label">Base URL для бота</span>
+			<div class="copy-row">
+				<code class="mono code-box" id="new-rule-url">{ c.BaseURL }</code>
+				@views.IconButton("Копировать Base URL", "copy", false, templ.Attributes{"data-copy": "new-rule-url"})
+			</div>
+		</div>
+		if c.Key != "" {
+			<div class="field">
+				<span class="field-label">Скрытый ключ</span>
+				<div class="copy-row">
+					<code class="mono code-box" id="new-rule-key">{ c.Key }</code>
+					@views.IconButton("Копировать ключ", "copy", false, templ.Attributes{"data-copy": "new-rule-key"})
+				</div>
+			</div>
+			<p class="hint">Клиент меняет только адрес: <span class="mono">{ "{base}/bot<token>/sendMessage" }</span>. Если клиент умеет заголовки, ключ можно передать в <span class="mono">X-Proxy-Key</span>.</p>
+		} else {
+			<p class="hint">Клиент меняет только адрес: <span class="mono">{ "{base}/bot<token>/sendMessage" }</span>. Доступ — только из указанных сетей.</p>
+		}
+		<p class="hint">Вебхуки не поддерживаются: используйте getUpdates.</p>
+		<div class="form-actions">
+			<button type="button" class="btn btn-primary" data-modal-close>Готово</button>
+		</div>
+	</div>
+}

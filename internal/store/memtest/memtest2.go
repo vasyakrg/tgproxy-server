@@ -49,6 +49,19 @@ func (r outboxRepo) Pending(_ context.Context, limit int) ([]store.OutboxItem, e
 	return out, nil
 }
 
+func (r outboxRepo) Recent(_ context.Context, limit int) ([]store.OutboxItem, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	var out []store.OutboxItem
+	for i := len(r.s.outbox) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, r.s.outbox[i])
+	}
+	return out, nil
+}
+
 func (r outboxRepo) CountPending(context.Context) (int, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()

@@ -22,7 +22,7 @@ func TestServerValidation(t *testing.T) {
 		{"rule both key forms", baseServer + "access_rules:\n  - name: k\n    key_sha256: " + strings.Repeat("ab", 32) + "\n    key_file: /x\n", []string{"mutually exclusive"}},
 		{"rule host bits", baseServer + "access_rules:\n  - name: n\n    cidrs: [10.0.0.1/8]\n", []string{"host bits"}},
 		{"rule negative rps", baseServer + "access_rules:\n  - name: n\n    cidrs: [10.0.0.0/8]\n    rps: -1\n", []string{"access_rules[0].rps"}},
-		{"rule bad name", baseServer + "access_rules:\n  - name: 'a b'\n    cidrs: [10.0.0.0/8]\n", []string{"access_rules[0].name"}},
+		{"rule bad name", baseServer + "access_rules:\n  - name: 'a/b'\n    cidrs: [10.0.0.0/8]\n", []string{"access_rules[0].name"}},
 		{"rule dup name", baseServer + "access_rules:\n  - name: a\n    cidrs: [10.0.0.0/8]\n  - name: a\n    cidrs: [10.0.0.0/8]\n", []string{"access_rules[1].name", "duplicate"}},
 
 		{"tls off public proxy no trusted", "listen:\n  proxy: ':8080'\n  metrics: '127.0.0.1:9090'\ntls:\n  mode: 'off'\n", []string{"tls.mode", "trusted_proxies"}},
@@ -156,5 +156,39 @@ func TestAgentValidation(t *testing.T) {
 			}
 			wantErr(t, err, tc.want...)
 		})
+	}
+}
+
+func TestValidRuleName(t *testing.T) {
+	ok := []string{"x", "my rule", "Правило-1", "a.b_c-d", "Бот 42", strings.Repeat("я", 64)}
+	bad := []string{"", " x", "x ", "a/b", "a\tb", "a:b", "x\n", "правило!", strings.Repeat("a", 65), strings.Repeat("я", 65)}
+	for _, n := range ok {
+		if !ValidRuleName(n) {
+			t.Errorf("%q: want valid", n)
+		}
+	}
+	for _, n := range bad {
+		if ValidRuleName(n) {
+			t.Errorf("%q: want invalid", n)
+		}
+	}
+}
+
+func TestPublicBaseURL(t *testing.T) {
+	cases := []struct {
+		url string
+		ok  bool
+	}{
+		{"", true}, {"https://tg.example.com", true}, {"https://tg.example.com:8443/", true},
+		{"http://127.0.0.1:8080", true}, {"http://localhost:8080", true}, {"http://[::1]:8080", true},
+		{"http://tg.example.com", false}, {"ftp://tg.example.com", false}, {"https://tg.example.com/path", false},
+		{"https://u:p@tg.example.com", false}, {"https://", false}, {"tg.example.com", false},
+	}
+	for _, c := range cases {
+		v := &validator{}
+		v.publicBaseURL(c.url)
+		if got := len(v.errs) == 0; got != c.ok {
+			t.Errorf("%q: valid=%v, want %v (%v)", c.url, got, c.ok, v.errs)
+		}
 	}
 }

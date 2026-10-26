@@ -86,6 +86,8 @@ type OutboxRepo interface {
 	MarkSent(ctx context.Context, id int64, at time.Time) error
 	RecordAttempt(ctx context.Context, id int64, lastError string) error
 	DeleteSentBefore(ctx context.Context, t time.Time) (int, error)
+	// Recent — последние limit элементов (отправленных и нет), новые первыми.
+	Recent(ctx context.Context, limit int) ([]OutboxItem, error)
 }
 
 // HistoryRepo — временные ряды метрик (10s/24h, 5m/30d).

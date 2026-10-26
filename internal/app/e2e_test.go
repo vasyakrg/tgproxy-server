@@ -28,6 +28,7 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
 	"github.com/vasyakrg/tgproxy-server/internal/server/access"
 	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/auth"
 	"github.com/vasyakrg/tgproxy-server/internal/transport"
 )
 
@@ -227,6 +228,7 @@ func newE2E(t *testing.T, o e2eOpts) *e2e {
 	// сервер
 	scfg := config.DefaultServer()
 	scfg.Listen.Metrics = "127.0.0.1:0"
+	scfg.Listen.Proxy = "127.0.0.1:0" // tls.mode=off допустим только на loopback без trusted_proxies
 	for _, a := range e.agents {
 		scfg.Agents = append(scfg.Agents, config.AgentEndpoint{ID: a.id, URL: "https://" + a.addr, Mode: config.AgentModeDial, Weight: 1})
 	}
@@ -244,17 +246,23 @@ func newE2E(t *testing.T, o e2eOpts) *e2e {
 	}
 	e.cfg = scfg
 	sopts := ServerOptions{}
+	chatID := int64(0)
 	if o.obs {
-		dir := t.TempDir()
-		users := filepath.Join(dir, "users.yml")
+		chatID = obsChatID
+	}
+	dir := t.TempDir()
+	scfg.Auth.UsersFile = writeTestUsers(t, dir, chatID)
+	scfg.Auth.AllowPasswordOnly = true
+	scfg.PKI.KEKFile = filepath.Join(dir, "kek")
+	if err := pki.GenerateKEK(scfg.PKI.KEKFile); err != nil {
+		t.Fatal(err)
+	}
+	scfg.Server.PublicBaseURL = "http://127.0.0.1:8080"
+	if o.obs {
 		tokFile := filepath.Join(dir, "notify-token")
-		if err := os.WriteFile(users, []byte(fmt.Sprintf("users:\n  admin:\n    telegram_id: %d\n  nobody:\n    telegram_id: 0\n", obsChatID)), 0o600); err != nil {
-			t.Fatal(err)
-		}
 		if err := os.WriteFile(tokFile, []byte(notifyToken), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		scfg.Auth.UsersFile = users
 		scfg.Notify.BotTokenFile, scfg.Notify.BotToken = tokFile, config.Secret(notifyToken)
 		scfg.Metrics.Bearer = config.Secret(metricsBear)
 		e.ticks, e.msgs = make(chan time.Time), make(chan tgMessage, 32)
@@ -730,11 +738,15 @@ func TestE2ENoTokenInLogs(t *testing.T) {
 	}
 }
 
-func TestIngressTLSACMENotImplemented(t *testing.T) {
+func TestIngressTLSACMEViaEgressNeedsClient(t *testing.T) {
 	c := config.DefaultServer()
 	c.Listen.Metrics = "127.0.0.1:0"
-	c.TLS.Mode = config.TLSModeACME
-	if _, err := ingressTLS(c); err == nil || !strings.Contains(err.Error(), "M4-T9") {
+	c.TLS = config.IngressTLS{
+		Mode: config.TLSModeACME, Domains: []string{"x.test"}, CacheDir: filepath.Join(t.TempDir(), "acme"),
+		ACME: config.ACMEConfig{ViaAgentEgress: true},
+	}
+	s := &Server{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if _, err := s.newIngress(c); err == nil || !strings.Contains(err.Error(), "via_agent_egress") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -759,4 +771,23 @@ func TestNewLoggerRedactsAndLevels(t *testing.T) {
 	if _, _, err := NewLogger(config.LoggingConfig{Level: "info", Format: "xml"}, &buf); err == nil {
 		t.Fatal("bad format")
 	}
+}
+
+// testPassword — пароль пользователей тестового users-файла.
+const testPassword = "test-password"
+
+// writeTestUsers пишет users-файл (admin с паролем testPassword, получатель alert-ов chatID).
+func writeTestUsers(t *testing.T, dir string, chatID int64) string {
+	t.Helper()
+	hash, err := auth.Hash(testPassword, auth.DefaultHashParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf("users:\n  admin:\n    displayname: Test Admin\n    password: '%s'\n    telegram_id: %d\n"+
+		"  nobody:\n    password: '%s'\n    telegram_id: 0\n", hash, chatID, hash)
+	path := filepath.Join(dir, "users.yml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

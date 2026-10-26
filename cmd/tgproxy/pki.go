@@ -11,7 +11,7 @@ import (
 
 func newPKICmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "pki", Short: "Сертификаты"}
-	cmd.AddCommand(newPKIDevInitCmd())
+	cmd.AddCommand(newPKIDevInitCmd(), newPKIKEKInitCmd())
 	return cmd
 }
 
@@ -38,5 +38,29 @@ func newPKIDevInitCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&out, "out", "dev/tls", "каталог для сертификатов")
 	cmd.Flags().StringSliceVar(&agentIDs, "agent", []string{"local"}, "id агентов (повторяемый или через запятую)")
+	return cmd
+}
+
+func newPKIKEKInitCmd() *cobra.Command {
+	var out string
+	cmd := &cobra.Command{
+		Use:   "kek-init",
+		Short: "Создать ключ шифрования секретов (KEK, 32 байта, 0400); существующий файл не перезаписывается",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			w := cmd.OutOrStdout()
+			err := pki.GenerateKEK(out)
+			switch {
+			case errors.Is(err, pki.ErrKEKExists):
+				_, werr := fmt.Fprintf(w, "KEK уже существует: %s, пропуск\n", out)
+				return werr
+			case err != nil:
+				return err
+			}
+			_, err = fmt.Fprintf(w, "KEK создан: %s (0400)\n", out)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&out, "out", "/etc/tgproxy/kek", "путь к файлу KEK")
 	return cmd
 }

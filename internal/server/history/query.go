@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -112,7 +113,7 @@ func (q *Query) now() time.Time {
 }
 
 // Timeseries возвращает ряд агрегата (agentID "") или одного агента. 1h/6h берутся из
-// 10s, 24h/7d — из 5m (последнее окно появляется после его завершения). since — только
+// 10s, 24h/7d — из 5m, дополненных хвостом из 10s для ещё не свёрнутых окон. since — только
 // точки строго новее since (инкрементальный опрос).
 func (q *Query) Timeseries(ctx context.Context, rng Range, agentID string, since time.Time) (Series, error) {
 	if _, err := ParseRange(string(rng)); err != nil {
@@ -133,8 +134,10 @@ func (q *Query) Timeseries(ctx context.Context, rng Range, agentID string, since
 		return Series{}, err
 	}
 	sec := step.Seconds()
-	s := Series{Range: rng, StepSec: int(sec), Agent: agentID, Points: make([]Point, 0, len(rows))}
+	s := Series{Range: rng, StepSec: int(sec), Agent: agentID, Points: make([]Point, 0, len(rows)+1)}
+	closed := make(map[int64]struct{}, len(rows))
 	for _, r := range rows {
+		closed[r.At.Unix()] = struct{}{}
 		if !since.IsZero() && !r.At.After(since) {
 			continue
 		}
@@ -143,7 +146,60 @@ func (q *Query) Timeseries(ctx context.Context, rng Range, agentID string, since
 			R429RPS: float64(r.RateLimited) / sec, P95Ms: r.P95Ms, Inflight: r.Inflight,
 		})
 	}
+	if res == store.Res5m {
+		tail, terr := q.openTail(ctx, id, now, closed, since)
+		if terr != nil {
+			return Series{}, terr
+		}
+		s.Points = append(s.Points, tail...)
+	}
 	return s, nil
+}
+
+// openTail дополняет 5m-ряд точками из 10s-данных для окон, которые ещё не свёрнуты
+// Roller-ом (текущее незакрытое и, при задержке rollup, только что закрытое). Так свежие
+// данные видны сразу после старта. Частичное окно усредняется по прошедшему времени.
+// Точка с T == since тоже возвращается: открытое окно растёт, клиент перезаписывает последнюю.
+func (q *Query) openTail(ctx context.Context, id string, now time.Time, closed map[int64]struct{}, since time.Time) ([]Point, error) {
+	from := now.Truncate(Step5m).Add(-Step5m)
+	rows, err := q.History.Range(ctx, store.Res10s, id, from, now)
+	if err != nil {
+		return nil, err
+	}
+	groups := map[time.Time]*store.Sample{}
+	var order []time.Time
+	for _, r := range rows {
+		ts := r.At.Truncate(Step5m)
+		if _, done := closed[ts.Unix()]; done {
+			continue
+		}
+		g, ok := groups[ts]
+		if !ok {
+			g = &store.Sample{At: ts}
+			groups[ts] = g
+			order = append(order, ts)
+		}
+		g.OK += r.OK
+		g.Err += r.Err
+		g.RateLimited += r.RateLimited
+		g.Inflight = max(g.Inflight, r.Inflight)
+		g.Buckets = addBuckets(g.Buckets, r.Buckets)
+	}
+	slices.SortFunc(order, func(a, b time.Time) int { return a.Compare(b) })
+	out := make([]Point, 0, len(order))
+	for _, ts := range order {
+		if !since.IsZero() && ts.Before(since) {
+			continue
+		}
+		g := groups[ts]
+		span := min(now.Sub(ts), Step5m).Seconds()
+		span = max(span, Step10s.Seconds())
+		out = append(out, Point{
+			T: ts.Unix(), OKRPS: float64(g.OK) / span, ErrRPS: float64(g.Err) / span,
+			R429RPS: float64(g.RateLimited) / span, P95Ms: P95(g.Buckets), Inflight: g.Inflight,
+		})
+	}
+	return out, nil
 }
 
 // Summary считает KPI по агрегату.

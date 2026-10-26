@@ -1,0 +1,96 @@
+package screens
+
+import "github.com/vasyakrg/tgproxy-server/internal/server/web/views"
+
+// LoginPage — полная страница входа (минимальный layout без сайдбара).
+templ LoginPage(v LoginView) {
+	<!doctype html>
+	<html lang="ru">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="color-scheme" content="dark"/>
+			<meta name="theme-color" content="#0F1115"/>
+			<meta name="robots" content="noindex"/>
+			<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true,"responseHandling":[{"code":"^204$","swap":false},{"code":"^[23]..$","swap":true},{"code":"^(401|403|429|500)$","swap":true,"error":false},{"code":"^[45]..$","swap":false,"error":true}]}'/>
+			<title>Вход — tgproxy</title>
+			<link rel="icon" href={ templ.SafeURL(views.Asset("img/favicon.ico")) } sizes="any"/>
+			<link rel="icon" type="image/png" sizes="192x192" href={ templ.SafeURL(views.Asset("img/icon-192.png")) }/>
+			<link rel="apple-touch-icon" href={ templ.SafeURL(views.Asset("img/apple-touch-icon.png")) }/>
+			<link rel="stylesheet" href={ templ.SafeURL(views.Asset("css/fonts.css")) }/>
+			<link rel="stylesheet" href={ templ.SafeURL(views.Asset("css/app.css")) }/>
+			<script src={ views.Asset("vendor/htmx/htmx.min.js") } defer></script>
+			<script src={ views.Asset("js/app.js") } defer></script>
+		</head>
+		<body>
+			<main class="login">
+				<div class="login-brand">
+					<img src={ views.Asset("img/logo-64.png") } alt="" width="44" height="44"/>
+					<span>tgproxy</span>
+				</div>
+				<section id="login-card" class="login-card" aria-live="polite">
+					@LoginCard(v)
+				</section>
+				<p class="login-note">После { loginLockoutThreshold } неудачных попыток вход блокируется на { loginLockoutMinutes } минут, администраторы получат уведомление.</p>
+			</main>
+		</body>
+	</html>
+}
+
+// LoginCard — содержимое карточки входа (htmx-фрагмент): форма текущего шага и сообщение.
+templ LoginCard(v LoginView) {
+	if v.Step == StepTOTP {
+		@totpForm(v)
+	} else {
+		@passwordForm(v)
+	}
+	if v.Message != "" {
+		<div class="alert alert-err" role="alert">{ v.Message }</div>
+	}
+}
+
+templ passwordForm(v LoginView) {
+	<form
+		class="stack"
+		method="post"
+		action="/login/password"
+		hx-post="/login/password"
+		hx-target="#login-card"
+		hx-swap="innerHTML"
+		hx-disabled-elt="find button[type=submit]"
+	>
+		<h1 class="login-title">Вход в панель</h1>
+		@views.Field(views.FieldProps{
+			ID: "login-user", Name: "username", Label: "Пользователь", Value: v.Username,
+			Autocomplete: "username", Required: true,
+			Attrs: templ.Attributes{"autocapitalize": "none", "spellcheck": "false", "maxlength": "128", "autofocus": true},
+		})
+		@views.Field(views.FieldProps{
+			ID: "login-pass", Name: "password", Label: "Пароль", Type: "password",
+			Autocomplete: "current-password", Required: true,
+			Attrs: templ.Attributes{"maxlength": "1024"},
+		})
+		<button type="submit" class="btn btn-primary btn-block">Продолжить</button>
+	</form>
+}
+
+templ totpForm(v LoginView) {
+	<form
+		class="stack"
+		method="post"
+		action="/login/totp"
+		hx-post="/login/totp"
+		hx-target="#login-card"
+		hx-swap="innerHTML"
+		hx-disabled-elt="find button[type=submit]"
+	>
+		<h1 class="login-title">Код подтверждения</h1>
+		<p class="login-lead">Введите 6 цифр из приложения-аутентификатора.</p>
+		@views.Field(views.FieldProps{
+			ID: "login-code", Name: "code", Label: "Код TOTP", Autocomplete: "one-time-code", Required: true,
+			Attrs: templ.Attributes{"inputmode": "numeric", "pattern": "[0-9 ]*", "maxlength": "10", "autofocus": true, "spellcheck": "false"},
+		})
+		<button type="submit" class="btn btn-primary btn-block">Войти</button>
+		<button type="submit" class="btn btn-link btn-block" formaction="/login/reset" formnovalidate hx-post="/login/reset" hx-target="#login-card" hx-swap="innerHTML">← Другой пользователь</button>
+	</form>
+}

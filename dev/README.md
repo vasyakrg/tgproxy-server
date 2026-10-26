@@ -3,7 +3,7 @@
 ## Запуск (сквозной путь бот → server → agent → api.telegram.org)
 
 ```sh
-make dev-certs          # один раз: CA + сертификаты server и агентов local, local2 в dev/tls
+make dev-setup          # один раз: dev-certs (CA + server + агенты local, local2 в dev/tls) + KEK dev/data/kek + chmod 0640 dev/users.yml
 make run-agent          # терминал 1: агент local,  mTLS на 127.0.0.1:8443
 make run-agent2         # терминал 2: агент local2, mTLS на 127.0.0.1:8445 (:8444 занят agent_gateway)
 make run-server         # терминал 3: прокси 127.0.0.1:8080, admin 127.0.0.1:8090
@@ -14,6 +14,23 @@ make run-server         # терминал 3: прокси 127.0.0.1:8080, admin
 
 Один агент можно не запускать: сервер работает с тем, что `up` (опрос статуса каждые 5 с,
 3 неудачи подряд — down, один успех — снова up). Запросы к упавшему агенту уходят на второй.
+
+## Веб-UI
+
+После `make run-server` админка на `http://127.0.0.1:8090` (вход: `admin` / `dev-password`).
+Пока в `dev/users.yml` нет `totp_secret_enc`, вход только по паролю: для этого в `dev/server.yaml`
+стоит `auth.allow_password_only: true` — **только dev; в проде TOTP обязателен**.
+
+Включить TOTP для `admin`:
+
+```sh
+./bin/tgproxy totp enroll admin --users-file dev/users.yml --kek-file dev/data/kek   # печатает QR и totp_secret_enc
+# вставьте totp_secret_enc в dev/users.yml под пользователем admin (сессии админа сбросятся сами)
+# затем уберите auth.allow_password_only из dev/server.yaml (или поставьте false) и перезапустите сервер
+```
+
+`SIGHUP` перечитывает `dev/users.yml`; изменения файла подхватываются автоматически.
+`server.public_base_url` (`dev/server.yaml`) попадает в UI «Доступ» как base URL для ботов.
 
 ## Метрики и алерты
 
@@ -112,5 +129,5 @@ curl -H 'X-Proxy-Key: tgp_devkey_local_only' http://127.0.0.1:8080/bot$TOKEN/get
 
 - `users.yml` — пользователь `admin`, пароль `dev-password`.
 - `tls/` — dev-сертификаты (`make dev-certs` → `tgproxy pki dev-init`); в git не коммитятся.
-- `data/` — рабочие данные dev-процессов (БД сервера `tgproxy.db`, данные агентов).
+- `data/` — рабочие данные dev-процессов (БД сервера `tgproxy.db`, KEK `kek`, данные агентов).
 - Конфиги проверяются командой `tgproxy config validate --mode server|agent -c <file>`.

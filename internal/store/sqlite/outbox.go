@@ -87,3 +87,21 @@ func (r outboxRepo) RecordAttempt(ctx context.Context, id int64, lastError strin
 func (r outboxRepo) DeleteSentBefore(ctx context.Context, t time.Time) (int, error) {
 	return r.s.execCount(ctx, `DELETE FROM outbox WHERE sent_at IS NOT NULL AND sent_at < ?`, ms(t))
 }
+
+func (r outboxRepo) Recent(ctx context.Context, limit int) ([]store.OutboxItem, error) {
+	rows, err := r.s.r.QueryContext(ctx,
+		`SELECT `+outboxCols+` FROM outbox ORDER BY id DESC LIMIT ?`, limitOr(limit, 100))
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []store.OutboxItem
+	for rows.Next() {
+		o, err := scanOutbox(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, mapErr(rows.Err())
+}

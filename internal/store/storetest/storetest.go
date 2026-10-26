@@ -452,6 +452,11 @@ func testOutbox(t *testing.T, s store.Store) {
 	if c, _ := r.CountPending(ctx); c != 3 {
 		t.Fatalf("count %d", c)
 	}
+	rec, err := r.Recent(ctx, 2)
+	ok(t, err)
+	if len(rec) != 2 || rec[0].ID != i3.ID || rec[1].ID != i2.ID {
+		t.Fatalf("recent %+v", rec)
+	}
 	last, err := r.LastByKey(ctx, "a1|agent_down")
 	ok(t, err)
 	if last.ID != i2.ID || last.State != store.OutboxResolved {

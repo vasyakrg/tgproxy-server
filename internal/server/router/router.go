@@ -304,6 +304,7 @@ func (c *call) pickFailed(attempt int, err error) (*http.Response, error) {
 	if errors.Is(err, balancer.ErrNoHealthyAgents) {
 		if !c.obs.internal {
 			c.r.rec.NoHealthyAgents()
+			c.logNoAgents()
 		}
 	} else if c.ctx.Err() == nil {
 		c.r.log.Warn("pick failed", "error", redact.Error(err))

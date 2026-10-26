@@ -23,6 +23,8 @@ func newRootCmd() *cobra.Command {
 		newAgentsCmd(),
 		newConfigCmd(),
 		newPKICmd(),
+		newHashpwCmd(),
+		newTOTPCmd(),
 		newVersionCmd(),
 	)
 	return root

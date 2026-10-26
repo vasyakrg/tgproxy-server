@@ -65,6 +65,7 @@ const DefaultTelegramAPIURL = "https://api.telegram.org"
 
 // ServerConfig — конфигурация процесса `tgproxy server`.
 type ServerConfig struct {
+	Server         ServerSection  `yaml:"server"`
 	Listen         ServerListen   `yaml:"listen"`
 	TLS            IngressTLS     `yaml:"tls"`
 	TrustedProxies []netip.Prefix `yaml:"trusted_proxies"`
@@ -83,6 +84,13 @@ type ServerConfig struct {
 	Notify        NotifyConfig    `yaml:"notify"`
 	Metrics       MetricsConfig   `yaml:"metrics"`
 	Logging       LoggingConfig   `yaml:"logging"`
+}
+
+// ServerSection — общие параметры сервера.
+type ServerSection struct {
+	// PublicBaseURL — публичный base URL прокси для ботов (https://tg.example.com; http — только loopback).
+	// Показывается в UI «Доступ». Пусто — берётся из Host запроса.
+	PublicBaseURL string `yaml:"public_base_url"`
 }
 
 // ServerListen — адреса листенеров сервера (host:port).
@@ -108,6 +116,8 @@ type ACMEConfig struct {
 	Email          string `yaml:"email"`
 	DirectoryURL   string `yaml:"directory_url"`
 	ViaAgentEgress bool   `yaml:"via_agent_egress"`
+	// HTTP01Listen — адрес листенера HTTP-01 (обычно ":80"); пусто — только TLS-ALPN-01.
+	HTTP01Listen string `yaml:"http01_listen"`
 }
 
 // TLSFiles — набор файлов TLS (сертификат, ключ, CA).
@@ -126,6 +136,9 @@ type PKIConfig struct {
 // AuthConfig — аутентификация админов.
 type AuthConfig struct {
 	UsersFile string `yaml:"users_file"` // users_database.yml (формат Authelia)
+	// AllowPasswordOnly — DEV ONLY (M4-T2): пускать пользователей без TOTP-секрета только по паролю.
+	// По умолчанию false: TOTP обязателен.
+	AllowPasswordOnly bool `yaml:"allow_password_only"`
 }
 
 // AgentEndpoint — статически заданный агент (M1).

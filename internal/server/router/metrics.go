@@ -107,6 +107,17 @@ func (t *Inflight) add(r *Router, agent string, delta int) {
 	}
 }
 
+// Total — суммарное число запросов в полёте по всем агентам прямо сейчас.
+func (t *Inflight) Total() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for _, v := range t.n {
+		n += v
+	}
+	return n
+}
+
 // reqObs накапливает данные одного вызова Do для метрик и истории.
 type reqObs struct {
 	r        *Router
@@ -235,6 +246,19 @@ func (c *call) logErr(agent string, o transport.Outcome, status int, env *tgapi.
 		return
 	}
 	c.r.errs.Record(c.parent, ev)
+}
+
+// logNoAgents пишет в журнал отказ «нет здоровых агентов»: phase=no_agents, агента нет
+// (экран «Ошибки» считает такие записи в KPI «нет агентов»).
+func (c *call) logNoAgents() {
+	if c.r.errs == nil {
+		return
+	}
+	c.r.errs.Record(c.parent, store.ErrorEvent{
+		At: c.r.clock(), RequestID: c.req.Header.Get(tgapi.HeaderRequestID), BotID: strconv.FormatInt(c.route.BotID, 10),
+		Method: tgapi.MethodLabel(c.route.Method), Phase: tgapi.PhaseNoAgents, Code: http.StatusBadGateway,
+		Outcome: store.OutcomeFailedToBot, Description: DescNoAgents,
+	})
 }
 
 func isLoggable(o transport.Outcome, status int) bool {

@@ -3,7 +3,7 @@ package tgapi
 import "testing"
 
 func TestPhaseNotSent(t *testing.T) {
-	for _, p := range []string{PhaseDial, PhaseTLS, PhasePreSend} {
+	for _, p := range []string{PhaseDial, PhaseTLS, PhasePreSend, PhaseNoAgents} {
 		if !PhaseNotSent(p) {
 			t.Errorf("%s: want not sent", p)
 		}

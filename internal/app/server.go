@@ -25,6 +25,7 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/server/proxy"
 	"github.com/vasyakrg/tgproxy-server/internal/server/router"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
+	"github.com/vasyakrg/tgproxy-server/internal/tlsin"
 	"github.com/vasyakrg/tgproxy-server/internal/transport"
 )
 
@@ -66,19 +67,23 @@ type snapshot struct {
 
 // Server — процесс `tgproxy server`.
 type Server struct {
-	logger  *slog.Logger
-	opts    ServerOptions
-	tr      *transport.Registry
-	ingTLS  *tls.Config
-	st      store.Store
-	checker *access.Checker
-	bal     *balancer.Balancer
-	reg     *agents.Registry
-	up      *Upstream
-	windows *router.Windows
-	obs     *obs
-	cur     atomic.Pointer[snapshot]
-	closed  sync.Once
+	logger     *slog.Logger
+	opts       ServerOptions
+	tr         *transport.Registry
+	ingTLS     *tls.Config
+	ingress    tlsin.Provider
+	http01Addr string
+	st         store.Store
+	checker    *access.Checker
+	bal        *balancer.Balancer
+	reg        *agents.Registry
+	up         *Upstream
+	windows    *router.Windows
+	obs        *obs
+	rstats     *ruleStats
+	web        *webState // nil — веб-UI не поднят
+	cur        atomic.Pointer[snapshot]
+	closed     sync.Once
 }
 
 // NewServer собирает сервер: хранилище, mTLS до агентов, реестр агентов,
@@ -94,9 +99,10 @@ func NewServer(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logge
 	if err != nil {
 		return nil, err
 	}
-	if s.ingTLS, err = ingressTLS(cfg); err != nil {
+	if s.ingress, err = s.newIngress(cfg); err != nil {
 		return nil, err
 	}
+	s.ingTLS = s.ingressTLSConfig()
 	if err := router.CleanupTmpDir(cfg.Buffer.TmpDir); err != nil {
 		logger.Warn("cleanup of stale buffers failed", "error", redact.Error(err))
 	}
@@ -117,6 +123,11 @@ func NewServer(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logge
 		return nil, err
 	}
 	s.cur.Store(snap)
+	if err := s.wireWeb(cfg); err != nil { //nolint:contextcheck // колбэк users.OnChange живёт вне запроса
+		s.Close()
+		return nil, err
+	}
+	s.reportIngress(ctx)
 	if s.obs.deliv != nil {
 		if err := s.obs.deliv.Reload(); err != nil {
 			logger.Warn("notify recipients not loaded", "error", redact.Error(err))
@@ -159,6 +170,7 @@ func (s *Server) wire(ctx context.Context, cfg *config.ServerConfig, distributed
 		ws = windowStore{repo: s.st.RateState()}
 	}
 	s.windows = router.NewWindows(ws, nil)
+	s.rstats = newRuleStats(nil)
 	return s.wireObs(cfg)
 }
 
@@ -174,7 +186,7 @@ func (s *Server) build(cfg *config.ServerConfig) (*snapshot, error) {
 		router.WithInflight(s.obs.inflight),
 		router.WithBufferGauge(s.obs.m.BufferedBytes()),
 	)
-	h := proxy.New(s.checker, rt, cfg, s.logger, proxy.WithRecorder(s.obs.m), proxy.WithBots(s.obs.top))
+	h := proxy.New(s.checker, rt, cfg, s.logger, proxy.WithRecorder(ruleRecorder{Recorder: s.obs.m, stats: s.rstats}), proxy.WithBots(s.obs.top))
 	return &snapshot{cfg: cfg, router: rt, handler: h}, nil
 }
 
@@ -246,6 +258,9 @@ func (s *Server) proxyHandler() http.Handler {
 
 func (s *Server) adminHandler() http.Handler {
 	mux := http.NewServeMux()
+	if s.web != nil {
+		mux.Handle("/", s.web.handler)
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
@@ -305,18 +320,23 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 			errc <- err
 		}()
 	}
-	if s.opts.ReloadConfig != nil {
-		onReload(ctx, func() {
-			if err := s.Reload(ctx); err != nil {
-				s.logger.Error("reload rejected, keeping previous config", "error", redact.Error(err))
-			}
-		})
-	}
+	onReload(ctx, func() {
+		s.reloadIngress()
+		s.reloadUsers()
+		if s.opts.ReloadConfig == nil {
+			return
+		}
+		if err := s.Reload(ctx); err != nil {
+			s.logger.Error("reload rejected, keeping previous config", "error", redact.Error(err))
+		}
+	})
 	rctx, rcancel := context.WithCancel(context.WithoutCancel(ctx))
 	regDone := make(chan struct{})
 	events, unsub := s.reg.Subscribe()
 	go s.syncAgentMetrics(ctx, events)
 	obsWait := s.runObs(rctx)
+	webWait := s.runWeb(rctx)
+	ingWait := s.runIngress(rctx)
 	go func() {
 		defer close(regDone)
 		if err := s.reg.Run(rctx); err != nil {
@@ -346,6 +366,8 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 	rcancel()
 	<-regDone
 	obsWait()
+	webWait()
+	ingWait()
 	unsub()
 	s.Close()
 	return first
@@ -404,22 +426,4 @@ func loadAgentTLS(cfg *config.ServerConfig) (tls.Certificate, *x509.CertPool, er
 		return tls.Certificate{}, nil, fmt.Errorf("app: agent ca: %w", err)
 	}
 	return cert, pool, nil
-}
-
-// ingressTLS возвращает TLS-конфиг входа (nil для mode=off).
-func ingressTLS(cfg *config.ServerConfig) (*tls.Config, error) {
-	switch cfg.TLS.Mode {
-	case config.TLSModeOff, "":
-		return nil, nil //nolint:nilnil // TLS выключен
-	case config.TLSModeFiles:
-		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("app: load ingress cert: %w", redact.Error(err))
-		}
-		return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
-	case config.TLSModeACME:
-		return nil, errors.New("app: tls.mode=acme is not implemented yet (M4-T9)")
-	default:
-		return nil, fmt.Errorf("app: unknown tls.mode %q", cfg.TLS.Mode)
-	}
 }

@@ -1,0 +1,186 @@
+package views
+
+// ---------- StatusPill ----------
+
+// StatusPill — цветная точка + подпись статуса агента. Пустой label = стандартная подпись.
+templ StatusPill(s Status, label string) {
+	<span class={ "pill", "pill-" + string(s) }>
+		if label != "" {
+			{ label }
+		} else {
+			{ s.Label() }
+		}
+	</span>
+}
+
+// ---------- KPI ----------
+
+// KPI — карточка показателя. Value — готовая строка (форматирует вызывающий).
+templ KPI(label, value, hint string, tone Tone) {
+	<div class={ "kpi", tone.kpiClass() }>
+		<div class="kpi-label">{ label }</div>
+		<div class="kpi-value">{ value }</div>
+		if hint != "" {
+			<div class="kpi-hint">{ hint }</div>
+		}
+	</div>
+}
+
+// ---------- Table ----------
+
+// ActionsHeader — заголовок колонки с иконками-действиями: она компактная и закреплена у правого края.
+const ActionsHeader = "Действия"
+
+// Table — таблица с горизонтальным скроллом. Строки (<tr>) передаются как children.
+// caption — доступное имя области прокрутки.
+templ Table(caption string, headers []string) {
+	<div class="table-wrap" role="region" aria-label={ caption } tabindex="0">
+		<table class="table">
+			<thead>
+				<tr>
+					for _, h := range headers {
+						if h == ActionsHeader {
+							<th scope="col" class="col-actions">{ h }</th>
+						} else {
+							<th scope="col">{ h }</th>
+						}
+					}
+				</tr>
+			</thead>
+			<tbody>
+				{ children... }
+			</tbody>
+		</table>
+	</div>
+}
+
+// ---------- Modal ----------
+
+// Modal — нативный <dialog>. Открывается кнопкой с data-modal-open="<id>", закрывается data-modal-close.
+templ Modal(id, title string) {
+	<dialog id={ id } class="modal" aria-labelledby={ id + "-title" }>
+		<div class="modal-head">
+			<h2 class="modal-title" id={ id + "-title" }>{ title }</h2>
+			<button type="button" class="icon-btn" data-modal-close aria-label="Закрыть" title="Закрыть">
+				@Icon("close", 18)
+			</button>
+		</div>
+		<div class="modal-body">
+			{ children... }
+		</div>
+	</dialog>
+}
+
+// ---------- Toast ----------
+
+// Toast — одно уведомление; вставляется в #toasts (обычно htmx hx-swap-oob), закрывается само через 6 с.
+templ Toast(kind ToastKind, message string) {
+	<div class={ "toast", "toast-" + string(kind) }>
+		<span>{ message }</span>
+		<button type="button" class="icon-btn" data-toast-close aria-label="Закрыть уведомление" title="Закрыть">
+			@Icon("close", 16)
+		</button>
+	</div>
+}
+
+// ---------- EmptyState ----------
+
+// EmptyState — пустое состояние; children — необязательные действия (кнопки).
+templ EmptyState(title, text string) {
+	<div class="empty">
+		<span class="empty-icon">
+			@Icon("servers", 28)
+		</span>
+		<div class="empty-title">{ title }</div>
+		if text != "" {
+			<p class="empty-text">{ text }</p>
+		}
+		<div class="empty-actions">
+			{ children... }
+		</div>
+	</div>
+}
+
+// ---------- Buttons ----------
+
+// Button — текстовая кнопка. attrs — hx-*, data-*, disabled и т.п.
+templ Button(label string, kind ButtonKind, attrs templ.Attributes) {
+	<button type="button" class={ "btn", kind.class() } { attrs... }>{ label }</button>
+}
+
+// IconButton — квадратная 36px кнопка-иконка; label обязателен (aria-label + title).
+templ IconButton(label, icon string, danger bool, attrs templ.Attributes) {
+	<button type="button" class={ "icon-btn", templ.KV("icon-btn-danger", danger) } aria-label={ label } title={ label } { attrs... }>
+		@Icon(icon, 18)
+	</button>
+}
+
+// ---------- Field ----------
+
+// Field — подпись + input + подсказка/ошибка. Ошибка связывается через aria-describedby.
+templ Field(f FieldProps) {
+	<div class={ "field", templ.KV("field-invalid", f.Error != "") }>
+		<label class="field-label" for={ f.fieldID() }>{ f.Label }</label>
+		<input
+			class="input"
+			id={ f.fieldID() }
+			name={ f.Name }
+			type={ f.inputType() }
+			value={ f.Value }
+			if f.Placeholder != "" {
+				placeholder={ f.Placeholder }
+			}
+			if f.Autocomplete != "" {
+				autocomplete={ f.Autocomplete }
+			}
+			required?={ f.Required }
+			if f.Error != "" {
+				aria-invalid="true"
+			}
+			if f.describedBy() != "" {
+				aria-describedby={ f.describedBy() }
+			}
+			{ f.Attrs... }
+		/>
+		if f.Hint != "" {
+			<div class="field-hint" id={ f.fieldID() + "-hint" }>{ f.Hint }</div>
+		}
+		if f.Error != "" {
+			<div class="field-error" id={ f.fieldID() + "-error" } role="alert">{ f.Error }</div>
+		}
+	</div>
+}
+
+// ---------- Chip ----------
+
+// Chip — компактная метка (тип правила, версия, тег).
+templ Chip(text string, tone Tone) {
+	<span class={ "chip", tone.chipClass() }>{ text }</span>
+}
+
+// ---------- PageHeader / Card ----------
+
+// PageHeader — заголовок страницы; children — действия справа.
+templ PageHeader(title, subtitle string) {
+	<header class="page-header">
+		<div class="page-title">
+			<h1>{ title }</h1>
+			if subtitle != "" {
+				<p>{ subtitle }</p>
+			}
+		</div>
+		<div class="page-actions">
+			{ children... }
+		</div>
+	</header>
+}
+
+// Card — секция-карточка с необязательным заголовком.
+templ Card(title string) {
+	<section class="card">
+		if title != "" {
+			<h2 class="card-title">{ title }</h2>
+		}
+		{ children... }
+	</section>
+}

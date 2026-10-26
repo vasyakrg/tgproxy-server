@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/vasyakrg/tgproxy-server/internal/config"
 	"github.com/vasyakrg/tgproxy-server/internal/server/access"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
@@ -32,6 +33,9 @@ func AccessAdd(ctx context.Context, repo store.AccessRuleRepo, p AccessAddParams
 	name := strings.TrimSpace(p.Name)
 	if name == "" {
 		return AccessAddResult{}, errors.New("access: --name is required")
+	}
+	if !config.ValidRuleName(name) {
+		return AccessAddResult{}, errors.New("access: --name: letters, digits, space, '.', '_', '-', 1-64 characters")
 	}
 	if p.RPS < 0 {
 		return AccessAddResult{}, errors.New("access: --rps must be >= 0")
