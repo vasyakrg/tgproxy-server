@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"io"
@@ -16,10 +17,12 @@ import (
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/agent"
+	"github.com/vasyakrg/tgproxy-server/internal/buildinfo"
 	"github.com/vasyakrg/tgproxy-server/internal/config"
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
 	"github.com/vasyakrg/tgproxy-server/internal/server/access"
 	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
+	"github.com/vasyakrg/tgproxy-server/internal/server/enroll"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 	"github.com/vasyakrg/tgproxy-server/internal/transport"
 )
@@ -55,6 +58,9 @@ type pkiEnv struct {
 type pkiOpts struct {
 	rules []config.AccessRule
 	ticks bool // ручной сэмплер: e.ticks <- time.Now() сбрасывает историю/журнал ошибок в БД
+	// pkgVersion != "" — «версия сервера» с подписанным релизом в кэше загрузок: нужна для команды
+	// установки агента (enroll.Service требует проверенный пакет текущей версии).
+	pkgVersion string
 }
 
 const pkiMetricsBearer = "pki-metrics-bearer"
@@ -117,6 +123,18 @@ func newPKIEnvWith(t *testing.T, o pkiOpts) *pkiEnv {
 		t.Fatalf("server without CA: %v", err)
 	}
 	initCA(t, scfg)
+	if o.pkgVersion != "" {
+		old := buildinfo.Version
+		buildinfo.Version = o.pkgVersion
+		t.Cleanup(func() { buildinfo.Version = old })
+		signer := newE2ESigner(t)
+		pub, perr := signer.pub.MarshalText()
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		scfg.Update.PubKeys = []string{string(pub)}
+		e.publishRelease(o.pkgVersion, signer)
+	}
 
 	gwLn, mln, pln, adln := listen(t), listen(t), listen(t), listen(t)
 	e.gwAddr = gwLn.Addr().String()
@@ -332,18 +350,21 @@ func TestPKIReverseAgentServesProxyRequests(t *testing.T) {
 }
 
 func TestPKIEnrollmentEndToEnd(t *testing.T) {
-	e := newPKIEnv(t)
+	e := newPKIEnvWith(t, pkiOpts{pkgVersion: "1.2.3"})
 	svc := e.srv.Enrollment()
 	if svc == nil {
 		t.Fatal("enrollment is not wired")
 	}
-	token, cmdline, err := svc.Issue(context.Background(), "nat-box", 0)
+	is, err := svc.IssueFor(context.Background(), enroll.IssueRequest{Name: "nat-box"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(cmdline, e.srv.Authority().CAFingerprint()) || !strings.Contains(cmdline, "https://"+e.gwAddr) {
+	token, cmdline := is.Token, is.Cmdline
+	if !strings.Contains(cmdline, e.srv.Authority().CAFingerprint()) || !strings.Contains(cmdline, "https://"+e.gwAddr) ||
+		!strings.Contains(cmdline, "/enroll/package/tgproxy_1.2.3_amd64.deb") {
 		t.Fatalf("cmdline: %s", cmdline)
 	}
+	e.checkPackageDownload(token)
 
 	// конфиг агента как после установки пакета: пути к tls заданы, файлов ещё нет
 	dir := t.TempDir()
@@ -551,5 +572,49 @@ func TestPKIAgentsAPIModesAndWeight(t *testing.T) {
 	// SSH-мастер и enrollment подключены в PKI-режиме
 	if resp, _ = c.do("GET", "/api/v1/enrollments", nil, nil); resp.StatusCode != 200 {
 		t.Fatalf("enrollments: %d", resp.StatusCode)
+	}
+}
+
+// checkPackageDownload скачивает пакет с gateway так же, как curl --cacert из команды установки:
+// доверие только CA сервера, проверка имени хоста (IP gateway в SAN), TLS 1.3, токен в Authorization.
+// Токен при этом не расходуется.
+func (e *pkiEnv) checkPackageDownload(token string) {
+	e.t.Helper()
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(e.srv.Authority().CertPEM()) {
+		e.t.Fatal("bad CA pem")
+	}
+	cl := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13},
+	}}
+	defer cl.CloseIdleConnections()
+	get := func(auth string) (int, []byte) {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+			"https://"+e.gwAddr+"/enroll/package/tgproxy_1.2.3_amd64.deb", http.NoBody)
+		if err != nil {
+			e.t.Fatal(err)
+		}
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := cl.Do(req)
+		if err != nil {
+			e.t.Fatalf("download: %v\nlogs:\n%s", err, e.logs.String())
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, b
+	}
+	if code, b := get("Bearer " + token); code != http.StatusOK || string(b) != "DEB-1.2.3" {
+		e.t.Fatalf("download: %d %q", code, b)
+	}
+	if code, _ := get("Bearer " + strings.Repeat("A", 43)); code != http.StatusUnauthorized {
+		e.t.Fatalf("bad token: %d", code)
+	}
+	if code, _ := get(""); code != http.StatusUnauthorized {
+		e.t.Fatalf("no token: %d", code)
+	}
+	if strings.Contains(e.logs.String(), token) {
+		e.t.Fatal("token leaked into server logs")
 	}
 }

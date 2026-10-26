@@ -73,9 +73,11 @@ type EnrollInput struct {
 
 // Issued — результат выпуска. Cmdline содержит токен и показывается один раз.
 type Issued struct {
-	ID        string
-	Cmdline   string
-	ExpiresAt time.Time
+	ID      string
+	Cmdline string // установка пакета с сервера + регистрация (чистый хост)
+	// CmdlineInstalled — только регистрация (tgproxy уже установлен).
+	CmdlineInstalled string
+	ExpiresAt        time.Time
 }
 
 // Issue выпускает токен.
@@ -102,10 +104,14 @@ func (s *EnrollService) Issue(ctx context.Context, act Actor, in EnrollInput) (I
 		if errors.Is(err, store.ErrInvalid) {
 			return Issued{}, &ValidationError{Fields: FieldErrors{FieldGeneral: "Некорректные параметры токена"}}
 		}
+		if errors.Is(err, enroll.ErrPackageUnavailable) {
+			// Текст ошибки — для администратора («загрузите релиз X…»), секретов в нём нет.
+			return Issued{}, &ValidationError{Fields: FieldErrors{FieldGeneral: err.Error()}}
+		}
 		return Issued{}, err
 	}
 	// Аудит enrollment.create пишет сам enroll.Service (без токена).
-	return Issued{ID: is.ID, Cmdline: is.Cmdline, ExpiresAt: is.ExpiresAt}, nil
+	return Issued{ID: is.ID, Cmdline: is.Cmdline, CmdlineInstalled: is.CmdlineInstalled, ExpiresAt: is.ExpiresAt}, nil
 }
 
 // EnrollmentItem — выпущенные, но не использованные и не просроченные токены (без самих токенов).
@@ -191,7 +197,8 @@ type enrollJSON struct {
 
 type enrollCreatedJSON struct {
 	ID        string `json:"id"`
-	Cmdline   string `json:"cmdline"` // содержит токен: показывается один раз
+	Cmdline   string `json:"cmdline"`           // установка + регистрация; содержит токен: показывается один раз
+	Installed string `json:"cmdline_installed"` // только регистрация (tgproxy уже установлен)
 	ExpiresAt string `json:"expires_at"`
 }
 
@@ -255,7 +262,7 @@ func (a *EnrollAPI) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", "/api/v1/enrollments/"+is.ID)
-	writeJSON(w, http.StatusCreated, enrollCreatedJSON{ID: is.ID, Cmdline: is.Cmdline, ExpiresAt: is.ExpiresAt.UTC().Format(time.RFC3339)})
+	writeJSON(w, http.StatusCreated, enrollCreatedJSON{ID: is.ID, Cmdline: is.Cmdline, Installed: is.CmdlineInstalled, ExpiresAt: is.ExpiresAt.UTC().Format(time.RFC3339)})
 }
 
 func (a *EnrollAPI) revoke(w http.ResponseWriter, r *http.Request) {

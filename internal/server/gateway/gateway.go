@@ -6,7 +6,8 @@
 // denylist; при отказе соединение закрывается до первого запроса. Дальше:
 //   - ALPN transport.ALPNReverse (обязателен клиентский сертификат) -> соединение
 //     передаётся ReversePool;
-//   - иначе — обычный HTTP/1.1+h2 сервер: POST /enroll и /_agent_gw/packages/.
+//   - иначе — обычный HTTP/1.1+h2 сервер: POST /enroll, GET /enroll/package/<deb>
+//     (оба без клиентского сертификата, по enrollment-токену) и /_agent_gw/packages/.
 package gateway
 
 import (
@@ -17,6 +18,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,8 +28,11 @@ import (
 
 // Пути, обслуживаемые обычным HTTP.
 const (
-	EnrollPath   = "/enroll"
-	PackagesPath = "/_agent_gw/packages/"
+	EnrollPath = "/enroll"
+	// EnrollPackagePath — префикс GET /enroll/package/<deb>: пакет для установки агента
+	// без клиентского сертификата (авторизация — enrollment-токен, не расходуется).
+	EnrollPackagePath = "/enroll/package/"
+	PackagesPath      = "/_agent_gw/packages/"
 )
 
 // AgentLookup — реестр агентов (consumer-интерфейс).
@@ -70,6 +75,11 @@ type Option func(*Gateway)
 // WithEnrollHandler задаёт обработчик POST /enroll (по умолчанию 404).
 func WithEnrollHandler(h http.Handler) Option { return func(g *Gateway) { g.enroll = h } }
 
+// WithEnrollPackageHandler задаёт обработчик GET /enroll/package/ (по умолчанию 404).
+func WithEnrollPackageHandler(h http.Handler) Option {
+	return func(g *Gateway) { g.enrollPkg = h }
+}
+
 // WithPackagesHandler задаёт обработчик /_agent_gw/packages/ (по умолчанию 404).
 func WithPackagesHandler(h http.Handler) Option { return func(g *Gateway) { g.packages = h } }
 
@@ -89,6 +99,7 @@ type Gateway struct {
 	pool      Attacher
 	checks    []pki.Check
 	enroll    http.Handler
+	enrollPkg http.Handler
 	packages  http.Handler
 	log       *slog.Logger
 	hsTimeout time.Duration
@@ -170,6 +181,12 @@ func (g *Gateway) mux() http.Handler {
 				return
 			}
 			g.enroll.ServeHTTP(w, r)
+		case strings.HasPrefix(r.URL.Path, EnrollPackagePath):
+			if g.enrollPkg == nil {
+				notFound.ServeHTTP(w, r)
+				return
+			}
+			g.enrollPkg.ServeHTTP(w, r)
 		case len(r.URL.Path) >= len(PackagesPath) && r.URL.Path[:len(PackagesPath)] == PackagesPath:
 			if g.packages == nil {
 				notFound.ServeHTTP(w, r)

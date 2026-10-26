@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vasyakrg/tgproxy-server/internal/buildinfo"
 	"github.com/vasyakrg/tgproxy-server/internal/config"
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
@@ -134,7 +135,15 @@ func (s *Server) initTransport(ctx context.Context, cfg *config.ServerConfig) er
 	} else if err != nil {
 		return fmt.Errorf("app: load CA: %w", err)
 	}
-	auth, err := pki.LoadOrInit(ctx, s.st.Certs(), kek, pki.Options{})
+	// Хост gateway — в SAN серверного сертификата: установка пакета на агенте за NAT
+	// идёт обычным TLS-клиентом (curl --cacert), которому нужна проверка по имени.
+	var opts pki.Options
+	if gwURL, ok := gatewayURL(cfg, s.opts.GatewayURL); ok {
+		if u, perr := url.Parse(gwURL); perr == nil && u.Hostname() != "" {
+			opts.ServerHosts = []string{u.Hostname()}
+		}
+	}
+	auth, err := pki.LoadOrInit(ctx, s.st.Certs(), kek, opts)
 	if err != nil {
 		return fmt.Errorf("app: load CA: %w", err)
 	}
@@ -252,6 +261,20 @@ func gatewayURL(cfg *config.ServerConfig, override string) (string, bool) {
 	return "https://" + net.JoinHostPort(host, port), true
 }
 
+// EnrollPackages — проверенные пакеты агента из кэша загрузок сервера (версия = версия
+// сервера); подпись проверяется теми же ключами, что и при обновлении. Используется и
+// сервером (GET /enroll/package/), и CLI `agents enroll-token`.
+func EnrollPackages(cfg *config.ServerConfig) (enroll.CachePackages, error) {
+	keys, err := updatePubKeys(cfg.Update)
+	if err != nil {
+		return enroll.CachePackages{}, fmt.Errorf("app: enroll pubkeys: %w", redact.Error(err))
+	}
+	return enroll.CachePackages{
+		Dir: cfg.Update.Downloads(), Version: buildinfo.Version, Arch: enroll.AgentArch,
+		Verifier: verify.Verifier{Keys: keys, MinVersion: cfg.Update.MinVersion},
+	}, nil
+}
+
 // wirePKI подключает сервисы PKI-режима; вызывается после wire (нужны реестр и метрики).
 func (s *Server) wirePKI(cfg *config.ServerConfig) error {
 	p := s.pki
@@ -263,15 +286,21 @@ func (s *Server) wirePKI(cfg *config.ServerConfig) error {
 		gwOpts = append(gwOpts, gateway.WithPackagesHandler(gateway.PackagesHandler(d, s.logger)))
 	}
 	if gwURL, ok := gatewayURL(cfg, s.opts.GatewayURL); ok {
+		pkgs, err := EnrollPackages(cfg)
+		if err != nil {
+			return err
+		}
 		svc, err := enroll.New(enroll.Config{
 			Enrollments: s.st.Enrollments(), Agents: s.st.Agents(), Audit: s.st.Audit(), CA: p.auth,
 			GatewayURL: gwURL, Logger: s.logger, Notify: s.onEnrolled, Observe: s.obs.m.EnrollAttempt,
+			Packages: pkgs,
 		})
 		if err != nil {
 			return fmt.Errorf("app: enroll: %w", err)
 		}
 		p.enroll = svc
-		gwOpts = append(gwOpts, gateway.WithEnrollHandler(svc.Handler()))
+		gwOpts = append(gwOpts, gateway.WithEnrollHandler(svc.Handler()),
+			gateway.WithEnrollPackageHandler(svc.PackageHandler()))
 	} else {
 		s.logger.Warn("enrollment disabled: cannot derive public agent_gateway url (set server.public_base_url)")
 	}

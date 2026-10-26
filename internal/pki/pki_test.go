@@ -631,3 +631,25 @@ func TestDevInitMultipleAgents(t *testing.T) {
 		t.Fatal("duplicate ids accepted")
 	}
 }
+
+func TestIssueServerClientForHosts(t *testing.T) {
+	ca, err := NewCA("t", time.Hour*24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := IssueServerClientFor(ca, time.Hour, "gw.example.com", "10.1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseCertPEM(b.CertPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.DNSNames) != 2 || c.DNSNames[0] != ServerDNSName || c.DNSNames[1] != "gw.example.com" ||
+		len(c.IPAddresses) != 1 || c.IPAddresses[0].String() != "10.1.2.3" || !isServerCert(c) {
+		t.Fatalf("san: dns=%v ip=%v", c.DNSNames, c.IPAddresses)
+	}
+	if err := c.VerifyHostname("gw.example.com"); err != nil {
+		t.Fatal(err)
+	}
+}

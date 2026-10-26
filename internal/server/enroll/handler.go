@@ -105,11 +105,10 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, ip, stage string,
 
 // consume атомарно гасит токен. Любая причина отказа неразличима для клиента.
 func (s *Service) consume(r *http.Request, token string) (store.Enrollment, bool) {
-	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil || len(raw) != TokenBytes {
+	h, ok := tokenHash(token)
+	if !ok {
 		return store.Enrollment{}, false
 	}
-	h := sha256.Sum256(raw)
 	e, err := s.cfg.Enrollments.Consume(r.Context(), h[:], s.now())
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
@@ -121,6 +120,15 @@ func (s *Service) consume(r *http.Request, token string) (store.Enrollment, bool
 		return store.Enrollment{}, false
 	}
 	return e, true
+}
+
+// tokenHash декодирует токен и возвращает его SHA-256 (как в БД).
+func tokenHash(token string) ([sha256.Size]byte, bool) {
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(raw) != TokenBytes {
+		return [sha256.Size]byte{}, false
+	}
+	return sha256.Sum256(raw), true
 }
 
 // createAgent создаёт reverse-агента; id — slug имени, при коллизии с суффиксом.

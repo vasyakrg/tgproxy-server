@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vasyakrg/tgproxy-server/internal/server/enroll"
 	"github.com/vasyakrg/tgproxy-server/internal/server/installer"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
@@ -304,10 +305,18 @@ func TestNATIssueListRevoke(t *testing.T) {
 		t.Fatalf("%d %s", code, body)
 	}
 	contains(t, "issued", body, "Токен для «waw-2» выпущен", wToken, `id="enroll-cmd"`, `data-copy="enroll-cmd"`, `aria-label="Копировать команду установки"`,
+		`id="enroll-cmd-installed"`, `data-copy="enroll-cmd-installed"`, "Если tgproxy уже установлен на хосте",
 		"показана один раз", "Ожидающие подключения", "waw-2", `aria-label="Отозвать токен: waw-2"`, `hx-get="/agents/enroll/0000000000000001/revoke"`)
 	if !strings.Contains(hdr.Get("HX-Trigger"), "ok") || strings.Contains(hdr.Get("HX-Trigger"), wToken) {
 		t.Errorf("trigger %q", hdr.Get("HX-Trigger"))
 	}
+	// нет проверенного пакета в кэше → понятное сообщение, без команды
+	a.issuer.err = fmt.Errorf("%w: загрузите релиз 1.2.3 в Система → Обновления", enroll.ErrPackageUnavailable)
+	code, body, _ = a.call("POST", "/agents/new/nat", url.Values{"name": {"waw-3"}, "weight": {"80"}, "ttl": {"30"}}, true)
+	if code != 422 || !strings.Contains(body, "загрузите релиз 1.2.3 в Система → Обновления") || strings.Contains(body, `id="enroll-cmd"`) {
+		t.Errorf("пакет недоступен: %d %s", code, body)
+	}
+	a.issuer.err = nil
 	// в списке ожидающих токена нет
 	_, list, _ := a.call("GET", "/agents/new/nat/pending", nil, true)
 	if !strings.Contains(list, "waw-2") || strings.Contains(list, wToken) || strings.Contains(a.logs.String(), wToken) {

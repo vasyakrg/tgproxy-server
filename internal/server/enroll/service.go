@@ -1,6 +1,7 @@
 // Package enroll — подключение агента за NAT по одноразовому токену
 // (architecture §4.1, plan M5-T9): выпуск токена (Service.Issue) и обработчик
-// POST /enroll на agent_gateway (Service.Handler).
+// POST /enroll на agent_gateway (Service.Handler) и GET /enroll/package/<deb>
+// (Service.PackageHandler) — установка пакета на чистый хост по тому же токену.
 package enroll
 
 import (
@@ -48,6 +49,9 @@ type Config struct {
 	GatewayURL string
 	Logger     *slog.Logger
 	Now        func() time.Time
+	// Packages — проверенный пакет агента (кэш загрузок сервера) для установочной
+	// команды и GET /enroll/package/. nil — команда установки не выдаётся.
+	Packages PackageSource
 	// PerMinute — лимит попыток на IP в минуту (по умолчанию 5).
 	PerMinute int
 	// Notify вызывается после успешного enrollment (алерт agent_enrolled).
@@ -63,6 +67,9 @@ type Service struct {
 	log *slog.Logger
 	now func() time.Time
 	lim *limiter
+	// pkgLim — отдельный лимит на GET /enroll/package/ (скачивание + повторы curl не должны
+	// съедать лимит самого /enroll).
+	pkgLim *limiter
 }
 
 // New создаёт Service.
@@ -86,6 +93,7 @@ func New(cfg Config) (*Service, error) {
 		per = DefaultPerMin
 	}
 	s.lim = newLimiter(per, time.Minute, s.now)
+	s.pkgLim = newLimiter(per*2, time.Minute, s.now)
 	return s, nil
 }
 
@@ -95,14 +103,21 @@ type IssueRequest struct {
 	Weight    int // 0 → DefaultWeight
 	CreatedBy string
 	TTL       time.Duration // 0 → 1 час, максимум 24 часа
+	// InstalledOnly — выдать только короткую команду для хоста, где tgproxy уже
+	// установлен (пакет из кэша не требуется).
+	InstalledOnly bool
 }
 
 // Issued — результат выпуска.
 type Issued struct {
-	ID        string
-	Token     string // показывается один раз
-	Cmdline   string
-	ExpiresAt time.Time
+	ID    string
+	Token string // показывается один раз
+	// Cmdline — основная команда для чистого хоста: ставит пакет с сервера и регистрирует
+	// агента. При IssueRequest.InstalledOnly совпадает с CmdlineInstalled.
+	Cmdline string
+	// CmdlineInstalled — регистрация агента, если tgproxy уже установлен на хосте.
+	CmdlineInstalled string
+	ExpiresAt        time.Time
 }
 
 // Issue выпускает токен с весом по умолчанию. cmdline — команда для агента.
@@ -131,6 +146,17 @@ func (s *Service) IssueFor(ctx context.Context, req IssueRequest) (Issued, error
 	if weight == 0 {
 		weight = DefaultWeight
 	}
+	// Пакет проверяется до выпуска токена: нерабочая команда (и висящий токен) не выдаются.
+	var pkg PackageInfo
+	if !req.InstalledOnly {
+		if s.cfg.Packages == nil {
+			return Issued{}, fmt.Errorf("%w: источник пакетов не настроен", ErrPackageUnavailable)
+		}
+		var perr error
+		if pkg, perr = s.cfg.Packages.Current(); perr != nil {
+			return Issued{}, perr
+		}
+	}
 	raw := make([]byte, TokenBytes)
 	if _, err := rand.Read(raw); err != nil {
 		return Issued{}, fmt.Errorf("enroll: random: %w", err)
@@ -150,11 +176,64 @@ func (s *Service) IssueFor(ctx context.Context, req IssueRequest) (Issued, error
 		return Issued{}, fmt.Errorf("enroll: create: %w", err)
 	}
 	s.audit(ctx, req.CreatedBy, "enrollment.create", name, "", "id="+e.ID)
-	// Токен идёт через stdin: printf — встроенная команда шелла, в `ps` его нет
-	// (в отличие от `sudo TGP_ENROLL_TOKEN=…` или --token). Алфавит токена безопасен в одинарных кавычках.
-	cmd := fmt.Sprintf("printf %%s '%s' | sudo tgproxy agent enroll --token-stdin --server %s --ca-fingerprint %s",
-		token, s.cfg.GatewayURL, s.cfg.CA.CAFingerprint())
-	return Issued{ID: e.ID, Token: token, Cmdline: cmd, ExpiresAt: e.ExpiresAt}, nil
+	installed := s.enrollCmd(token)
+	cmd := installed
+	if !req.InstalledOnly {
+		cmd = s.installCmd(token, pkg)
+	}
+	return Issued{ID: e.ID, Token: token, Cmdline: cmd, CmdlineInstalled: installed, ExpiresAt: e.ExpiresAt}, nil
+}
+
+// enrollCmd — регистрация агента, когда tgproxy уже установлен. Токен идёт через stdin:
+// printf — встроенная команда шелла, в `ps` его нет (в отличие от `sudo TGP_ENROLL_TOKEN=…`
+// или --token). Алфавит токена безопасен в одинарных кавычках.
+func (s *Service) enrollCmd(token string) string { return s.enrollCmdAs(token, "sudo") }
+
+// enrollCmdAs — то же с заданным префиксом повышения прав ("sudo" или "$S").
+func (s *Service) enrollCmdAs(token, priv string) string {
+	return fmt.Sprintf("printf %%s '%s' | %s tgproxy agent enroll --token-stdin --server %s --ca-fingerprint %s",
+		token, priv, s.cfg.GatewayURL, s.cfg.CA.CAFingerprint())
+}
+
+// installCmd — одна копируемая целиком команда для чистого Debian/Ubuntu (amd64): скачивает
+// пакет с agent_gateway, сверяет sha256 из подписанного checksums.txt, ставит через apt-get
+// (с зависимостями), регистрирует агента и включает сервис.
+//
+// Подробности безопасности:
+//   - токен для скачивания передаётся заголовком через stdin (curl -H @-) от встроенного
+//     printf — ни в argv curl, ни в ps его нет;
+//   - TLS: только CA сервера (--cacert из PEM в команде), TLS 1.3, схема https; проверка
+//     по имени хоста gateway (он в SAN серверного сертификата), без -k;
+//   - цепочка выполняется в подоболочке с set -eu: любая ошибка останавливает цепочку,
+//     временный каталог удаляется по trap EXIT.
+func (s *Service) installCmd(token string, pkg PackageInfo) string {
+	deb := pkg.Name
+	lines := []string{
+		"(",
+		"set -eu",
+		"T=$(mktemp -d)",
+		`trap 'rm -rf "$T"' EXIT`,
+		`chmod 755 "$T"`, // apt (пользователь _apt) должен прочитать deb
+		// root — без sudo; иначе sudo (на чистом хосте под root его может не быть вовсе)
+		`S=; [ "$(id -u)" -eq 0 ] || S=sudo`,
+		`[ "$(dpkg --print-architecture)" = ` + AgentArch + ` ] || { echo "tgproxy: need ` + AgentArch + `" >&2; exit 1; }`,
+		`command -v curl >/dev/null || { $S apt-get update -qq && $S apt-get install -y -qq curl ca-certificates; }`,
+		"printf -- '" + pemForPrintf(s.cfg.CA.CertPEM()) + `' >"$T/ca.pem"`,
+		fmt.Sprintf(`printf 'Authorization: Bearer %%s\n' '%s' | curl -fsS --proto =https --tlsv1.3 --cacert "$T/ca.pem" -H @- -o "$T/%s" '%s%s%s'`,
+			token, deb, s.cfg.GatewayURL, PackagePathPrefix, deb),
+		fmt.Sprintf(`(cd "$T" && echo '%s  %s' | sha256sum -c -)`, pkg.SHA256, deb),
+		fmt.Sprintf(`$S apt-get install -y "$T/%s"`, deb),
+		s.enrollCmdAs(token, "$S"),
+		"$S systemctl enable --now tgproxy-agent",
+		")",
+	}
+	return strings.Join(lines, "\n")
+}
+
+// pemForPrintf превращает PEM в аргумент-формат printf (переводы строк как \n); алфавит
+// PEM не содержит %, \ и ', поэтому безопасен в одинарных кавычках.
+func pemForPrintf(pem []byte) string {
+	return strings.ReplaceAll(strings.TrimRight(string(pem), "\n"), "\n", `\n`) + `\n`
 }
 
 func (s *Service) audit(ctx context.Context, actor, action, target, ip, detail string) {

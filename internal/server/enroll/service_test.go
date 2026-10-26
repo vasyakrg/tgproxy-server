@@ -39,6 +39,8 @@ type fixture struct {
 	notif []string
 	obs   []string
 	n     int
+	pkgs  CachePackages // подписанный релиз в temp-кэше
+	deb   []byte
 }
 
 type fakeClock struct {
@@ -82,7 +84,9 @@ func newFixture(t *testing.T) *fixture {
 	sb := &syncBuf{}
 	f.logs = sb
 	logger := slog.New(slog.NewTextHandler(sb, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	f.pkgs, f.deb = newRelease(t, "1.2.3")
 	f.svc, err = New(Config{
+		Packages:    f.pkgs,
 		Enrollments: st.Enrollments(), Agents: st.Agents(), Audit: st.Audit(), CA: ca,
 		GatewayURL: "https://tgp.example.com:8444", Logger: logger, Now: f.clock.now,
 		Notify:  func(_ context.Context, id, _ string) { f.mu.Lock(); f.notif = append(f.notif, id); f.mu.Unlock() },
@@ -144,8 +148,8 @@ func TestIssueAndEnrollSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"printf %s '" + is.Token + "' | sudo tgproxy agent enroll --token-stdin", "--server https://tgp.example.com:8444", "--ca-fingerprint " + f.ca.CAFingerprint()} {
-		if !strings.Contains(is.Cmdline, want) {
-			t.Errorf("cmdline %q lacks %q", is.Cmdline, want)
+		if !strings.Contains(is.CmdlineInstalled, want) {
+			t.Errorf("cmdline %q lacks %q", is.CmdlineInstalled, want)
 		}
 	}
 	if strings.Contains(is.Cmdline, "TGP_ENROLL_TOKEN") || strings.Contains(is.Cmdline, "--token ") {
@@ -368,7 +372,7 @@ func TestInternalErrors(t *testing.T) {
 	ctx := context.Background()
 	// ошибка создания агента -> 500
 	svc, _ := New(Config{Enrollments: f.st.Enrollments(), Agents: failAgents{f.st.Agents(), errors.New("db down")}, Audit: f.st.Audit(), CA: f.ca, GatewayURL: "https://h:8444", Now: f.clock.now})
-	is, _ := svc.IssueFor(ctx, IssueRequest{Name: "e1"})
+	is, _ := svc.IssueFor(ctx, IssueRequest{Name: "e1", InstalledOnly: true})
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/enroll", strings.NewReader(mustJSON(Request{Token: is.Token, CSR: goodCSR(t)})))
 	r.RemoteAddr = "192.0.2.5:1"
 	w := httptest.NewRecorder()
@@ -378,7 +382,7 @@ func TestInternalErrors(t *testing.T) {
 	}
 	// ошибка подписи -> 500 и агент удалён
 	svc2, _ := New(Config{Enrollments: f.st.Enrollments(), Agents: f.st.Agents(), Audit: f.st.Audit(), CA: failCA{Authority: f.ca}, GatewayURL: "https://h:8444", Now: f.clock.now})
-	is2, _ := svc2.IssueFor(ctx, IssueRequest{Name: "e2"})
+	is2, _ := svc2.IssueFor(ctx, IssueRequest{Name: "e2", InstalledOnly: true})
 	r = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/enroll", strings.NewReader(mustJSON(Request{Token: is2.Token, CSR: goodCSR(t)})))
 	r.RemoteAddr = "192.0.2.6:1"
 	w = httptest.NewRecorder()

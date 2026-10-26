@@ -50,12 +50,14 @@ func newAgentsEnrollTokenCmd() *cobra.Command {
 		cfgPath, name, gatewayURL string
 		ttl                       time.Duration
 		weight                    int
+		installed                 bool
 	)
 	cmd := &cobra.Command{
 		Use:   "enroll-token",
 		Short: "Выпустить одноразовый токен подключения агента за NAT и вывести команду для агента",
 		Long: "То же, что кнопка «Агент за NAT» в UI. Токен показывается один раз; в БД хранится только SHA-256.\n" +
-			"Требуется инициализированный CA (tgproxy pki init).",
+			"Требуется инициализированный CA (tgproxy pki init). Основная команда ставит пакет с самого сервера (нужен подписанный релиз\n" +
+			"версии сервера в кэше загрузок, иначе токен не выдаётся) и подключает агента; --installed — только подключение.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, st, err := openAdminStore(cmd, cfgPath)
@@ -83,18 +85,31 @@ func newAgentsEnrollTokenCmd() *cobra.Command {
 			if !ok {
 				return errors.New("не удалось определить публичный URL agent_gateway: задайте --gateway-url или server.public_base_url")
 			}
+			pkgs, err := app.EnrollPackages(cfg)
+			if err != nil {
+				return err
+			}
 			svc, err := enroll.New(enroll.Config{
 				Enrollments: st.Enrollments(), Agents: st.Agents(), Audit: st.Audit(), CA: auth, GatewayURL: url,
+				Packages: pkgs,
 			})
 			if err != nil {
 				return err
 			}
-			is, err := svc.IssueFor(cmd.Context(), enroll.IssueRequest{Name: name, Weight: weight, CreatedBy: "cli", TTL: ttl})
+			is, err := svc.IssueFor(cmd.Context(), enroll.IssueRequest{
+				Name: name, Weight: weight, CreatedBy: "cli", TTL: ttl, InstalledOnly: installed,
+			})
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Токен действует до %s и показывается один раз. Команда для агента:\n%s\n",
-				is.ExpiresAt.Local().Format(time.RFC3339), is.Cmdline)
+			out := cmd.OutOrStdout()
+			if installed {
+				_, err = fmt.Fprintf(out, "Токен действует до %s и показывается один раз. Команда для агента (tgproxy уже установлен):\n%s\n",
+					is.ExpiresAt.Local().Format(time.RFC3339), is.CmdlineInstalled)
+				return err
+			}
+			_, err = fmt.Fprintf(out, "Токен действует до %s и показывается один раз.\n\nКоманда для чистого хоста (скачает пакет с сервера, установит и подключит агента):\n%s\n\nЕсли tgproxy уже установлен на хосте:\n%s\n",
+				is.ExpiresAt.Local().Format(time.RFC3339), is.Cmdline, is.CmdlineInstalled)
 			return err
 		},
 	}
@@ -102,6 +117,7 @@ func newAgentsEnrollTokenCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "имя агента (из него строится id)")
 	cmd.Flags().IntVar(&weight, "weight", 0, "вес в балансировке (0 — по умолчанию)")
 	cmd.Flags().DurationVar(&ttl, "ttl", 0, "срок токена (по умолчанию 1h, максимум 24h)")
+	cmd.Flags().BoolVar(&installed, "installed", false, "tgproxy уже установлен на хосте: вывести только команду подключения (без установки пакета)")
 	cmd.Flags().StringVar(&gatewayURL, "gateway-url", "", "публичный https-URL agent_gateway (по умолчанию из конфига)")
 	_ = cmd.MarkFlagRequired("config")
 	_ = cmd.MarkFlagRequired("name")

@@ -52,11 +52,15 @@ func (e *pkiEnv) publishRelease(version string, s e2eSigner) {
 	deb := []byte("DEB-" + version)
 	sum := sha256.Sum256(deb)
 	debName := release.DebName(version, runtime.GOARCH)
+	pkgName := release.DebName(version, "amd64") // пакет агентов за NAT (enroll.AgentArch)
 	sums := []byte(hex.EncodeToString(sum[:]) + "  " + debName + "\n")
+	if pkgName != debName {
+		sums = append(sums, []byte(hex.EncodeToString(sum[:])+"  "+pkgName+"\n")...)
+	}
 	r := minisign.NewReader(bytes.NewReader(sums))
 	_, _ = io.Copy(io.Discard, r)
 	sig := r.SignWithComments(s.priv, "timestamp:1 file:checksums.txt", "untrusted")
-	for name, b := range map[string][]byte{debName: deb, release.ChecksumsName: sums, release.SigName: sig} {
+	for name, b := range map[string][]byte{debName: deb, pkgName: deb, release.ChecksumsName: sums, release.SigName: sig} {
 		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil { //nolint:gosec // кэш загрузок читается gateway
 			e.t.Fatal(err)
 		}

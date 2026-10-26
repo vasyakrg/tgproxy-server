@@ -69,7 +69,11 @@ sudo systemctl enable --now tgproxy-server tgproxy-update-server.path
   ```sh
   sudo runuser -u tgproxy -- tgproxy agents enroll-token --name nat1 -c /etc/tgproxy/server.yaml
   ```
-  Токен одноразовый (TTL 1 ч, максимум `--ttl 24h`). Команда `tgproxy agent enroll --server https://<сервер>:8444 --ca-fingerprint SHA256:... ` выполняется на хосте агента после установки deb (токен — из `$TGP_ENROLL_TOKEN`); затем `systemctl enable --now tgproxy-agent`. Отпечаток CA: `tgproxy pki fingerprint -c /etc/tgproxy/server.yaml`.
+  Токен одноразовый (TTL 1 ч, максимум `--ttl 24h`). Команда на выходе — одна копируемая целиком, для чистого Debian/Ubuntu amd64, под root (без sudo) или обычным пользователем с `sudo`; при отсутствии `curl` доустанавливает `curl` и `ca-certificates`; скачивает deb **с самого сервера** (`GET https://<сервер>:8444/enroll/package/<deb>`, GitHub не нужен), сверяет sha256 из подписанного `checksums.txt`, ставит через `apt-get install` (с зависимостями), выполняет `tgproxy agent enroll` и `systemctl enable --now tgproxy-agent`. Токен в argv/`ps` не попадает (`printf` — builtin шелла, заголовок в curl идёт через stdin), TLS — `--cacert` с CA сервера, TLS 1.3, без `-k`.
+
+  Требования: на сервере в кэше загрузок (`update.downloads_dir`, UI «Система → Обновления») должен лежать **подписанный релиз той же версии, что и сервер** (`tgproxy_<версия>_amd64.deb` + `checksums.txt` + `.minisig`); иначе токен не выдаётся — «загрузите релиз X в Система → Обновления». Хост gateway входит в SAN серверного сертификата — после обновления сервера до этой версии перезапустите его, чтобы сертификат перевыпустился.
+
+  Если tgproxy на хосте уже установлен, там же показана короткая команда (`printf %s '<токен>' | sudo tgproxy agent enroll --token-stdin --server https://<сервер>:8444 --ca-fingerprint SHA256:...`; в CLI — `agents enroll-token --installed`, пакет в кэше не нужен), затем `systemctl enable --now tgproxy-agent`. Отпечаток CA: `tgproxy pki fingerprint -c /etc/tgproxy/server.yaml`.
 
 ## Порты
 

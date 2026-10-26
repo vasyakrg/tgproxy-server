@@ -68,7 +68,9 @@ func DefaultNATForm() NATFormVM {
 // NATIssuedVM — выпущенный токен (команда показывается один раз).
 type NATIssuedVM struct {
 	ID, Name, Cmdline string
-	Expires           string
+	// CmdlineInstalled — короткая команда, если tgproxy уже установлен на хосте агента.
+	CmdlineInstalled string
+	Expires          string
 }
 
 // PendingRowVM — ожидающий токен.

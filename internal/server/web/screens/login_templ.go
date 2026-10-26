@@ -295,7 +295,8 @@ func totpForm(v LoginView) templ.Component {
 		}
 		templ_7745c5c3_Err = views.Field(views.FieldProps{
 			ID: "login-code", Name: "code", Label: "Код TOTP", Autocomplete: "one-time-code", Required: true,
-			Attrs: templ.Attributes{"inputmode": "numeric", "pattern": "[0-9 ]*", "maxlength": "10", "autofocus": true, "spellcheck": "false"},
+			// data-autosubmit: форма уходит сама, как только набрано 6 цифр (вставка/автозаполнение, app.js).
+			Attrs: templ.Attributes{"inputmode": "numeric", "pattern": "[0-9 ]*", "maxlength": "10", "autofocus": true, "spellcheck": "false", "data-autosubmit": "6"},
 		}).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err

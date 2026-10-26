@@ -37,7 +37,7 @@ func (f *fakeIssuer) IssueFor(ctx context.Context, req enroll.IssueRequest) (enr
 	id := fmt.Sprintf("%016x", len(f.reqs))
 	exp := t0.Add(req.TTL)
 	err := f.repo.Create(ctx, store.Enrollment{ID: id, TokenHash: h[:], Name: req.Name, Weight: req.Weight, CreatedBy: req.CreatedBy, CreatedAt: t0, ExpiresAt: exp})
-	return enroll.Issued{ID: id, Token: enrollToken, Cmdline: "sudo TGP_ENROLL_TOKEN=" + enrollToken + " tgproxy agent enroll", ExpiresAt: exp}, err
+	return enroll.Issued{ID: id, Token: enrollToken, Cmdline: "sudo TGP_ENROLL_TOKEN=" + enrollToken + " tgproxy agent enroll", CmdlineInstalled: "tgproxy agent enroll", ExpiresAt: exp}, err
 }
 
 func newEnrollEnv(t *testing.T) (*http.ServeMux, *fakeIssuer, *memtest.Store, *bytes.Buffer) {
@@ -66,7 +66,7 @@ func TestEnrollCreateListRevoke(t *testing.T) {
 	}
 	var created map[string]string
 	decode(t, rec, &created)
-	if !strings.Contains(created["cmdline"], enrollToken) || created["id"] == "" || rec.Header().Get("Cache-Control") != "no-store" {
+	if created["cmdline_installed"] == "" || !strings.Contains(created["cmdline"], enrollToken) || created["id"] == "" || rec.Header().Get("Cache-Control") != "no-store" {
 		t.Errorf("%v %v", created, rec.Header())
 	}
 	if r := fi.reqs[0]; r.Name != "waw-2" || r.Weight != 80 || r.TTL != 30*time.Minute {

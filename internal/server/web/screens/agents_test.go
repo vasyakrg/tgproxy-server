@@ -145,7 +145,8 @@ func (f *agIssuer) IssueFor(ctx context.Context, r enroll.IssueRequest) (enroll.
 	id := fmt.Sprintf("%016x", f.n)
 	exp := agNow.Add(r.TTL)
 	err := f.repo.Create(ctx, store.Enrollment{ID: id, TokenHash: h[:], Name: r.Name, Weight: r.Weight, CreatedBy: r.CreatedBy, CreatedAt: agNow, ExpiresAt: exp})
-	return enroll.Issued{ID: id, Token: wToken, Cmdline: "sudo TGP_ENROLL_TOKEN=" + wToken + " tgproxy agent enroll --server https://srv:8444 --ca-fingerprint SHA256:ca", ExpiresAt: exp}, err
+	return enroll.Issued{ID: id, Token: wToken, Cmdline: "sudo TGP_ENROLL_TOKEN=" + wToken + " tgproxy agent enroll --server https://srv:8444 --ca-fingerprint SHA256:ca",
+		CmdlineInstalled: "printf %s 'x' | sudo tgproxy agent enroll --token-stdin", ExpiresAt: exp}, err
 }
 
 type agFx struct {

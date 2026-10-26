@@ -225,7 +225,7 @@ templ NATForm(f NATFormVM) {
 				}
 			</div>
 		</div>
-		<div class="wiz-note">SSH не нужен. Агент проверит сервер по отпечатку CA, создаст ключ у себя и получит сертификат. Пакет tgproxy должен быть уже установлен на хосте агента.</div>
+		<div class="wiz-note">SSH не нужен. Агент проверит сервер по отпечатку CA, создаст ключ у себя и получит сертификат. Пакет tgproxy хост скачает с сервера сам (Debian/Ubuntu amd64, нужны curl и sudo).</div>
 		<div class="form-actions">
 			<button type="submit" class="btn btn-primary">Выпустить токен</button>
 		</div>
@@ -237,12 +237,21 @@ templ natIssued(v NATIssuedVM) {
 		<h2 class="form-title">Токен для «{ v.Name }» выпущен</h2>
 		<div class="alert alert-warn" role="status">Команда содержит токен и показана один раз. Токен одноразовый, действует до { v.Expires }.</div>
 		<div class="field">
-			<span class="field-label">Выполните на хосте агента</span>
+			<span class="field-label">Выполните на хосте агента (установит пакет и подключит агента)</span>
 			<div class="copy-row">
 				<pre class="mono code-box wiz-cmd" id="enroll-cmd">{ v.Cmdline }</pre>
 				@views.IconButton("Копировать команду установки", "copy", false, templ.Attributes{"data-copy": "enroll-cmd"})
 			</div>
 		</div>
+		if v.CmdlineInstalled != "" && v.CmdlineInstalled != v.Cmdline {
+			<div class="field">
+				<span class="field-label">Если tgproxy уже установлен на хосте</span>
+				<div class="copy-row">
+					<pre class="mono code-box wiz-cmd" id="enroll-cmd-installed">{ v.CmdlineInstalled }</pre>
+					@views.IconButton("Копировать команду подключения", "copy", false, templ.Attributes{"data-copy": "enroll-cmd-installed"})
+				</div>
+			</div>
+		}
 		<div class="form-actions">
 			<a class="btn" href="/agents/new?mode=nat">Выпустить ещё</a>
 			@views.IconButton("Отозвать токен: "+v.Name, "trash", true, templ.Attributes{

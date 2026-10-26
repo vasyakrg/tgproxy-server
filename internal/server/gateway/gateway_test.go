@@ -357,7 +357,7 @@ func (e *env) do(t *testing.T, c *http.Client, method, path string) int {
 func TestHTTPDefaultsAre404(t *testing.T) {
 	e := newEnv(t)
 	c := e.httpClient(nil)
-	for _, p := range []string{"/enroll", "/_agent_gw/packages/1.0.0", "/", "/_agent/status"} {
+	for _, p := range []string{"/enroll", "/enroll/package/tgproxy_1.0.0_amd64.deb", "/_agent_gw/packages/1.0.0", "/", "/_agent/status"} {
 		method := http.MethodPost
 		if p != "/enroll" {
 			method = http.MethodGet
@@ -403,6 +403,24 @@ func TestHTTPEnrollAndPackagesHandlers(t *testing.T) {
 	}
 	if enrolled.Load() != 1 {
 		t.Fatalf("enroll calls=%d", enrolled.Load())
+	}
+}
+
+func TestHTTPEnrollPackageHandler(t *testing.T) {
+	var got atomic.Value
+	e := newEnv(t, WithEnrollPackageHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.Store(r.URL.Path)
+		if _, ok := AgentIDFromContext(r.Context()); ok {
+			t.Error("agent id on cert-less request")
+		}
+		_, _ = w.Write([]byte("deb"))
+	})))
+	if r := e.do(t, e.httpClient(nil), http.MethodGet, "/enroll/package/tgproxy_1.0.0_amd64.deb"); r != 200 || got.Load() != "/enroll/package/tgproxy_1.0.0_amd64.deb" {
+		t.Fatalf("pkg: %d %v", r, got.Load())
+	}
+	// /enroll остаётся независимым (без своего обработчика — 404)
+	if r := e.do(t, e.httpClient(nil), http.MethodPost, "/enroll"); r != 404 {
+		t.Fatalf("enroll: %d", r)
 	}
 }
 

@@ -29,6 +29,9 @@ type Options struct {
 	CAName    string        // CN создаваемого CA
 	CATTL     time.Duration // срок CA, по умолчанию 10 лет
 	ServerTTL time.Duration // срок серверного сертификата, по умолчанию 90 дней
+	// ServerHosts — дополнительные SAN серверного сертификата (DNS или IP): хост
+	// agent_gateway, который видят клиенты. Пусто — только tgproxy-server и URI SAN.
+	ServerHosts []string
 }
 
 // Authority — CA сервера: сертификат в БД открыто, ключ зашифрован KEK.
@@ -127,7 +130,7 @@ func (a *Authority) ServerCert(_ context.Context) (*tls.Certificate, error) {
 	if a.server != nil && !DueForRotation(a.srvX, nowFunc()) {
 		return a.server, nil
 	}
-	b, err := IssueServerClient(a.ca, a.opts.ServerTTL)
+	b, err := IssueServerClientFor(a.ca, a.opts.ServerTTL, a.opts.ServerHosts...)
 	if err != nil {
 		return nil, err
 	}

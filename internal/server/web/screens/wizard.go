@@ -261,7 +261,7 @@ func (s *agentsScreen) natIssue(w http.ResponseWriter, r *http.Request) {
 		renderFragment(w, r, http.StatusUnprocessableEntity, NATBody(f, nil, s.pendingList(r), true)) //nolint:contextcheck // templ
 		return
 	}
-	issued := NATIssuedVM{ID: is.ID, Name: f.Name, Cmdline: is.Cmdline, Expires: is.ExpiresAt.Local().Format("15:04")}
+	issued := NATIssuedVM{ID: is.ID, Name: f.Name, Cmdline: is.Cmdline, CmdlineInstalled: is.CmdlineInstalled, Expires: is.ExpiresAt.Local().Format("15:04")}
 	toast(w, "ok", "Токен для «"+f.Name+"» выпущен")
 	renderFragment(w, r, http.StatusOK, NATBody(f, &issued, s.pendingList(r), true)) //nolint:contextcheck // templ
 }

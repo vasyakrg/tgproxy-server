@@ -95,11 +95,11 @@ func (e *enrollEnv) writeConfig(t *testing.T) {
 
 func (e *enrollEnv) token(t *testing.T, name string) string {
 	t.Helper()
-	tok, _, err := e.svc.Issue(context.Background(), name, 0)
+	is, err := e.svc.IssueFor(context.Background(), enroll.IssueRequest{Name: name, InstalledOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return tok
+	return is.Token
 }
 
 func (e *enrollEnv) opts(token string) EnrollOptions {

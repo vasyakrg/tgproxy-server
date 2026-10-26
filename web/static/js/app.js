@@ -93,6 +93,24 @@
     if (t.tagName === 'DIALOG' && t.open) { t.close(); } // клик по подложке
   });
 
+  // ---- автоотправка кода (TOTP): набрано N цифр -> submit (htmx перехватывает событие submit) ----
+  // Один раз на значение: повтор только после того, как код изменили.
+  document.addEventListener('input', function (e) {
+    var el = e.target;
+    if (!(el instanceof HTMLInputElement) || !el.hasAttribute('data-autosubmit')) { return; }
+    var need = parseInt(el.getAttribute('data-autosubmit'), 10);
+    var digits = el.value.replace(/\D/g, '');
+    if (digits.length !== need) { el.removeAttribute('data-autosubmitted'); return; }
+    if (el.getAttribute('data-autosubmitted') === digits || !el.form) { return; }
+    el.setAttribute('data-autosubmitted', digits);
+    if (typeof el.form.requestSubmit === 'function') {
+      el.form.requestSubmit();
+    } else {
+      var b = el.form.querySelector('button[type=submit]');
+      if (b) { b.click(); }
+    }
+  });
+
   // htmx: HX-Trigger {"toast": {"kind":"ok","message":"…"}} -> тост (textContent, без innerHTML)
   document.addEventListener('toast', function (e) {
     var box = document.getElementById('toasts');

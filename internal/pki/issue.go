@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"time"
@@ -61,13 +62,23 @@ func newKey() (*ecdsa.PrivateKey, error) {
 }
 
 // sign выпускает листовой сертификат; CN/SAN целиком задаёт вызывающий.
-func (c *CA) sign(pub *ecdsa.PublicKey, cn string, dns []string, uri *url.URL, ttl time.Duration) ([]byte, error) {
+// names — DNS-имена и IP-адреса (IP попадают в IP SAN).
+func (c *CA) sign(pub *ecdsa.PublicKey, cn string, names []string, uri *url.URL, ttl time.Duration) ([]byte, error) {
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
 	serial, err := newSerial()
 	if err != nil {
 		return nil, err
+	}
+	var dns []string
+	var ips []net.IP
+	for _, n := range names {
+		if ip := net.ParseIP(n); ip != nil {
+			ips = append(ips, ip)
+		} else {
+			dns = append(dns, n)
+		}
 	}
 	now := nowFunc()
 	notAfter := now.Add(ttl)
@@ -83,6 +94,7 @@ func (c *CA) sign(pub *ecdsa.PublicKey, cn string, dns []string, uri *url.URL, t
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 		DNSNames:              dns,
+		IPAddresses:           ips,
 		URIs:                  []*url.URL{uri},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, c.cert, pub, c.key)
@@ -96,11 +108,19 @@ func (c *CA) sign(pub *ecdsa.PublicKey, cn string, dns []string, uri *url.URL, t
 // EKU ServerAuth+ClientAuth: сервер — TLS-клиент в dial и TLS-сервер в
 // reverse/agent_gateway. ttl<=0 → DefaultTTL.
 func IssueServerClient(ca *CA, ttl time.Duration) (Bundle, error) {
+	return IssueServerClientFor(ca, ttl)
+}
+
+// IssueServerClientFor — как IssueServerClient, но с дополнительными SAN
+// (DNS-имена или IP): имя хоста agent_gateway, чтобы обычный TLS-клиент
+// (curl --cacert при установке пакета) мог проверить сертификат по имени.
+func IssueServerClientFor(ca *CA, ttl time.Duration, hosts ...string) (Bundle, error) {
 	key, err := newKey()
 	if err != nil {
 		return Bundle{}, err
 	}
-	certPEM, err := ca.sign(&key.PublicKey, "tgproxy-server", []string{ServerDNSName}, ServerURI(), ttl)
+	names := append([]string{ServerDNSName}, hosts...)
+	certPEM, err := ca.sign(&key.PublicKey, "tgproxy-server", names, ServerURI(), ttl)
 	if err != nil {
 		return Bundle{}, err
 	}

@@ -88,7 +88,8 @@ templ totpForm(v LoginView) {
 		<p class="login-lead">Введите 6 цифр из приложения-аутентификатора.</p>
 		@views.Field(views.FieldProps{
 			ID: "login-code", Name: "code", Label: "Код TOTP", Autocomplete: "one-time-code", Required: true,
-			Attrs: templ.Attributes{"inputmode": "numeric", "pattern": "[0-9 ]*", "maxlength": "10", "autofocus": true, "spellcheck": "false"},
+			// data-autosubmit: форма уходит сама, как только набрано 6 цифр (вставка/автозаполнение, app.js).
+			Attrs: templ.Attributes{"inputmode": "numeric", "pattern": "[0-9 ]*", "maxlength": "10", "autofocus": true, "spellcheck": "false", "data-autosubmit": "6"},
 		})
 		<button type="submit" class="btn btn-primary btn-block">Войти</button>
 		<button type="submit" class="btn btn-link btn-block" formaction="/login/reset" formnovalidate hx-post="/login/reset" hx-target="#login-card" hx-swap="innerHTML">← Другой пользователь</button>
