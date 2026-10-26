@@ -17,3 +17,4 @@ deploy/.env
 # приватные ключи (minisign и пр.) — никогда в репозиторий
 *.key
 /keys/
+deploy/known_hosts

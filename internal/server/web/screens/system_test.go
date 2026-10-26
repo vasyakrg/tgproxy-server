@@ -39,6 +39,8 @@ type fakeUpd struct {
 	checkErr error
 	stageErr error
 	stages   int
+	caches   int
+	cacheErr error
 	src      string
 }
 
@@ -68,6 +70,13 @@ func (f *fakeUpd) Stage(_ context.Context, v string) error {
 	f.stages++
 	f.st.Staged = v
 	return nil
+}
+
+func (f *fakeUpd) Cache(context.Context, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.caches++
+	return f.cacheErr
 }
 
 func (f *fakeUpd) Status() updater.Status { f.mu.Lock(); defer f.mu.Unlock(); return f.st }

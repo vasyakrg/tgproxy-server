@@ -1,0 +1,17 @@
+# Traefik (file provider, dynamic config): TLS passthrough до agent_gateway tgproxy.
+# mTLS агентов и /enroll терминирует сам tgproxy (встроенный CA), поэтому passthrough и без certResolver.
+# Блок tcp: — на верхнем уровне файла, рядом с http:, не внутри него.
+tcp:
+  routers:
+    tgfarm-gw-bildme-ru-route:
+      entryPoints:
+      - https
+      rule: HostSNI(`tgfarm-gw.bildme.ru`)
+      service: tgfarm-gw-bildme-ru-service
+      tls:
+        passthrough: true
+  services:
+    tgfarm-gw-bildme-ru-service:
+      loadBalancer:
+        servers:
+        - address: 192.168.23.94:8444

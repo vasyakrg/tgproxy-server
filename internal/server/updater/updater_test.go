@@ -397,3 +397,41 @@ func TestNewCleansLeftovers(t *testing.T) {
 		t.Error("остатки не почищены корректно")
 	}
 }
+
+func TestCacheHappyPath(t *testing.T) {
+	// Версия равна текущей: Stage бы отказал (not_newer), Cache — нет, staged не создаётся.
+	e := newEnv(t, signedBy(primary, "1.0.0", t), func(c *Config) { c.MinVersion = "1.0.0" })
+	if err := e.u.Cache(context.Background(), "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	art := e.src.files
+	deb := DebName("1.0.0", "amd64")
+	dl := filepath.Join(e.packages, "1.0.0")
+	if !bytes.Equal(readFile(t, filepath.Join(dl, deb)), art[deb]) ||
+		!bytes.Equal(readFile(t, filepath.Join(dl, ChecksumsName)), art[ChecksumsName]) ||
+		!bytes.Equal(readFile(t, filepath.Join(dl, SigName)), art[SigName]) {
+		t.Error("набор в кэше загрузок не совпал")
+	}
+	if exists(filepath.Join(e.updates, "staged")) || e.u.Status().Staged != "" {
+		t.Error("Cache не должен создавать staged")
+	}
+}
+
+func TestCacheForeignKeyRejected(t *testing.T) {
+	e := newEnv(t, func(_, _ keys) artifacts { return makeArtifacts(t, newKeys(t), "1.0.0") }, nil)
+	if err := e.u.Cache(context.Background(), "1.0.0"); !errors.Is(err, verify.ErrBadSignature) {
+		t.Fatalf("err = %v", err)
+	}
+	assertNothingWritten(t, e)
+}
+
+func TestCacheBelowMin(t *testing.T) {
+	e := newEnv(t, signedBy(primary, "1.1.0", t), func(c *Config) { c.MinVersion = "1.2.0" })
+	if err := e.u.Cache(context.Background(), "1.1.0"); !errors.Is(err, verify.ErrDowngrade) {
+		t.Fatalf("err = %v", err)
+	}
+	assertNothingWritten(t, e)
+	if len(e.src.fetched) != 0 {
+		t.Errorf("скачивание не должно начинаться: %v", e.src.fetched)
+	}
+}

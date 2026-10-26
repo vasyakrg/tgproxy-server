@@ -186,30 +186,8 @@ func (u *Updater) Stage(ctx context.Context, version string) (err error) {
 		return ErrPending
 	}
 
-	src := u.source()
-	rel, err := u.release(ctx, src, version)
+	checksums, sig, debName, err := u.verifyAndCache(ctx, version)
 	if err != nil {
-		return err
-	}
-	checksums, err := u.fetchAll(ctx, src, rel, ChecksumsName)
-	if err != nil {
-		return err
-	}
-	sig, err := u.fetchAll(ctx, src, rel, SigName)
-	if err != nil {
-		return err
-	}
-	info, err := verify.Authenticate(checksums, sig, u.cfg.PubKeys)
-	if err != nil {
-		return err
-	}
-	u.log.Info("updater: подпись checksums принята", "version", version, "key", info.KeyIndex, "comment", info.TrustedComment)
-
-	debName := DebName(version, u.cfg.Arch)
-	if _, err = verify.Sum(checksums, debName); err != nil {
-		return err
-	}
-	if err = u.ensureCached(ctx, src, rel, version, debName, checksums, sig); err != nil {
 		return err
 	}
 	err = u.stager.Stage(StageFiles{
@@ -225,6 +203,61 @@ func (u *Updater) Stage(ctx context.Context, version string) (err error) {
 		u.mu.Unlock()
 	}
 	return err
+}
+
+// Cache проверяет версию и кладёт проверенный пакет в кэш загрузок (для установщика
+// агентов и раскатки) без проверки «новее» и без постановки в staged: самообновление
+// сервера не запрашивается. Подпись проверяется до записи в кэш.
+func (u *Updater) Cache(ctx context.Context, version string) (err error) {
+	if !u.opMu.TryLock() {
+		return ErrBusy
+	}
+	defer u.opMu.Unlock()
+	defer func() {
+		if err != nil {
+			err = u.fail(err)
+		}
+	}()
+	if err = verify.CheckVersion(version, u.cfg.MinVersion); err != nil {
+		return err
+	}
+	if _, _, _, err = u.verifyAndCache(ctx, version); err != nil {
+		return err
+	}
+	u.mu.Lock()
+	u.status.LastError = ""
+	u.mu.Unlock()
+	return nil
+}
+
+// verifyAndCache — общая часть Stage и Cache: подпись checksums → наличие deb в
+// checksums → проверенный deb в кэше. Возвращает проверенные checksums, подпись и имя deb.
+func (u *Updater) verifyAndCache(ctx context.Context, version string) (checksums, sig []byte, debName string, err error) {
+	src := u.source()
+	rel, err := u.release(ctx, src, version)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	if checksums, err = u.fetchAll(ctx, src, rel, ChecksumsName); err != nil {
+		return nil, nil, "", err
+	}
+	if sig, err = u.fetchAll(ctx, src, rel, SigName); err != nil {
+		return nil, nil, "", err
+	}
+	info, err := verify.Authenticate(checksums, sig, u.cfg.PubKeys)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	u.log.Info("updater: подпись checksums принята", "version", version, "key", info.KeyIndex, "comment", info.TrustedComment)
+
+	debName = DebName(version, u.cfg.Arch)
+	if _, err = verify.Sum(checksums, debName); err != nil {
+		return nil, nil, "", err
+	}
+	if err = u.ensureCached(ctx, src, rel, version, debName, checksums, sig); err != nil {
+		return nil, nil, "", err
+	}
+	return checksums, sig, debName, nil
 }
 
 // release возвращает описание версии: из последнего Check либо у источника.

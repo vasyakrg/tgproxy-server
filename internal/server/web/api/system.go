@@ -67,6 +67,7 @@ func (e *UploadError) Error() string { return "upload: " + e.Kind + ": " + e.Msg
 type UpdateBackend interface {
 	Check(ctx context.Context) (updater.Release, error)
 	Stage(ctx context.Context, version string) error
+	Cache(ctx context.Context, version string) error
 	Status() updater.Status
 }
 
@@ -181,6 +182,9 @@ type VersionInfo struct {
 	Uploaded     string         `json:"uploaded,omitempty"` // загруженный вручную проверенный пакет, готов к установке
 	Target       string         `json:"target,omitempty"`   // что ставит кнопка «Установить»: Uploaded, иначе Available
 	Result       *InstallResult `json:"result,omitempty"`
+	// CachedForAgents — версия, которую последняя загрузка положила в кэш для установщика агентов
+	// и раскатки (заполняется только в ответе на Upload).
+	CachedForAgents string `json:"cached_for_agents,omitempty"`
 }
 
 // ReleaseInfo — релиз из последней проверки.
@@ -426,11 +430,52 @@ func (s *SystemService) Upload(ctx context.Context, act Actor, mr *multipart.Rea
 		return s.Version(), fmt.Errorf("%w: upload commit: %w", errInternal, err)
 	}
 	up.tmp = ""
-	s.mu.Lock()
-	s.uploaded, s.uploadedSize = up.version, up.size
-	s.mu.Unlock()
-	s.record(ctx, act, "system.upload", up.version, fmt.Sprintf("size=%d", up.size))
-	return s.Version(), nil
+	equal := s.sameAsCurrent(up.version)
+	if !equal {
+		s.mu.Lock()
+		s.uploaded, s.uploadedSize = up.version, up.size
+		s.mu.Unlock()
+	}
+	// Кэш загрузок для агентов: версия равна текущей — это единственная цель загрузки,
+	// ошибка отклоняет запрос; для более новой — best-effort (самообновление сервера
+	// по-прежнему только по явному «Установить»).
+	cached := false
+	if cerr := s.cacheForAgents(ctx, up.version); cerr != nil {
+		if equal {
+			s.record(ctx, act, "system.upload", up.version, "cache-failed")
+			return s.Version(), cerr
+		}
+		s.log.WarnContext(ctx, "system upload: кэш для агентов не заполнен", "version", up.version, "err", redact.Error(cerr))
+	} else {
+		cached = true
+	}
+	detail := fmt.Sprintf("size=%d", up.size)
+	if cached {
+		detail += " cached-for-agents"
+	}
+	s.record(ctx, act, "system.upload", up.version, detail)
+	v := s.Version()
+	if cached {
+		v.CachedForAgents = up.version
+	}
+	return v, nil
+}
+
+// sameAsCurrent: версия совпадает с установленной.
+func (s *SystemService) sameAsCurrent(version string) bool {
+	c, err := verify.CompareVersions(version, s.c.Updater.Status().Current)
+	return err == nil && c == 0
+}
+
+// cacheForAgents кладёт загруженный (уже проверенный) набор в кэш загрузок, читая его
+// через SourceSwitch; Updater повторно проверяет подпись и sha256 до записи в кэш.
+func (s *SystemService) cacheForAgents(ctx context.Context, version string) error {
+	if s.c.Switch == nil {
+		return ErrNotConfigured
+	}
+	s.c.Switch.Use(true)
+	defer s.c.Switch.Use(false)
+	return s.c.Updater.Cache(ctx, version)
 }
 
 func formErr(kind, msg string) error { return &UploadError{Kind: kind, Msg: msg} }
@@ -556,8 +601,9 @@ func (s *SystemService) validate(up *uploaded) error {
 	if err := verify.CheckVersion(up.version, s.c.MinVersion); err != nil {
 		return formErr("bad_version", "версия "+up.version+" ниже минимально допустимой")
 	}
-	if c, cerr := verify.CompareVersions(up.version, s.c.Updater.Status().Current); cerr == nil && c <= 0 {
-		return formErr("not_newer", "версия "+up.version+" не новее установленной")
+	// Равная версия допустима: пакет нужен в кэше для установки агентов (закрытый контур).
+	if c, cerr := verify.CompareVersions(up.version, s.c.Updater.Status().Current); cerr == nil && c < 0 {
+		return formErr("not_newer", "версия "+up.version+" старше установленной")
 	}
 	return nil
 }

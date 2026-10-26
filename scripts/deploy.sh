@@ -17,7 +17,7 @@ if [ -f "$ENV_FILE" ]; then
   # Файл оператора (deploy/.env, не коммитится); уже заданные в окружении переменные приоритетнее.
   for _v in PROD_SERVER_HOST PROD_SERVER_SSH_USER PROD_SERVER_SSH_PORT PROD_SSH_KEY PROD_PUBLIC_URL \
     PROD_ADMIN_URL PROD_AGENT_HOSTS PROD_AGENT_SSH_USER DEPLOY_MODE DEPLOY_TAG DEPLOY_REPO DEPLOY_DEB \
-    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT; do
+    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT DEPLOY_KNOWN_HOSTS; do
     if [ -n "${!_v+x}" ]; then eval "_keep_$_v=\${$_v}"; fi
   done
   set -a
@@ -26,7 +26,7 @@ if [ -f "$ENV_FILE" ]; then
   set +a
   for _v in PROD_SERVER_HOST PROD_SERVER_SSH_USER PROD_SERVER_SSH_PORT PROD_SSH_KEY PROD_PUBLIC_URL \
     PROD_ADMIN_URL PROD_AGENT_HOSTS PROD_AGENT_SSH_USER DEPLOY_MODE DEPLOY_TAG DEPLOY_REPO DEPLOY_DEB \
-    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT; do
+    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT DEPLOY_KNOWN_HOSTS; do
     _k="_keep_$_v"
     if [ -n "${!_k+x}" ]; then export "$_v=${!_k}"; fi
   done
@@ -48,8 +48,12 @@ SSH_PORT="${PROD_SERVER_SSH_PORT:-22}"
 AGENT_USER="${PROD_AGENT_SSH_USER:-$PROD_SERVER_SSH_USER}"
 ADMIN_URL="${PROD_ADMIN_URL%/}"
 
-# Проверка ключа хоста — всегда (known_hosts оператора); BatchMode — без интерактивных запросов.
-SSH_OPTS=(-o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10)
+# Проверка ключа хоста — всегда; BatchMode — без интерактивных запросов. Файл known_hosts задаётся
+# явно: ~/.ssh/config оператора может отключать его (UserKnownHostsFile /dev/null).
+KNOWN_HOSTS="${DEPLOY_KNOWN_HOSTS:-$HOME/.ssh/known_hosts}"
+KNOWN_HOSTS="${KNOWN_HOSTS/#\~/$HOME}"
+[ -s "$KNOWN_HOSTS" ] || die "known_hosts $KNOWN_HOSTS пуст или отсутствует (DEPLOY_KNOWN_HOSTS)"
+SSH_OPTS=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$KNOWN_HOSTS" -o BatchMode=yes -o ConnectTimeout=10)
 [ -n "${PROD_SSH_KEY:-}" ] && SSH_OPTS+=(-i "${PROD_SSH_KEY/#\~/$HOME}" -o IdentitiesOnly=yes)
 
 rssh() { local host="$1" user="$2"; shift 2; ssh "${SSH_OPTS[@]}" -p "$SSH_PORT" "$user@$host" "$@"; }

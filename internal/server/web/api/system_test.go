@@ -258,7 +258,7 @@ func TestUploadRejections(t *testing.T) {
 			r.name = "tgproxy_1.6.0_arm64.deb"
 			return fullUpload(t, r)
 		}, "bad_name"},
-		{"версия не новее", func() (io.Reader, string) { return fullUpload(t, makeRelease(t, e.signer, "1.4.1")) }, "not_newer"},
+		{"версия старше установленной", func() (io.Reader, string) { return fullUpload(t, makeRelease(t, e.signer, "1.4.0")) }, "not_newer"},
 		{"версия ниже min_version", func() (io.Reader, string) { return fullUpload(t, makeRelease(t, e.signer, "1.1.0")) }, "bad_version"},
 		{"поле передано дважды", func() (io.Reader, string) {
 			d := part{api.FieldDeb, good.name}
@@ -550,5 +550,39 @@ func TestSystemAPIRequiresSessionAndSameOrigin(t *testing.T) {
 	e.mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden || hit.Load() != 0 {
 		t.Fatalf("cross-site: %d hit=%d", rec.Code, hit.Load())
+	}
+}
+
+// Равная текущей версия принимается и кэшируется для агентов, самообновление не запрашивается.
+func TestUploadEqualVersionCachedForAgents(t *testing.T) {
+	e := newSys(t, nil)
+	r := makeRelease(t, e.signer, "1.4.1")
+	body, ct := fullUpload(t, r)
+	rec := e.post(t, "/api/v1/system/upload", body, ct)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+	}
+	var v api.VersionInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.CachedForAgents != "1.4.1" || v.Uploaded != "" || v.Staged != "" || v.Target != "" {
+		t.Fatalf("version info: %+v", v)
+	}
+	dl := filepath.Join(e.staging, "downloads", "1.4.1")
+	got, err := os.ReadFile(filepath.Join(dl, r.name))
+	if err != nil || !bytes.Equal(got, r.deb) {
+		t.Fatalf("deb в кэше: %v", err)
+	}
+	for _, n := range []string{updater.ChecksumsName, updater.SigName} {
+		if _, err := os.Stat(filepath.Join(dl, n)); err != nil {
+			t.Errorf("в кэше нет %s: %v", n, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(e.staging, "staged")); err == nil {
+		t.Error("создан запрос на самообновление")
+	}
+	if e.up.Status().Staged != "" {
+		t.Error("Staged выставлен")
 	}
 }

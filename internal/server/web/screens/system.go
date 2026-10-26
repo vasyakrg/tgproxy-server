@@ -207,6 +207,11 @@ func (s *systemScreen) upload(w http.ResponseWriter, r *http.Request) {
 		renderFragment(w, r, http.StatusUnprocessableEntity, UploadForm(s.updateVM().UploadMax, msg)) //nolint:contextcheck // templ
 		return
 	}
+	if v.Uploaded == "" && v.CachedForAgents != "" {
+		// Версия равна установленной: сервер не обновляется, пакет доступен установщику агентов.
+		s.closeAndRefresh(w, r, "ok", "Пакет "+vprefix(v.CachedForAgents)+" проверен и сохранён для установки агентов") //nolint:contextcheck // templ
+		return
+	}
 	s.closeAndRefresh(w, r, "ok", "Файлы приняты, подпись проверена: "+vprefix(v.Uploaded)) //nolint:contextcheck // templ
 }
 
