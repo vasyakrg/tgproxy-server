@@ -12,3 +12,4 @@ coverage.*
 docs/diagrams/*.visual-check.*
 dist-smoke-arm64/
 dev/nat-agent/tgproxy
+deploy/.env

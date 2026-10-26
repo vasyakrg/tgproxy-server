@@ -209,6 +209,7 @@ func (r agentRepo) Update(_ context.Context, a store.Agent) (store.Agent, error)
 		return store.Agent{}, store.ErrConflict
 	}
 	a.CreatedAt = cur.CreatedAt
+	a.SSHHost, a.SSHPort = cur.SSHHost, cur.SSHPort // Update SSH-цель не меняет
 	a.UpdatedAt = nowMS()
 	r.s.agents[a.ID] = a
 	r.s.agentsVer++
@@ -238,6 +239,13 @@ func (r agentRepo) SetWeight(_ context.Context, id string, weight int) error {
 
 func (r agentRepo) SetDraining(_ context.Context, id string, d bool) error {
 	return r.mutate(id, func(a *store.Agent) { a.Draining = d })
+}
+
+func (r agentRepo) SetSSHTarget(_ context.Context, id, host string, port int) error {
+	if err := (store.Agent{SSHHost: host, SSHPort: port}).ValidateSSHTarget(); err != nil {
+		return err
+	}
+	return r.mutate(id, func(a *store.Agent) { a.SSHHost, a.SSHPort = host, port })
 }
 
 func (r agentRepo) Delete(_ context.Context, id string) error {

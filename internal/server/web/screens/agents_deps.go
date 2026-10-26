@@ -25,6 +25,8 @@ type AgentsDeps struct {
 	Service *api.AgentsService
 	// Install — мастер установки по SSH (ветка «SSH»).
 	Install *api.InstallService
+	// Emergency — аварийное обновление агента по SSH (пункт «⋯»); nil — пункта нет.
+	Emergency *api.EmergencyService
 	// Enroll — токены для агентов за NAT (ветка «NAT»).
 	Enroll *api.EnrollService
 	// ServerVersion — версия сервера; отличающаяся версия агента подсвечивается.
@@ -138,6 +140,8 @@ type MoreVM struct {
 	Mode       string
 	CanRemove  bool
 	CertNotice string
+	// CanEmergency — доступно аварийное обновление по SSH (у агента есть SSH-цель).
+	CanEmergency bool
 }
 
 // ConfirmVM — диалог подтверждения опасного действия.

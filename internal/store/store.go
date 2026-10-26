@@ -37,6 +37,8 @@ type AgentRepo interface {
 	Update(ctx context.Context, a Agent) (Agent, error)
 	SetWeight(ctx context.Context, id string, weight int) error
 	SetDraining(ctx context.Context, id string, draining bool) error
+	// SetSSHTarget задаёт SSH-цель для аварийного обновления; пустой host с портом 0 очищает её.
+	SetSSHTarget(ctx context.Context, id, host string, port int) error
 	Delete(ctx context.Context, id string) error
 	Version(ctx context.Context) (int64, error)
 }
@@ -128,6 +130,7 @@ type CertRepo interface {
 	IsDenied(ctx context.Context, serial string) (bool, error)
 	ListDenied(ctx context.Context) ([]DeniedCert, error)
 	PruneDenied(ctx context.Context, now time.Time) (int, error)
+	// SaveCA — insert-only: если CA уже есть, ErrConflict (CA не перезаписывается никогда).
 	SaveCA(ctx context.Context, ca CARecord) error
 	LoadCA(ctx context.Context) (CARecord, error)
 }

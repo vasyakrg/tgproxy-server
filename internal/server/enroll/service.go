@@ -150,7 +150,9 @@ func (s *Service) IssueFor(ctx context.Context, req IssueRequest) (Issued, error
 		return Issued{}, fmt.Errorf("enroll: create: %w", err)
 	}
 	s.audit(ctx, req.CreatedBy, "enrollment.create", name, "", "id="+e.ID)
-	cmd := fmt.Sprintf("sudo TGP_ENROLL_TOKEN=%s tgproxy agent enroll --server %s --ca-fingerprint %s",
+	// Токен идёт через stdin: printf — встроенная команда шелла, в `ps` его нет
+	// (в отличие от `sudo TGP_ENROLL_TOKEN=…` или --token). Алфавит токена безопасен в одинарных кавычках.
+	cmd := fmt.Sprintf("printf %%s '%s' | sudo tgproxy agent enroll --token-stdin --server %s --ca-fingerprint %s",
 		token, s.cfg.GatewayURL, s.cfg.CA.CAFingerprint())
 	return Issued{ID: e.ID, Token: token, Cmdline: cmd, ExpiresAt: e.ExpiresAt}, nil
 }

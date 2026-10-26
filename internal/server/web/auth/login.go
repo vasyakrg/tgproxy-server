@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/store"
@@ -17,11 +18,14 @@ import (
 // Лимиты входа (architecture §8).
 const (
 	RateLimitPerMinute = 5
-	LockoutThreshold   = 10
-	LockoutDuration    = 15 * time.Minute
-	failWindow         = LockoutDuration
-	rateWindow         = time.Minute
-	maxUsernameLen     = 128
+	LockoutThreshold   = 10 // неудач на пару (user, подсеть /24 IPv4 или /64 IPv6)
+	// LockoutThresholdGlobal — неудач на пользователя суммарно из любых подсетей (порог выше,
+	// чтобы одиночный чужой хост не мог заблокировать админа целиком).
+	LockoutThresholdGlobal = 30
+	LockoutDuration        = 15 * time.Minute
+	failWindow             = LockoutDuration
+	rateWindow             = time.Minute
+	maxUsernameLen         = 128
 )
 
 // Ошибки входа. Сообщения намеренно не раскрывают, что именно неверно.
@@ -132,10 +136,12 @@ func (a *Auth) TOTPRequired(username string) bool {
 // gate: lockout и лимит 5/мин на IP+user. Применяется ДО проверки секретов.
 func (a *Auth) gate(ctx context.Context, step, username, ip string) error {
 	uk := userKey(username)
-	if _, err := a.store.RateState().Get(ctx, "login:lock:"+uk); err == nil {
-		return ErrLockedOut
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("auth: lockout state: %w", err)
+	for _, k := range []string{lockKey(username, ip), lockKeyGlobal(username)} {
+		if _, err := a.store.RateState().Get(ctx, k); err == nil {
+			return ErrLockedOut
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("auth: lockout state: %w", err)
+		}
 	}
 	n, err := a.store.RateState().Incr(ctx, "login:rl:"+step+":"+ip+"|"+uk, rateWindow)
 	if err != nil {
@@ -157,39 +163,84 @@ func (a *Auth) actorFor(username string) string {
 	return ""
 }
 
-// registerFailure учитывает неудачу, при достижении порога включает lockout и шлёт алерт.
+// ipNet сводит IP к подсети учёта блокировок: /24 для IPv4, /64 для IPv6.
+// Нераспознанная строка остаётся как есть (отдельная «подсеть»).
+func ipNet(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	bits := 64
+	if addr.Is4() {
+		bits = 24
+	}
+	pfx, err := addr.Prefix(bits)
+	if err != nil {
+		return ip
+	}
+	return pfx.String()
+}
+
+func failKey(username, ip string) string   { return "login:fail:" + userKey(username) + "|" + ipNet(ip) }
+func lockKey(username, ip string) string   { return "login:lock:" + userKey(username) + "|" + ipNet(ip) }
+func failKeyGlobal(username string) string { return "login:failg:" + userKey(username) }
+func lockKeyGlobal(username string) string { return "login:lockg:" + userKey(username) }
+
+// registerFailure учитывает неудачу по паре (user, подсеть) и глобально по user; при достижении
+// порога включает соответствующий lockout и шлёт алерт. Возвращает минимум оставшихся попыток.
 func (a *Auth) registerFailure(ctx context.Context, username, ip, reason string) (int, error) {
 	known := a.actorFor(username) != ""
 	rs := a.store.RateState()
-	n, err := rs.Incr(ctx, "login:fail:"+userKey(username), failWindow)
+	n, err := rs.Incr(ctx, failKey(username, ip), failWindow)
+	if err != nil {
+		return 0, fmt.Errorf("auth: fail counter: %w", err)
+	}
+	ng, err := rs.Incr(ctx, failKeyGlobal(username), failWindow)
 	if err != nil {
 		return 0, fmt.Errorf("auth: fail counter: %w", err)
 	}
 	a.audit(ctx, a.actorFor(username), AuditLoginFail, ip, reason)
 	if n >= LockoutThreshold {
-		first, err := rs.SetNX(ctx, "login:lock:"+userKey(username), []byte("1"), LockoutDuration)
-		if err != nil {
-			return 0, fmt.Errorf("auth: lockout state: %w", err)
-		}
-		if first {
-			_ = rs.Delete(ctx, "login:fail:"+userKey(username))
-			a.audit(ctx, a.actorFor(username), AuditLoginLockout, ip, "threshold_reached")
-			if known && a.notifier != nil {
-				a.notifier.LoginLockout(ctx, username, ip)
-			}
+		if err := a.lock(ctx, username, ip, lockKey(username, ip), failKey(username, ip), "threshold_reached", known); err != nil {
+			return 0, err
 		}
 	}
-	return max(0, LockoutThreshold-int(n)), nil
+	if ng >= LockoutThresholdGlobal {
+		if err := a.lock(ctx, username, ip, lockKeyGlobal(username), failKeyGlobal(username), "threshold_reached_global", known); err != nil {
+			return 0, err
+		}
+	}
+	return max(0, min(LockoutThreshold-int(n), LockoutThresholdGlobal-int(ng))), nil
 }
 
-func (a *Auth) failuresLeft(ctx context.Context, username string) int {
-	w, err := a.store.RateState().Get(ctx, "login:fail:"+userKey(username))
+func (a *Auth) lock(ctx context.Context, username, ip, lockK, failK, detail string, known bool) error {
+	rs := a.store.RateState()
+	first, err := rs.SetNX(ctx, lockK, []byte("1"), LockoutDuration)
 	if err != nil {
-		return LockoutThreshold
+		return fmt.Errorf("auth: lockout state: %w", err)
 	}
-	var n int
-	_, _ = fmt.Sscanf(string(w.Value), "%d", &n)
-	return max(0, LockoutThreshold-n)
+	if first {
+		_ = rs.Delete(ctx, failK)
+		a.audit(ctx, a.actorFor(username), AuditLoginLockout, ip, detail)
+		if known && a.notifier != nil {
+			a.notifier.LoginLockout(ctx, username, ip)
+		}
+	}
+	return nil
+}
+
+func (a *Auth) failuresLeft(ctx context.Context, username, ip string) int {
+	count := func(k string) int {
+		w, err := a.store.RateState().Get(ctx, k)
+		if err != nil {
+			return 0
+		}
+		var n int
+		_, _ = fmt.Sscanf(string(w.Value), "%d", &n)
+		return n
+	}
+	return max(0, min(LockoutThreshold-count(failKey(username, ip)), LockoutThresholdGlobal-count(failKeyGlobal(username))))
 }
 
 // PasswordStep — шаг 1: проверка пароля. Возвращает pending-токен (5 минут) для TOTPStep.
@@ -224,7 +275,7 @@ func (a *Auth) PasswordStep(ctx context.Context, username, password, ip string) 
 	if err != nil {
 		return "", 0, err
 	}
-	return p.Token, a.failuresLeft(ctx, username), nil
+	return p.Token, a.failuresLeft(ctx, username, ip), nil
 }
 
 // TOTPStep — шаг 2: проверка кода по pending-токену; при успехе создаётся новая полная сессия
@@ -271,7 +322,8 @@ func (a *Auth) TOTPStep(ctx context.Context, pending, code, ip string) (*Session
 	if err != nil {
 		return nil, err
 	}
-	_ = a.store.RateState().Delete(ctx, "login:fail:"+userKey(p.User))
+	_ = a.store.RateState().Delete(ctx, failKey(p.User, ip))
+	_ = a.store.RateState().Delete(ctx, failKeyGlobal(p.User))
 	a.audit(ctx, p.User, AuditLoginOK, ip, "")
 	return s, nil
 }

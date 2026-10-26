@@ -132,6 +132,14 @@ func cmdHelperStage(incomingDeb, version string) Command {
 	return fixed(true, "/usr/bin/tgproxy", "deploy-helper", "stage", incomingDeb, version)
 }
 
+// cmdHelperInstall — dpkg -i релиза из доверенного кэша хоста (повторная проверка подписи — в хелпере).
+func cmdHelperInstall(version string) Command {
+	if !stageVersionRe.MatchString(version) {
+		panic("installer: unsafe version " + version)
+	}
+	return fixed(true, "/usr/bin/tgproxy", "deploy-helper", "install", version)
+}
+
 // cmdAgentCSR: ключ P-256 создаётся на агенте (0600, владелец tgproxy), в stdout уходит CSR.
 // id — уже проверенный validateName slug; --force нужен при переустановке поверх старого ключа.
 func cmdAgentCSR(id string) Command {
@@ -285,19 +293,28 @@ func (r *Remote) newTmpPath() (string, error) {
 // Upload кладёт данные во временный файл (SFTP, O_EXCL, 0600) и возвращает путь и sha256.
 // Секретов (приватных ключей) через Upload не передаётся.
 func (r *Remote) Upload(ctx context.Context, src io.Reader) (path, sum string, err error) {
-	cl, err := r.sftp()
-	if err != nil {
-		return "", "", err
-	}
 	path, err = r.newTmpPath()
 	if err != nil {
 		return "", "", err
+	}
+	sum, err = r.UploadTo(ctx, path, src)
+	if err != nil {
+		return "", "", err
+	}
+	return path, sum, nil
+}
+
+// UploadTo — как Upload, но в заданный путь (SFTP, O_EXCL, 0600); возвращает sha256.
+func (r *Remote) UploadTo(ctx context.Context, path string, src io.Reader) (sum string, err error) {
+	cl, err := r.sftp()
+	if err != nil {
+		return "", err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = cl.Close() })
 	defer stop()
 	f, err := cl.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 	if err != nil {
-		return "", "", fmt.Errorf("installer: sftp create: %w", err)
+		return "", fmt.Errorf("installer: sftp create: %w", err)
 	}
 	h := sha256.New()
 	_, cpErr := io.Copy(io.MultiWriter(f, h), src)
@@ -311,11 +328,11 @@ func (r *Remote) Upload(ctx context.Context, src io.Reader) (path, sum string, e
 	if cpErr != nil {
 		_ = cl.Remove(path)
 		if ctx.Err() != nil {
-			return "", "", ctx.Err()
+			return "", ctx.Err()
 		}
-		return "", "", fmt.Errorf("installer: sftp upload: %w", cpErr)
+		return "", fmt.Errorf("installer: sftp upload: %w", cpErr)
 	}
-	return path, hex.EncodeToString(h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // PutFile — SFTP во временный файл → install с владельцем/режимом → удаление временного.

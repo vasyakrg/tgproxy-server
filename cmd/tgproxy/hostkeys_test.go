@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,17 @@ func TestHostKeysCLI(t *testing.T) {
 	if _, err := run(t, "hostkeys", "forget", "1.2.3.4:22", "--yes", "-c", cfgPath); err == nil {
 		t.Fatal("unknown host must fail")
 	}
+	// без tty и без --yes — отказ до обращения к БД, пин на месте
+	if out, err := runIn(t, "y\n", "hostkeys", "forget", "10.0.0.5:22", "-c", cfgPath); err == nil || !strings.Contains(err.Error(), "терминал") {
+		t.Fatalf("non-tty forget must refuse: %v %q", err, out)
+	}
+	if out, _ := run(t, "hostkeys", "list", "-c", cfgPath); !strings.Contains(out, "10.0.0.5:22") {
+		t.Fatalf("pin removed without tty: %q", out)
+	}
+	orig := stdinIsTerminal
+	stdinIsTerminal = func(io.Reader) bool { return true }
+	t.Cleanup(func() { stdinIsTerminal = orig })
+
 	// отказ без подтверждения
 	for _, in := range []string{"", "n\n", "\n"} {
 		out, err := runIn(t, in, "hostkeys", "forget", "10.0.0.5:22", "-c", cfgPath)

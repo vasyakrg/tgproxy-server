@@ -55,7 +55,7 @@ func NewTopBots(maxBots int) *TopBots {
 
 func (t *TopBots) tick() int32 {
 	// 10-минутный тик помещается в int32 на тысячи лет вперёд.
-	return int32(t.now().Unix() / int64(topBotsBucket/time.Second)) //nolint:gosec // см. выше
+	return int32(t.now().Unix() / int64(topBotsBucket/time.Second)) // #nosec G115 -- см. выше
 }
 
 // Observe учитывает запрос бота. Безопасен для конкурентного использования.

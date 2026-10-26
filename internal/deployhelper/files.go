@@ -102,7 +102,7 @@ func writeAtomic(dir, dst string, fill func(io.Writer) error) (err error) {
 		return err
 	}
 	tmp := dir + "/.stage-" + n
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- путь в root-каталоге хелпера, имя из randName()
 	if err != nil {
 		return err
 	}

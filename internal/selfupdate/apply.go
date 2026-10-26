@@ -224,7 +224,7 @@ func (a *Applier) lock() (func(), error) {
 		}
 		return nil, fmt.Errorf("lock: %w", err)
 	}
-	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil // #nosec G115
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil // #nosec G115 -- fd процесса помещается в int
 }
 
 func (a *Applier) allowedOwner(fi os.FileInfo) bool {
@@ -285,13 +285,26 @@ func (a *Applier) openChecked(path string, limit int64, rootOnly bool) (*os.File
 }
 
 func (a *Applier) readRequest() (Request, error) {
-	var req Request
 	f, _, err := a.openStaged("request", maxRequestSize, false)
 	if err != nil {
-		return req, fmt.Errorf("request: %w", err)
+		return Request{}, fmt.Errorf("request: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	dec := json.NewDecoder(io.LimitReader(f, maxRequestSize))
+	req, err := ParseRequest(f)
+	if err != nil {
+		return Request{}, err
+	}
+	if a.c.Component != "" && a.c.Component != req.Component {
+		return Request{}, fmt.Errorf("request: component %q не совпадает с --component %q", req.Component, a.c.Component)
+	}
+	return req, nil
+}
+
+// ParseRequest строго разбирает содержимое файла request (не более maxRequestSize
+// байт, без неизвестных полей и хвоста), проверяя версию и component.
+func ParseRequest(r io.Reader) (Request, error) {
+	var req Request
+	dec := json.NewDecoder(io.LimitReader(r, maxRequestSize))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		return Request{}, fmt.Errorf("request: %w", err)
@@ -304,9 +317,6 @@ func (a *Applier) readRequest() (Request, error) {
 	}
 	if req.Component != ComponentServer && req.Component != ComponentAgent {
 		return Request{}, errors.New("request: component должен быть server или agent")
-	}
-	if a.c.Component != "" && a.c.Component != req.Component {
-		return Request{}, fmt.Errorf("request: component %q не совпадает с --component %q", req.Component, a.c.Component)
 	}
 	return req, nil
 }

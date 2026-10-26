@@ -32,7 +32,7 @@ func (r errorRepo) List(ctx context.Context, q store.ErrorQuery) ([]store.ErrorE
 	query := `SELECT id, at, request_id, bot_id, agent_id, method, phase, code, outcome, description FROM error_events WHERE 1=1`
 	var args []any
 	add := func(cond string, v any) {
-		query += ` AND ` + cond //nolint:gosec // cond — только константные фрагменты из этой функции
+		query += ` AND ` + cond // #nosec G202 -- cond — только константные фрагменты из этой функции
 		args = append(args, v)
 	}
 	if q.BeforeID > 0 {

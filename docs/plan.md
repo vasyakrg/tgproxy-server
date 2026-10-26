@@ -295,12 +295,12 @@
 
 ## M7 — Hardening, документация, деплой-скрипт, релиз v0.1.0 · объём **M**
 
-- [ ] **M7-T1 · Security-проход** (все скоупы, параллельно по своим файлам)
+- [x] **M7-T1 · Security-проход** (все скоупы, параллельно по своим файлам)
   - Фаззеры: `tgapi.ParsePath`, `tgapi.ParseEnvelope`, `argon2id.ParsePHC`, `router.chat_id`-экстрактор, `redact` (60s в nightly).
   - Сквозной тест «токен нигде»: прогон сценария M2-приёмки с захватом всех логов, ответов API, SSE, метрик, БД-дампа → regex токена не найден.
   - `gosec` без игнорирований без комментария; `govulncheck` чист.
-- [ ] **M7-T2 · Нагрузочный smoke** (S-pkg): `scripts/bench/` (vegeta/hey против фейкового Telegram на агенте): 500 rps `getMe`, p95 overhead сервера < 10 мс, RSS сервера < 200 МБ, без утечек горутин (`goleak` в тестах).
-- [ ] **M7-T3 · Деплой-скрипт** (S-pkg)
+- [x] **M7-T2 · Нагрузочный smoke** (macOS: 500 rps, overhead p95 0.25–0.49 мс, RSS ≤172 МБ, 0 ошибок) (S-pkg): `scripts/bench/` (vegeta/hey против фейкового Telegram на агенте): 500 rps `getMe`, p95 overhead сервера < 10 мс, RSS сервера < 200 МБ, без утечек горутин (`goleak` в тестах).
+- [x] **M7-T3 · Деплой-скрипт** (S-pkg)
   - Файлы: `scripts/deploy.sh`, `deploy/.env.example` (`PROD_SERVER_HOST`, `PROD_SERVER_SSH_USER`, `PROD_AGENT_HOSTS`, `PROD_PUBLIC_URL`, `PROD_ADMIN_URL`), цель `make deploy`:
     1. `make snapshot` (или тег) → `dist/tgproxy_*_amd64.deb`;
     2. `scp` deb на сервер → `sudo dpkg -i` → `systemctl restart tgproxy-server`;
@@ -308,7 +308,7 @@
     4. на хостах из `PROD_AGENT_HOSTS`, где агент уже установлен, — `sudo dpkg -i` + restart (первичная установка агента — только через UI, это часть E2E);
     5. health check: `curl -fsS $PROD_ADMIN_URL/healthz` (до 30s), `/readyz` ≥1 агент, `systemctl is-active` на агентах; ненулевой код при провале.
   - Тест: `shellcheck`; dry-run режим `DEPLOY_DRY_RUN=1` печатает план.
-- [ ] **M7-T4 · Документация** (S-pkg): `README.md` (быстрый старт, конфиг, порты, бутстрап: `pki init`, `hashpw`, `totp enroll`), `docs/operations.md` (бэкап БД/KEK, ротация minisign-ключа, восстановление после потери KEK). Правка `architecture.md`: `/_agent/egress`, порты §0.2.
+- [x] **M7-T4 · Документация** (S-pkg): `README.md` (быстрый старт, конфиг, порты, бутстрап: `pki init`, `hashpw`, `totp enroll`), `docs/operations.md` (бэкап БД/KEK, ротация minisign-ключа, восстановление после потери KEK). Правка `architecture.md`: `/_agent/egress`, порты §0.2.
 - [ ] **M7-T5 · Релиз v0.1.0**: тег, release-workflow зелёный, deb в GitHub Releases.
 
 ---

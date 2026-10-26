@@ -47,7 +47,7 @@ func newChunkCipher() (*chunkCipher, error) {
 func (c *chunkCipher) nonce(idx int64) []byte {
 	n := make([]byte, c.aead.NonceSize())
 	copy(n, c.prefix[:])
-	binary.BigEndian.PutUint64(n[len(c.prefix):], uint64(idx)) //nolint:gosec // idx >= 0
+	binary.BigEndian.PutUint64(n[len(c.prefix):], uint64(idx)) // #nosec G115 -- idx >= 0
 	return n
 }
 

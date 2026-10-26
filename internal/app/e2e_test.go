@@ -73,10 +73,11 @@ type tgMessage struct {
 }
 
 type e2eAgent struct {
-	id     string
-	addr   string
-	cancel context.CancelFunc
-	done   chan struct{}
+	id          string
+	addr        string
+	metricsAddr string // адрес /metrics агента (loopback, без bearer)
+	cancel      context.CancelFunc
+	done        chan struct{}
 }
 
 type e2e struct {
@@ -132,7 +133,10 @@ func (e *e2e) startAgent(id, addr string) *e2eAgent {
 		CAFile:   filepath.Join(e.pkiDir, pki.FileCACert),
 	}
 	acfg.DataDir = e.t.TempDir()
-	acfg.Listen.Metrics = "127.0.0.1:0"
+	mln := listen(e.t) // резервируем адрес, чтобы тесты могли читать /metrics агента
+	metricsAddr := mln.Addr().String()
+	_ = mln.Close()
+	acfg.Listen.Metrics = metricsAddr
 	if err := acfg.OverrideTelegramAPIURL(e.tg.URL); err != nil {
 		e.t.Fatal(err)
 	}
@@ -152,7 +156,7 @@ func (e *e2e) startAgent(id, addr string) *e2eAgent {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &e2eAgent{id: id, addr: ln.Addr().String(), cancel: cancel, done: make(chan struct{})}
+	a := &e2eAgent{id: id, addr: ln.Addr().String(), metricsAddr: metricsAddr, cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(a.done)
 		_ = RunAgent(ctx, acfg, e.logger, AgentOptions{Agent: []agent.Option{agent.WithUpstreamRootCAs(e.upPool)}, Listener: ln})

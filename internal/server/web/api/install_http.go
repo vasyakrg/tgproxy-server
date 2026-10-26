@@ -173,6 +173,7 @@ type stepJSON struct {
 
 type jobJSON struct {
 	ID         string     `json:"id"`
+	Kind       string     `json:"kind,omitempty"`
 	AgentID    string     `json:"agent_id,omitempty"`
 	Host       string     `json:"host"`
 	State      string     `json:"state"`
@@ -186,7 +187,7 @@ type jobJSON struct {
 // JobToJSON переводит снимок задачи в JSON-вид.
 func jobToJSON(st installer.JobStatus) jobJSON {
 	out := jobJSON{
-		ID: st.ID, AgentID: st.AgentID, Host: st.Host, State: st.State, Error: redact.String(st.Error),
+		ID: st.ID, Kind: st.Kind, AgentID: st.AgentID, Host: st.Host, State: st.State, Error: redact.String(st.Error),
 		Steps: make([]stepJSON, 0, len(st.Steps)), CreatedAt: st.CreatedAt.UTC().Format(time.RFC3339), LastSeq: st.LastSeq,
 	}
 	for _, s := range st.Steps {

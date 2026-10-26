@@ -40,6 +40,7 @@ type agentsScreen struct {
 //	GET|POST /agents/{id}/mode           смена режима связи
 //	GET|POST /agents/{id}/weight         вес в балансировке (1..100)
 //	GET  /agents/{id}/more               сведения об агенте
+//	GET|POST /agents/{id}/emergency      аварийное обновление по SSH (подтверждение, затем задача)
 //	GET|POST /agents/{id}/delete         подтверждение и удаление
 //	GET  /agents/new                     мастер (?mode=ssh|nat)
 //	POST /agents/new/ssh[/confirm]       ветка SSH
@@ -68,6 +69,8 @@ func MountAgents(rt AgentsRouter, d AgentsDeps) {
 	m("GET /agents/{id}/weight", s.weightForm)
 	m("POST /agents/{id}/weight", s.weightApply)
 	m("GET /agents/{id}/more", s.more)
+	m("GET /agents/{id}/emergency", s.emergencyConfirm)
+	m("POST /agents/{id}/emergency", s.emergencyApply)
 	m("GET /agents/{id}/delete", s.deleteConfirm)
 	m("POST /agents/{id}/delete", s.remove)
 	s.mountRollout(m)
@@ -460,11 +463,13 @@ func (s *agentsScreen) more(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	row, _, ok := s.agentRow(w, r, id)
+	row, v, ok := s.agentRow(w, r, id)
 	if !ok {
 		return
 	}
-	renderFragment(w, r, http.StatusOK, MoreCard(MoreVM{Row: row, CanRemove: s.d.Service.Capabilities().Remove})) //nolint:contextcheck // templ
+	renderFragment(w, r, http.StatusOK, MoreCard(MoreVM{ //nolint:contextcheck // templ
+		Row: row, CanRemove: s.d.Service.Capabilities().Remove, CanEmergency: s.canEmergency(v),
+	}))
 }
 
 func (s *agentsScreen) deleteConfirm(w http.ResponseWriter, r *http.Request) {

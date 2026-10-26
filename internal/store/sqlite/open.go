@@ -89,7 +89,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("sqlite: mkdir: %w", err)
 	}
 	// Создаём файл заранее с 0600: SQLite копирует права основного файла на -wal/-shm.
-	f, err := os.OpenFile(abs, os.O_RDWR|os.O_CREATE, filePerm) //nolint:gosec // путь из конфигурации администратора
+	f, err := os.OpenFile(abs, os.O_RDWR|os.O_CREATE, filePerm) // #nosec G304 -- путь из конфигурации администратора
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: create db file: %w", err)
 	}

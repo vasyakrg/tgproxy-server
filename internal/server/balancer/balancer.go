@@ -190,5 +190,5 @@ func contains(s []AgentID, id AgentID) bool {
 
 // randIndex возвращает индекс в [0, n) без небезопасного преобразования типов.
 func randIndex(r uint64, n int) int {
-	return int(r % uint64(n)) //nolint:gosec // n > 0, результат < n
+	return int(r % uint64(n)) // #nosec G115 -- n > 0, результат < n
 }

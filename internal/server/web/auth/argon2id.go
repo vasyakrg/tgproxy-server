@@ -119,7 +119,7 @@ func Verify(password, phc string) bool {
 	if err != nil {
 		return false
 	}
-	got := argon2.IDKey([]byte(password), p.Salt, p.T, p.M, p.P, uint32(len(p.Key))) //nolint:gosec // длина ключа ограничена ParsePHC
+	got := argon2.IDKey([]byte(password), p.Salt, p.T, p.M, p.P, uint32(len(p.Key))) // #nosec G115 -- длина ключа ограничена ParsePHC
 	return subtle.ConstantTimeCompare(got, p.Key) == 1
 }
 
@@ -148,7 +148,7 @@ func Hash(password string, hp HashParams) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("auth: salt: %w", err)
 	}
-	key := argon2.IDKey([]byte(password), salt, hp.T, hp.M, hp.P, uint32(hp.KeyLen)) //nolint:gosec // KeyLen проверен
+	key := argon2.IDKey([]byte(password), salt, hp.T, hp.M, hp.P, uint32(hp.KeyLen)) // #nosec G115 -- KeyLen проверен
 	enc := base64.RawStdEncoding
 	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", hp.M, hp.T, hp.P, enc.EncodeToString(salt), enc.EncodeToString(key)), nil
 }

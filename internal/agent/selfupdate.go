@@ -376,7 +376,7 @@ func (a *Agent) gatewayClient(gw *url.URL) *http.Client {
 		NextProtos:           []string{"http/1.1"}, // http-часть gateway не говорит h2
 		GetClientCertificate: a.certs.clientCert,
 		// Цепочка и идентичность — в VerifyConnection (как у reverse-коннектора).
-		InsecureSkipVerify: true, //nolint:gosec // см. VerifyConnection
+		InsecureSkipVerify: true, // #nosec G402 -- см. VerifyConnection
 		VerifyConnection:   func(cs tls.ConnectionState) error { return pki.VerifyServerPeer(a.caPool)(cs) },
 	}
 	if net.ParseIP(gw.Hostname()) == nil {

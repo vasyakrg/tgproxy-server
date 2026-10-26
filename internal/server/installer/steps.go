@@ -50,6 +50,9 @@ type step struct {
 func fixedLabel(s string) func(*run) string { return func(*run) string { return s } }
 
 func (r *run) steps() []step {
+	if r.emergency {
+		return r.emergencySteps()
+	}
 	return []step{
 		{key: stepSSH, label: fixedLabel("SSH-подключение, ключ хоста закреплён"), do: (*run).doSSH, undo: (*run).undoSSH},
 		{key: stepUpload, label: func(r *run) string { return "Загрузка пакета tgproxy " + r.pkgs.version },
@@ -78,6 +81,10 @@ type run struct {
 	deploy *Remote
 
 	curStep string
+
+	emergency   bool   // аварийное обновление (emergency.go), а не установка
+	hostTouched bool   // аварийное обновление: на хосте уже что-то менялось (stage и далее)
+	healthURL   string // аварийное обновление: mTLS-адрес агента из реестра
 
 	// Что реально сделано — для отката.
 	debTmp            string // временные файлы релиза на хосте (SFTP, 0600)
@@ -191,8 +198,8 @@ func (r *run) execute(base context.Context) {
 	if failedAt < 0 {
 		r.curStep = ""
 		_ = repo.SetState(bg, r.id, store.InstallDone, "")
-		r.emit(EventDone, "", "info", "Агент "+r.req.Name+" установлен и включён в балансировку")
-		r.i.log.Info("install job done", "job", r.id, "agent", r.req.Name)
+		r.emit(EventDone, "", "info", r.doneText())
+		r.i.log.Info("install job done", "job", r.id, "agent", r.req.Name, "kind", r.kind())
 		return
 	}
 	msg := r.lj.scrub(failErr.Error())
@@ -200,12 +207,7 @@ func (r *run) execute(base context.Context) {
 	r.logf("error", "Шаг «%s» не выполнен: %s", steps[failedAt].label(r), msg)
 	rbErr := r.rollback(bg, steps, failedAt)
 	r.curStep = ""
-	state := store.InstallRolledBack
-	final := "Установка отменена, выполненные шаги откатены"
-	if rbErr != nil {
-		state = store.InstallFailed
-		final = "Установка отменена, откат выполнен не полностью — проверьте хост вручную"
-	}
+	state, final := r.failState(rbErr)
 	_ = repo.SetState(bg, r.id, state, msg)
 	r.emit(EventError, "", "error", final+": "+msg)
 	r.i.log.Warn("install job failed", "job", r.id, "agent", r.req.Name, "state", state)
@@ -287,35 +289,45 @@ func (r *run) undoSSH(_ context.Context) (bool, error) { return false, nil }
 
 // ---- шаг 2: загрузка пакета ----
 
-func (r *run) doUpload(ctx context.Context) error {
-	out, err := r.exec(ctx, r.admin, cmdDpkgArch())
+// verifiedRelease определяет архитектуру хоста и проверяет релиз НА СЕРВЕРЕ до любой
+// отправки на хост: minisign по ключам сервера, версия не ниже min_version, sha256 deb
+// по подписанному списку. Общий для установки и аварийного обновления.
+func (r *run) verifiedRelease(ctx context.Context, rem *Remote) (local, name string, checksums, sig []byte, want string, err error) {
+	out, err := r.exec(ctx, rem, cmdDpkgArch())
 	if err != nil {
-		return err
+		return "", "", nil, nil, "", err
 	}
 	arch := strings.TrimSpace(out)
 	if !archRe.MatchString(arch) {
-		return fmt.Errorf("неожиданная архитектура хоста %q", arch)
+		return "", "", nil, nil, "", fmt.Errorf("неожиданная архитектура хоста %q", arch)
 	}
 	local, name, ok := r.pkgs.path(arch)
 	if !ok {
-		return fmt.Errorf("в кэше нет пакета tgproxy %s для архитектуры %s", r.pkgs.version, arch)
+		return "", "", nil, nil, "", fmt.Errorf("в кэше нет пакета tgproxy %s для архитектуры %s", r.pkgs.version, arch)
 	}
-	// Подпись проверяется НА СЕРВЕРЕ до любой отправки на хост.
-	checksums, sig, err := r.readSigned()
+	checksums, sig, err = r.readSigned()
 	if err != nil {
-		return err
+		return "", "", nil, nil, "", err
 	}
 	if err := r.cfg().Verifier.Verify(checksums, sig); err != nil {
-		return fmt.Errorf("подпись пакета %s: %w", name, err)
+		return "", "", nil, nil, "", fmt.Errorf("подпись пакета %s: %w", name, err)
 	}
 	if err := r.cfg().Verifier.CheckVersion(r.pkgs.version); err != nil {
-		return fmt.Errorf("версия пакета %s: %w", name, err)
+		return "", "", nil, nil, "", fmt.Errorf("версия пакета %s: %w", name, err)
 	}
-	want, err := r.verifiedSum(local, name, checksums)
+	want, err = r.verifiedSum(local, name, checksums)
+	if err != nil {
+		return "", "", nil, nil, "", err
+	}
+	r.logf("info", "Пакет %s: подпись minisign и sha256 %s проверены", name, want)
+	return local, name, checksums, sig, want, nil
+}
+
+func (r *run) doUpload(ctx context.Context) error {
+	local, _, checksums, sig, want, err := r.verifiedRelease(ctx, r.admin)
 	if err != nil {
 		return err
 	}
-	r.logf("info", "Пакет %s: подпись minisign и sha256 %s проверены", name, want)
 	src, err := os.Open(local) // #nosec G304 -- файл из кэша загрузок, имя прошло pkgNameRe
 	if err != nil {
 		return err
@@ -335,14 +347,22 @@ func (r *run) doUpload(ctx context.Context) error {
 	if r.sigTmp, _, err = r.admin.Upload(ctx, bytes.NewReader(sig)); err != nil {
 		return err
 	}
-	out, err = r.exec(ctx, r.admin, cmdSHA256(tmp))
+	if err := r.checkRemoteSum(ctx, r.admin, tmp, want); err != nil {
+		return err
+	}
+	r.logf("info", "Релиз загружен на хост (deb, checksums.txt, .minisig), sha256 совпал")
+	return nil
+}
+
+// checkRemoteSum сверяет sha256 загруженного на хост файла с проверенной на сервере суммой.
+func (r *run) checkRemoteSum(ctx context.Context, rem *Remote, path, want string) error {
+	out, err := r.exec(ctx, rem, cmdSHA256(path))
 	if err != nil {
 		return err
 	}
 	if got, _, _ := strings.Cut(strings.TrimSpace(out), " "); got != want {
 		return fmt.Errorf("sha256 на хосте %q не совпадает с локальным %q", got, want)
 	}
-	r.logf("info", "Релиз загружен на хост (deb, checksums.txt, .minisig), sha256 совпал")
 	return nil
 }
 
@@ -684,6 +704,7 @@ func (r *run) doBalance(ctx context.Context) error {
 	st := r.cfg().Store
 	if _, err := st.Agents().Create(ctx, store.Agent{
 		ID: r.req.Name, Name: r.req.Name, URL: r.agentURL(), Mode: store.ModeDial, Weight: r.req.Weight,
+		SSHHost: r.target.Host, SSHPort: r.target.Port, // для аварийного обновления по SSH
 	}); err != nil {
 		return fmt.Errorf("добавление агента: %w", err)
 	}

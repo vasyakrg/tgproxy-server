@@ -391,6 +391,9 @@ func (r certRepo) SaveCA(_ context.Context, ca store.CARecord) error {
 	}
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
+	if r.s.ca != nil {
+		return store.ErrConflict
+	}
 	if ca.CreatedAt.IsZero() {
 		ca.CreatedAt = time.Now()
 	}

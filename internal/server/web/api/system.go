@@ -415,7 +415,7 @@ func (s *SystemService) Upload(ctx context.Context, act Actor, mr *multipart.Rea
 	}
 	defer func() {
 		if up.tmp != "" {
-			_ = os.Remove(up.tmp) //nolint:gosec // путь создан os.CreateTemp в каталоге загрузки
+			_ = os.Remove(up.tmp) // #nosec G703 -- путь создан os.CreateTemp в каталоге загрузки
 		}
 	}()
 	if err := s.validate(up); err != nil {
@@ -585,10 +585,10 @@ func (s *SystemService) commit(up *uploaded) error {
 			return err
 		}
 	}
-	if err := os.Chmod(up.tmp, 0o640); err != nil { //nolint:gosec // читает тот же пользователь сервера
+	if err := os.Chmod(up.tmp, 0o640); err != nil { // #nosec G302,G703 -- читает тот же пользователь сервера
 		return err
 	}
-	return os.Rename(up.tmp, filepath.Join(s.c.UploadDir, up.name)) //nolint:gosec // tmp — os.CreateTemp, name проверен debNameRe
+	return os.Rename(up.tmp, filepath.Join(s.c.UploadDir, up.name)) // #nosec G703 -- tmp — os.CreateTemp, name проверен debNameRe
 }
 
 func writeFileAtomic(dst string, data []byte) error {
@@ -603,7 +603,7 @@ func writeFileAtomic(dst string, data []byte) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.Chmod(tmp, 0o640); err != nil { //nolint:gosec // читает тот же пользователь сервера
+	if err := os.Chmod(tmp, 0o640); err != nil { // #nosec G302 -- читает тот же пользователь сервера
 		_ = os.Remove(tmp)
 		return err
 	}

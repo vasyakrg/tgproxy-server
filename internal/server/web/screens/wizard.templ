@@ -309,11 +309,17 @@ templ InstallPage(j JobVM) {
 	<div class="wiz">
 		<div class="wiz-head">
 			<a class="wiz-back" href="/agents">← Агенты</a>
-			<h1 class="wiz-title">Новый агент</h1>
+			if j.Emergency {
+				<h1 class="wiz-title">Аварийное обновление</h1>
+			} else {
+				<h1 class="wiz-title">Новый агент</h1>
+			}
 		</div>
 		<div class="wiz-cols">
 			<section class="card wiz-main" id="wiz-main">
-				@WizSteps(3)
+				if !j.Emergency {
+					@WizSteps(3)
+				}
 				<div
 					id="install-job"
 					class="stack"
@@ -325,7 +331,11 @@ templ InstallPage(j JobVM) {
 					data-state={ j.State }
 				>
 					<div class="job-head">
-						<h2 class="form-title">Установка { j.Title }</h2>
+						if j.Emergency {
+							<h2 class="form-title">Аварийное обновление { j.Title }</h2>
+						} else {
+							<h2 class="form-title">Установка { j.Title }</h2>
+						}
 						<span class="job-state" id="job-state">{ j.stateLabel() }</span>
 						<span class="job-time mono muted" id="job-time"></span>
 						<span class="job-conn muted small" id="job-conn" hidden>переподключение…</span>
@@ -341,17 +351,28 @@ templ InstallPage(j JobVM) {
 					</ol>
 					<pre class="job-log mono" id="job-log" aria-label="Журнал установки" tabindex="0"></pre>
 					<div id="job-ok" class="alert alert-ok" role="status" hidden>
-						Агент установлен и включён в балансировку.
+						if j.Emergency {
+							Агент обновлён и отвечает по mTLS.
+						} else {
+							Агент установлен и включён в балансировку.
+						}
 						<a href="/agents">К списку агентов</a>
 					</div>
 					<div id="job-fail" class="alert alert-err" role="alert" hidden>
-						<span id="job-fail-text">Установка не удалась, изменения откачены.</span>
-						<a href="/agents/new">Начать заново</a>
+						if j.Emergency {
+							<span id="job-fail-text">Аварийное обновление не выполнено: проверьте хост вручную.</span>
+							<a href="/agents">К списку агентов</a>
+						} else {
+							<span id="job-fail-text">Установка не удалась, изменения откачены.</span>
+							<a href="/agents/new">Начать заново</a>
+						}
 					</div>
 					<noscript><p class="muted">Для отображения хода установки нужен JavaScript.</p></noscript>
 				</div>
 			</section>
-			@wizAside()
+			if !j.Emergency {
+				@wizAside()
+			}
 		</div>
 		<script src={ views.Asset("js/install.js") } defer></script>
 	</div>

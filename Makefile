@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build generate test test-race lint vuln snapshot deb dev-certs dev-setup run-server run-agent run-agent2 redis-up dev-target-up dev-target-down dev-keys build-dev dev-packages vendor-verify deploy release-dry
+.PHONY: help build generate test test-race lint vuln snapshot deb dev-certs dev-setup run-server run-agent run-agent2 redis-up dev-target-up dev-target-down dev-keys build-dev dev-packages vendor-verify deploy release-dry fuzz gosec bench
 
 help: ## Список целей
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -23,11 +23,29 @@ generate: ## templ generate
 test: ## go test ./...
 	go test ./...
 
+bench: ## Нагрузочный smoke (500 rps getMe, vegeta; пороги из M7-T2)
+	go run ./scripts/bench
+
 test-race: ## go test -race ./...
 	go test -race ./...
 
 lint: ## golangci-lint
 	golangci-lint run
+
+FUZZTIME ?= 60s
+FUZZ_TARGETS := ./internal/tgapi:FuzzParsePath ./internal/tgapi:FuzzParseEnvelope \
+	./internal/redact:FuzzString ./internal/redact:FuzzKeys \
+	./internal/server/web/auth:FuzzParsePHC ./internal/server/router:FuzzExtractChatID \
+	./internal/selfupdate:FuzzParseRequest ./internal/deployhelper:FuzzArgs
+
+fuzz: ## фаззеры (FUZZTIME=60s на каждый)
+	@set -e; for t in $(FUZZ_TARGETS); do \
+		echo "== fuzz $${t#*:} ($(FUZZTIME))"; \
+		go test "$${t%%:*}" -run='^$$' -fuzz="^$${t#*:}$$" -fuzztime=$(FUZZTIME); \
+	done
+
+gosec: ## gosec (исключения только #nosec Gxxx -- причина)
+	go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 -quiet -exclude-generated ./...
 
 vuln: ## govulncheck
 	go tool govulncheck ./...
@@ -89,5 +107,5 @@ vendor-verify: ## Проверить sha256 вендорных ассетов
 	@cd web/static/vendor && \
 	if command -v sha256sum >/dev/null 2>&1; then sha256sum -c SHA256SUMS; else shasum -a 256 -c SHA256SUMS; fi
 
-deploy: ## Деплой (M7)
-	@echo "deploy: реализуется в M7" >&2; exit 1
+deploy: ## Деплой сервера на прод (deploy/.env; DEPLOY_DRY_RUN=1 — только план; DEPLOY_MODE=release DEPLOY_TAG=vX.Y.Z)
+	@scripts/deploy.sh

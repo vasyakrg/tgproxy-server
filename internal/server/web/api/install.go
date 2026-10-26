@@ -302,9 +302,9 @@ func (s *InstallService) translate(err error, in InstallInput) error {
 	case errors.Is(err, installer.ErrHostKeyMismatch):
 		return ErrHostKeyChanged
 	case errors.Is(err, installer.ErrPassphraseRequired):
-		return &ValidationError{Fields: FieldErrors{FieldPassphrase: "Ключ зашифрован: введите passphrase"}} //nolint:gosec // G101: текст ошибки, не секрет
+		return &ValidationError{Fields: FieldErrors{FieldPassphrase: "Ключ зашифрован: введите passphrase"}} // #nosec G101 -- G101: текст ошибки, не секрет
 	case errors.Is(err, installer.ErrBadPassphrase):
-		return &ValidationError{Fields: FieldErrors{FieldPassphrase: "Passphrase не подходит к ключу"}} //nolint:gosec // G101: текст ошибки, не секрет
+		return &ValidationError{Fields: FieldErrors{FieldPassphrase: "Passphrase не подходит к ключу"}} // #nosec G101 -- G101: текст ошибки, не секрет
 	case errors.Is(err, installer.ErrNoAuth):
 		return &ValidationError{Fields: FieldErrors{FieldAuth: "Укажите приватный ключ или пароль"}}
 	case errors.Is(err, store.ErrConflict):

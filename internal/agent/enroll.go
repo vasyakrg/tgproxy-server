@@ -170,7 +170,7 @@ func pinnedTLSConfig(fingerprint string) *tls.Config {
 	return &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		NextProtos:         []string{"http/1.1"},
-		InsecureSkipVerify: true, //nolint:gosec // проверка в VerifyConnection: pinning CA по отпечатку
+		InsecureSkipVerify: true, // #nosec G402 -- проверка в VerifyConnection: pinning CA по отпечатку
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			pool := x509.NewCertPool()
 			var found bool

@@ -153,6 +153,8 @@ func testAgents(t *testing.T, s store.Store) {
 	_, err = r.Update(ctx, up)
 	is(t, err, store.ErrConflict)
 
+	testAgentSSHTarget(ctx, t, r)
+
 	v2, _ := r.Version(ctx)
 	ok(t, r.Delete(ctx, "a1"))
 	is(t, r.Delete(ctx, "a1"), store.ErrNotFound)
@@ -163,6 +165,58 @@ func testAgents(t *testing.T, s store.Store) {
 	if len(list) != 1 || list[0].ID != "n1" {
 		t.Fatalf("list %+v", list)
 	}
+}
+
+// testAgentSSHTarget: SSH-цель сохраняется при Create, не затирается Update, меняется SetSSHTarget.
+func testAgentSSHTarget(ctx context.Context, t *testing.T, r store.AgentRepo) {
+	t.Helper()
+	got, err := r.Get(ctx, "a1")
+	ok(t, err)
+	if got.SSHHost != "" || got.SSHPort != 0 {
+		t.Fatalf("ssh target must be empty by default: %+v", got)
+	}
+	_, err = r.Create(ctx, store.Agent{ID: "s1", Name: "ssh-1", URL: "https://10.0.0.3:8443", Mode: store.ModeDial, Weight: 1, SSHHost: "10.0.0.3", SSHPort: 2222})
+	ok(t, err)
+	got, err = r.Get(ctx, "s1")
+	ok(t, err)
+	if got.SSHHost != "10.0.0.3" || got.SSHPort != 2222 {
+		t.Fatalf("ssh target roundtrip: %+v", got)
+	}
+	got.Weight = 5
+	up, err := r.Update(ctx, got)
+	ok(t, err)
+	if up.SSHHost != "10.0.0.3" || up.SSHPort != 2222 {
+		t.Fatalf("update dropped ssh target: %+v", up)
+	}
+	noSSH := up
+	noSSH.SSHHost, noSSH.SSHPort = "", 0
+	up, err = r.Update(ctx, noSSH)
+	ok(t, err)
+	if up.SSHHost != "10.0.0.3" || up.SSHPort != 2222 {
+		t.Fatalf("update must not change ssh target: %+v", up)
+	}
+	v0, _ := r.Version(ctx)
+	ok(t, r.SetSSHTarget(ctx, "s1", "agent.example", 22))
+	got, _ = r.Get(ctx, "s1")
+	if got.SSHHost != "agent.example" || got.SSHPort != 22 {
+		t.Fatalf("SetSSHTarget: %+v", got)
+	}
+	if v1, _ := r.Version(ctx); v1 <= v0 {
+		t.Fatal("version did not grow on SetSSHTarget")
+	}
+	ok(t, r.SetSSHTarget(ctx, "s1", "", 0))
+	got, _ = r.Get(ctx, "s1")
+	if got.SSHHost != "" || got.SSHPort != 0 {
+		t.Fatalf("SetSSHTarget clear: %+v", got)
+	}
+	is(t, r.SetSSHTarget(ctx, "nope", "h", 22), store.ErrNotFound)
+	is(t, r.SetSSHTarget(ctx, "s1", "h", 0), store.ErrInvalid)
+	is(t, r.SetSSHTarget(ctx, "s1", "h", 70000), store.ErrInvalid)
+	is(t, r.SetSSHTarget(ctx, "s1", "", 22), store.ErrInvalid)
+	is(t, r.SetSSHTarget(ctx, "s1", "bad host", 22), store.ErrInvalid)
+	_, err = r.Create(ctx, store.Agent{ID: "s2", Name: "ssh-2", URL: "https://x", Mode: store.ModeDial, SSHHost: "h"})
+	is(t, err, store.ErrInvalid)
+	ok(t, r.Delete(ctx, "s1"))
 }
 
 func testAccessRules(t *testing.T, s store.Store) {
@@ -698,10 +752,10 @@ func testCerts(t *testing.T, s store.Store) {
 	is(t, err, store.ErrNotFound)
 	is(t, r.SaveCA(ctx, store.CARecord{CertPEM: []byte("c")}), store.ErrInvalid)
 	ok(t, r.SaveCA(ctx, store.CARecord{CertPEM: []byte("cert"), SealedKey: []byte("sealed")}))
-	ok(t, r.SaveCA(ctx, store.CARecord{CertPEM: []byte("cert2"), SealedKey: []byte("sealed2")}))
+	is(t, r.SaveCA(ctx, store.CARecord{CertPEM: []byte("cert2"), SealedKey: []byte("sealed2")}), store.ErrConflict)
 	ca, err := r.LoadCA(ctx)
 	ok(t, err)
-	if string(ca.CertPEM) != "cert2" || string(ca.SealedKey) != "sealed2" {
+	if string(ca.CertPEM) != "cert" || string(ca.SealedKey) != "sealed" {
 		t.Fatalf("ca %+v", ca)
 	}
 }

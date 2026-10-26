@@ -478,3 +478,51 @@ func TestDenylistRun(t *testing.T) {
 		t.Fatal("Run did not stop")
 	}
 }
+
+// Параллельный init: ровно один создаёт CA, остальные получают ErrCAExists и
+// ничего не перезаписывают.
+func TestLoadOrInitParallelInsertOnly(t *testing.T) {
+	ctx := context.Background()
+	repo := memtest.New().Certs()
+	kek, _ := newTestKEK(t)
+	const n = 16
+	start := make(chan struct{})
+	errs := make(chan error, n)
+	fps := make(chan string, n)
+	for range n {
+		go func() {
+			<-start
+			a, err := LoadOrInit(ctx, repo, kek, Options{})
+			if err == nil {
+				fps <- a.CAFingerprint()
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	var okCount, existsCount int
+	for range n {
+		switch err := <-errs; {
+		case err == nil:
+			okCount++
+		case errors.Is(err, ErrCAExists):
+			existsCount++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	// Читатели, пришедшие после записи, тоже успешны (загружают уже сохранённый CA).
+	if okCount < 1 || okCount+existsCount != n {
+		t.Fatalf("ok=%d exists=%d", okCount, existsCount)
+	}
+	close(fps)
+	saved, err := LoadOrInit(ctx, repo, kek, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for fp := range fps {
+		if fp != saved.CAFingerprint() {
+			t.Fatalf("созданный CA %s отличается от сохранённого %s", fp, saved.CAFingerprint())
+		}
+	}
+}

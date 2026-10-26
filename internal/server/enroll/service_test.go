@@ -143,10 +143,13 @@ func TestIssueAndEnrollSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"TGP_ENROLL_TOKEN=" + is.Token, "--server https://tgp.example.com:8444", "--ca-fingerprint " + f.ca.CAFingerprint()} {
+	for _, want := range []string{"printf %s '" + is.Token + "' | sudo tgproxy agent enroll --token-stdin", "--server https://tgp.example.com:8444", "--ca-fingerprint " + f.ca.CAFingerprint()} {
 		if !strings.Contains(is.Cmdline, want) {
 			t.Errorf("cmdline %q lacks %q", is.Cmdline, want)
 		}
+	}
+	if strings.Contains(is.Cmdline, "TGP_ENROLL_TOKEN") || strings.Contains(is.Cmdline, "--token ") {
+		t.Errorf("cmdline must not put the token into sudo argv: %q", is.Cmdline)
 	}
 	// В БД нет токена в открытом виде.
 	pend, _ := f.st.Enrollments().ListPending(ctx, f.clock.now())

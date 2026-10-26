@@ -115,9 +115,11 @@ type JobStepVM struct{ Key, Label, Status string }
 // JobVM — шаг «Установка».
 type JobVM struct {
 	ID, Title, State, Error string
-	StartedMS, FinishedMS   int64
-	Steps                   []JobStepVM
-	EventsURL, StatusURL    string
+	// Emergency — задача аварийного обновления (а не установки нового агента).
+	Emergency             bool
+	StartedMS, FinishedMS int64
+	Steps                 []JobStepVM
+	EventsURL, StatusURL  string
 }
 
 // stateLabel — подпись состояния задачи.

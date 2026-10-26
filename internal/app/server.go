@@ -471,7 +471,7 @@ func loadAgentTLS(cfg *config.ServerConfig) (tls.Certificate, *x509.CertPool, er
 	if err != nil {
 		return tls.Certificate{}, nil, fmt.Errorf("app: load agent client cert: %w", redact.Error(err))
 	}
-	caPEM, err := os.ReadFile(caFile) //nolint:gosec // путь из конфигурации
+	caPEM, err := os.ReadFile(caFile) // #nosec G304 -- путь из конфигурации
 	if err != nil {
 		return tls.Certificate{}, nil, fmt.Errorf("app: read agent ca: %w", redact.Error(err))
 	}

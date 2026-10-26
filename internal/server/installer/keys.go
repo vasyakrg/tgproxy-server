@@ -46,7 +46,7 @@ func LoadOrCreateServerKey(dir string) (ssh.Signer, error) {
 	}
 	pemBytes := pem.EncodeToMemory(blk)
 	defer clear(pemBytes)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- путь ключа из data_dir сервера, O_EXCL
 	if err != nil {
 		return nil, fmt.Errorf("installer: запись серверного ssh-ключа: %w", err)
 	}

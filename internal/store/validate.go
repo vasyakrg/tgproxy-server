@@ -48,6 +48,19 @@ func (a Agent) Validate() error {
 	if a.Weight < 0 {
 		return fmt.Errorf("%w: weight must be >= 0", ErrInvalid)
 	}
+	return a.ValidateSSHTarget()
+}
+
+// ValidateSSHTarget проверяет SSH-цель: пустой хост допустим только вместе с портом 0.
+func (a Agent) ValidateSSHTarget() error {
+	switch {
+	case a.SSHHost == "" && a.SSHPort == 0:
+		return nil
+	case a.SSHHost == "" || len(a.SSHHost) > 253 || strings.ContainsAny(a.SSHHost, " \t\r\n/@\\"):
+		return fmt.Errorf("%w: invalid ssh host", ErrInvalid)
+	case a.SSHPort < 1 || a.SSHPort > 65535:
+		return fmt.Errorf("%w: ssh port must be 1..65535", ErrInvalid)
+	}
 	return nil
 }
 

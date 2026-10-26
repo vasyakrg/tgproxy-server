@@ -44,7 +44,7 @@ func DevInit(outDir string, agentIDs []string) error {
 	if err := os.MkdirAll(outDir, 0o700); err != nil {
 		return fmt.Errorf("pki: mkdir: %w", err)
 	}
-	if err := os.Chmod(outDir, 0o700); err != nil { //nolint:gosec // 0700 — каталог ключей
+	if err := os.Chmod(outDir, 0o700); err != nil { // #nosec G302 -- 0700 — каталог ключей
 		return fmt.Errorf("pki: chmod dir: %w", err)
 	}
 	for _, n := range []string{FileCACert, FileCAKey} {
@@ -118,7 +118,7 @@ func writeFile(path string, data []byte, mode os.FileMode) error {
 	case FileCACert, FileCAKey:
 		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
 	}
-	f, err := os.OpenFile(path, flags, mode) //nolint:gosec // путь из конфигурации оператора
+	f, err := os.OpenFile(path, flags, mode) // #nosec G304 -- путь из конфигурации оператора
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("%w: %s", ErrExists, path)

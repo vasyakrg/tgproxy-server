@@ -191,9 +191,9 @@ func botRows(src BotSource) []BotRow {
 		}
 		out = append(out, BotRow{
 			BotID: strconv.FormatInt(b.BotID, 10), Rule: b.Rule,
-			Requests: thousands(int64(b.Requests)), //nolint:gosec // счётчик окна 24ч << MaxInt64
+			Requests: thousands(int64(b.Requests)), // #nosec G115 -- счётчик окна 24ч << MaxInt64
 			Errors:   fmtPct(errPct),
-			R429:     thousands(int64(b.R429)), //nolint:gosec // см. выше
+			R429:     thousands(int64(b.R429)), // #nosec G115 -- см. выше
 			Limited:  b.R429 > 0,
 		})
 	}

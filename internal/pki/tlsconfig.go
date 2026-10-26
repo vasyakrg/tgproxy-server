@@ -37,7 +37,7 @@ func ClientTLSConfig(cert tls.Certificate, ca *x509.CertPool, verify func(tls.Co
 		RootCAs:      ca,
 		NextProtos:   []string{"h2"},
 		// Проверка цепочки и идентичности выполняется в VerifyConnection.
-		InsecureSkipVerify: true, //nolint:gosec // см. комментарий выше
+		InsecureSkipVerify: true, // #nosec G402 -- см. комментарий выше
 		VerifyConnection:   verify,
 	}, nil
 }

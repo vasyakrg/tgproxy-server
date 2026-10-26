@@ -119,9 +119,10 @@ func TestLockoutAfter10Failures(t *testing.T) {
 		t.Fatalf("notifier: %v", e.notifier.calls)
 	}
 	// теперь даже верный пароль — lockout, ответ как при блокировке
-	if _, _, err := e.a.PasswordStep(ctx, "alice", "alice-pw", "10.0.1.1"); !errors.Is(err, ErrLockedOut) {
+	if _, _, err := e.a.PasswordStep(ctx, "alice", "alice-pw", "10.0.0.200"); !errors.Is(err, ErrLockedOut) {
 		t.Fatalf("after lockout: %v", err)
 	}
+	e.a.clientIP = func(*http.Request) string { return "10.0.0.201" }
 	w := e.do("POST", "/api/v1/auth/login", `{"username":"alice","password":"alice-pw"}`, nil)
 	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "locked_out") {
 		t.Fatalf("http: %d %s", w.Code, w.Body)
@@ -145,7 +146,7 @@ func TestLockoutUnknownUserNoAlert(t *testing.T) {
 	for i := 0; i < LockoutThreshold; i++ {
 		_, _, _ = e.a.PasswordStep(context.Background(), "ghost", "bad", fmt.Sprintf("10.0.0.%d", i))
 	}
-	if _, _, err := e.a.PasswordStep(context.Background(), "ghost", "x", "10.9.9.9"); !errors.Is(err, ErrLockedOut) {
+	if _, _, err := e.a.PasswordStep(context.Background(), "ghost", "x", "10.0.0.99"); !errors.Is(err, ErrLockedOut) {
 		t.Fatalf("ghost not locked uniformly: %v", err)
 	}
 	if e.notifier.count() != 0 {
@@ -376,4 +377,67 @@ type errRateAll struct{ store.RateStateRepo }
 
 func (errRateAll) Get(context.Context, string) (store.RateWindow, error) {
 	return store.RateWindow{}, errors.New("down")
+}
+
+func TestIPNet(t *testing.T) {
+	for in, want := range map[string]string{
+		"10.1.2.3":                  "10.1.2.0/24",
+		"::ffff:10.1.2.3":           "10.1.2.0/24",
+		"2001:db8:1:2:aaaa:bbbb::1": "2001:db8:1:2::/64",
+		"2001:db8:1:2::ffff":        "2001:db8:1:2::/64",
+		"garbage":                   "garbage",
+	} {
+		if got := ipNet(in); got != want {
+			t.Errorf("ipNet(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+// Чужой хост блокирует админа только в своей подсети: вход из другой подсети работает.
+func TestLockoutIsPerUserAndSubnet(t *testing.T) {
+	e := newEnv(t, false)
+	ctx := context.Background()
+	for i := 0; i < LockoutThreshold; i++ {
+		_, _, _ = e.a.PasswordStep(ctx, "alice", "bad", fmt.Sprintf("203.0.113.%d", i))
+	}
+	if _, _, err := e.a.PasswordStep(ctx, "alice", "alice-pw", "203.0.113.200"); !errors.Is(err, ErrLockedOut) {
+		t.Fatalf("same /24 must be locked: %v", err)
+	}
+	if _, _, err := e.a.PasswordStep(ctx, "alice", "alice-pw", "198.51.100.7"); err != nil {
+		t.Fatalf("other /24 must pass: %v", err)
+	}
+	// IPv6: /64 общий, другой /64 свободен
+	for i := 0; i < LockoutThreshold; i++ {
+		_, _, _ = e.a.PasswordStep(ctx, "alice", "bad", fmt.Sprintf("2001:db8:0:1::%x", i+1))
+	}
+	if _, _, err := e.a.PasswordStep(ctx, "alice", "alice-pw", "2001:db8:0:1:ffff::1"); !errors.Is(err, ErrLockedOut) {
+		t.Fatalf("same /64 must be locked: %v", err)
+	}
+	if _, _, err := e.a.PasswordStep(ctx, "alice", "alice-pw", "2001:db8:0:2::1"); err != nil {
+		t.Fatalf("other /64 must pass: %v", err)
+	}
+	// другой пользователь из заблокированной подсети не затронут
+	if _, _, err := e.a.PasswordStep(ctx, "bob", "bad", "203.0.113.5"); errors.Is(err, ErrLockedOut) {
+		t.Fatalf("other user must not be locked: %v", err)
+	}
+}
+
+// Распределённый перебор (много подсетей) упирается в глобальный порог по пользователю.
+func TestGlobalUserLockout(t *testing.T) {
+	e := newEnv(t, false)
+	ctx := context.Background()
+	var last error
+	for i := 0; i < LockoutThresholdGlobal; i++ {
+		_, _, last = e.a.PasswordStep(ctx, "alice", "bad", fmt.Sprintf("10.%d.0.1", i))
+	}
+	var fe *FailError
+	if !errors.As(last, &fe) || fe.AttemptsLeft != 0 {
+		t.Fatalf("last: %v", last)
+	}
+	if e.notifier.count() != 1 {
+		t.Fatalf("alert count %d", e.notifier.count())
+	}
+	if _, _, err := e.a.PasswordStep(ctx, "alice", "alice-pw", "172.16.0.1"); !errors.Is(err, ErrLockedOut) {
+		t.Fatalf("global lockout expected: %v", err)
+	}
 }

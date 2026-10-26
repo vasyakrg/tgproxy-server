@@ -43,6 +43,9 @@ type Authority struct {
 	srvX   *x509.Certificate
 }
 
+// ErrCAExists — CA уже инициализирован (в том числе параллельным процессом).
+var ErrCAExists = errors.New("pki: CA уже инициализирован")
+
 // LoadOrInit загружает CA из БД; если его нет — создаёт (ECDSA P-256, 10 лет)
 // и сохраняет с ключом, зашифрованным KEK (AAD "pki:ca"). Неверный KEK при
 // существующем CA — ошибка расшифровки, CA не перезаписывается.
@@ -90,6 +93,9 @@ func LoadOrInit(ctx context.Context, repo store.CertRepo, kek *KEK, opts Options
 		return nil, fmt.Errorf("pki: seal CA key: %w", err)
 	}
 	if err := repo.SaveCA(ctx, store.CARecord{CertPEM: ca.CertPEM(), SealedKey: sealed, CreatedAt: nowFunc()}); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return nil, ErrCAExists // параллельный init выиграл гонку; чужой CA не перезаписан
+		}
 		return nil, fmt.Errorf("pki: save CA: %w", err)
 	}
 	return &Authority{ca: ca, repo: repo, opts: opts}, nil

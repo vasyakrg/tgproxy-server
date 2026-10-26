@@ -233,3 +233,47 @@ func TestMigration0004AgentModeBoth(t *testing.T) {
 		t.Fatalf("version trigger: %d -> %d %v", before, after, err)
 	}
 }
+
+// Миграция 0007 добавляет ssh_host/ssh_port и заполняет их из успешных задач установки.
+func TestMigration0007AgentSSHTarget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db := rawDB(t, path)
+	ctx := context.Background()
+	p, err := goose.NewProvider(goose.DialectSQLite3, db, os.DirFS("migrations"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.UpTo(ctx, 6); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO agents (id,name,url,mode,created_at,updated_at) VALUES ('a1','a1','https://x','dial',1,1)`,
+		`INSERT INTO agents (id,name,url,mode,created_at,updated_at) VALUES ('a2','a2','https://y','dial',1,1)`,
+		`INSERT INTO agents (id,name,url,mode,created_at,updated_at) VALUES ('a3','a3','https://z','dial',1,1)`,
+		`INSERT INTO agents (id,name,url,mode,created_at,updated_at) VALUES ('r1','r1','','reverse',1,1)`,
+		`INSERT INTO install_jobs (id,agent_id,host,kind,state,created_at) VALUES ('j1','a1','203.0.113.5:2222','install','done',1)`,
+		`INSERT INTO install_jobs (id,agent_id,host,kind,state,created_at) VALUES ('j2','a2','[2001:db8::1]:22','install','done',1)`,
+		`INSERT INTO install_jobs (id,agent_id,host,kind,state,created_at) VALUES ('j3','a3','203.0.113.7:22','install','failed',1)`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]struct {
+		host string
+		port int
+	}{"a1": {"203.0.113.5", 2222}, "a2": {"2001:db8::1", 22}, "a3": {"", 0}, "r1": {"", 0}}
+	for id, w := range want {
+		var h sql.NullString
+		var pt sql.NullInt64
+		if err := db.QueryRowContext(ctx, `SELECT ssh_host, ssh_port FROM agents WHERE id=?`, id).Scan(&h, &pt); err != nil {
+			t.Fatal(err)
+		}
+		if h.String != w.host || int(pt.Int64) != w.port {
+			t.Errorf("%s: ssh target = %q:%d, want %q:%d", id, h.String, pt.Int64, w.host, w.port)
+		}
+	}
+}

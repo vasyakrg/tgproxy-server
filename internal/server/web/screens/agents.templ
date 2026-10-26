@@ -208,6 +208,11 @@ templ MoreCard(m MoreVM) {
 		</dl>
 		<div class="form-actions">
 			<button type="button" class="btn" data-modal-close>Закрыть</button>
+			if m.CanEmergency {
+				@views.Button("Аварийное обновление по SSH…", views.ButtonDanger, templ.Attributes{
+					"hx-get": "/agents/" + m.Row.ID + "/emergency", "hx-target": "#agent-modal-body", "hx-swap": "innerHTML",
+				})
+			}
 			if m.CanRemove {
 				@views.Button("Удалить агента…", views.ButtonDanger, templ.Attributes{
 					"hx-get": "/agents/" + m.Row.ID + "/delete", "hx-target": "#agent-modal-body", "hx-swap": "innerHTML",

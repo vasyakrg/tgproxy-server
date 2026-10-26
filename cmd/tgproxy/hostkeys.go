@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/auth"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
@@ -61,10 +63,14 @@ func newHostKeysForgetCmd() *cobra.Command {
 		Use:   "forget <host:port>",
 		Short: "Сбросить закреплённый ключ хоста (после легитимной переустановки)",
 		Long: "Удаляет пин; при следующей установке отпечаток нужно подтвердить заново.\n" +
-			"Без --yes показывает текущий отпечаток и просит подтверждение (y/N).",
+			"Без --yes показывает текущий отпечаток и просит подтверждение (y/N); нужен интерактивный терминал,\n" +
+			"иначе отказ (для автоматизации — --yes).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			host := args[0]
+			if !yes && !stdinIsTerminal(cmd.InOrStdin()) {
+				return errors.New("подтверждение требует интерактивного терминала (stdin не tty): запустите из терминала или передайте --yes")
+			}
 			_, st, err := openAdminStore(cmd, cfgPath)
 			if err != nil {
 				return err
@@ -102,6 +108,12 @@ func newHostKeysForgetCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&yes, "yes", false, "не спрашивать подтверждение")
 	_ = cmd.MarkFlagRequired("config")
 	return cmd
+}
+
+// stdinIsTerminal — переменная для подмены в тестах.
+var stdinIsTerminal = func(in io.Reader) bool {
+	f, ok := in.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd())) //nolint:gosec // fd влезает в int
 }
 
 func cliUser() string {

@@ -77,7 +77,7 @@ func (c Cache) Commit(tmpPath, v string, checksums, sig []byte) error {
 	if err := writeFileAtomic(c.SigPath(v), sig); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpPath, cacheFmode); err != nil {
+	if err := os.Chmod(tmpPath, cacheFmode); err != nil { // #nosec G302 -- 0640: кэш читает тот же пользователь и группа сервера, секретов нет
 		return err
 	}
 	return os.Rename(tmpPath, c.DebPath(v))
@@ -99,7 +99,7 @@ func writeAtomic(dst string, fill func(io.Writer) error) (err error) {
 		return err
 	}
 	tmp := dst + ".tmp-" + hex.EncodeToString(rnd[:])
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, cacheFmode) // #nosec G304 -- путь внутри каталога кэша
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, cacheFmode) // #nosec G302,G304 -- путь внутри каталога кэша
 	if err != nil {
 		return err
 	}

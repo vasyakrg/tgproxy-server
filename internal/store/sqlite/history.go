@@ -34,7 +34,7 @@ func (r historyRepo) Append(ctx context.Context, res store.Resolution, samples [
 		return mapErr(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	upsert := `INSERT INTO ` + t + //nolint:gosec // t — из белого списка table()
+	upsert := `INSERT INTO ` + t + // #nosec G202 -- t — из белого списка table()
 		` (agent_id, ts, ok, err, rate_limited, p95_ms, inflight, buckets) VALUES (?,?,?,?,?,?,?,?)
 		 ON CONFLICT(agent_id, ts) DO UPDATE SET ok=excluded.ok, err=excluded.err, rate_limited=excluded.rate_limited,
 		   p95_ms=excluded.p95_ms, inflight=excluded.inflight, buckets=excluded.buckets`
@@ -60,7 +60,7 @@ func (r historyRepo) Range(ctx context.Context, res store.Resolution, agentID st
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT agent_id, ts, ok, err, rate_limited, p95_ms, inflight, buckets FROM ` + t + ` WHERE ts >= ? AND ts < ?` //nolint:gosec // t — из белого списка table()
+	q := `SELECT agent_id, ts, ok, err, rate_limited, p95_ms, inflight, buckets FROM ` + t + ` WHERE ts >= ? AND ts < ?` // #nosec G202 -- t — из белого списка table()
 	args := []any{ms(from), ms(to)}
 	if agentID != "" {
 		q += ` AND agent_id = ?`

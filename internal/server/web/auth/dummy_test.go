@@ -37,9 +37,10 @@ func TestUnknownUserTimingComparable(t *testing.T) {
 	step := func(user string) func() {
 		return func() {
 			i++
-			_ = e.st.RateState().Delete(ctx, "login:fail:"+userKey(user))
-			ip := "198.51.100." + string(rune('0'+i%9)) // обходим rate-limit разными IP
-			_, _, _ = e.a.PasswordStep(ctx, user, "wrong-password", ip+string(rune('a'+i%26)))
+			ip := "198.51.100." + string(rune('0'+i%9)) + string(rune('a'+i%26)) // обходим rate-limit разными «IP»
+			_ = e.st.RateState().Delete(ctx, failKey(user, ip))
+			_ = e.st.RateState().Delete(ctx, failKeyGlobal(user))
+			_, _, _ = e.a.PasswordStep(ctx, user, "wrong-password", ip)
 		}
 	}
 	// Прогрев обеих веток (включая ленивую генерацию фиктивного хеша) и

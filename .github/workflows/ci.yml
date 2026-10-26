@@ -3,6 +3,9 @@ name: CI
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "17 2 * * *" # nightly: фаззинг (job fuzz)
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -50,6 +53,34 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go tool govulncheck ./...
+
+  gosec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # Исключения — только `#nosec Gxxx -- причина` в коде; без комментария-обоснования срабатывание = красный CI.
+      - run: go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 -quiet -exclude-generated ./...
+
+  fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make fuzz FUZZTIME=60s
+      - name: Упавшие входы фаззера (для регресс-теста)
+        if: failure()
+        run: find . -path '*/testdata/fuzz/*' -type f -newer go.mod -exec sh -c 'echo "== $1"; cat "$1"' _ {} \;
 
   generate:
     runs-on: ubuntu-latest

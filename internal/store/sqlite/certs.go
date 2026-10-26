@@ -126,8 +126,7 @@ func (r certRepo) SaveCA(ctx context.Context, ca store.CARecord) error {
 		ca.CreatedAt = time.Now()
 	}
 	_, err := r.s.w.ExecContext(ctx,
-		`INSERT INTO pki_ca (id, cert_pem, sealed_key, created_at) VALUES (1,?,?,?)
-		 ON CONFLICT(id) DO UPDATE SET cert_pem=excluded.cert_pem, sealed_key=excluded.sealed_key, created_at=excluded.created_at`,
+		`INSERT INTO pki_ca (id, cert_pem, sealed_key, created_at) VALUES (1,?,?,?)`,
 		ca.CertPEM, ca.SealedKey, ms(ca.CreatedAt))
 	return mapErr(err)
 }

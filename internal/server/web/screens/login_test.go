@@ -176,12 +176,12 @@ func TestLoginRateLimitAndLockout(t *testing.T) {
 		t.Fatalf("6-я попытка в минуту: %d %q %s", w.Code, w.Header().Get("Retry-After"), alertText(w.Body.String()))
 	}
 
-	// ещё 5 неудач с другого IP (лимит 5/мин считается на IP+user) -> порог 10 -> блокировка
-	other := map[string]string{"HX-Request": "true", "X-Test-IP": "198.51.100.9"}
+	// ещё 5 неудач с другого IP (лимит 5/мин считается на IP+user; блокировка — на (user, /24)) -> порог 10 -> блокировка
+	other := map[string]string{"HX-Request": "true", "X-Test-IP": "203.0.113.9"}
 	for range 5 {
 		f.do(req{method: "POST", path: "/login/password", form: pwForm("alice", "bad"), hdr: other})
 	}
-	third := map[string]string{"HX-Request": "true", "X-Test-IP": "198.51.100.10"}
+	third := map[string]string{"HX-Request": "true", "X-Test-IP": "203.0.113.10"}
 	w = f.do(req{method: "POST", path: "/login/password", form: pwForm("alice", "alice-pw"), hdr: third})
 	if w.Code != 429 || w.Header().Get("Retry-After") != "900" {
 		t.Fatalf("lockout: %d %q", w.Code, w.Header().Get("Retry-After"))

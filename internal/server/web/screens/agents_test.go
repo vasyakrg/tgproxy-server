@@ -158,9 +158,10 @@ type agFx struct {
 	rh     *screens.RolloutHandle
 	probes int
 	probe  func(installer.Target) (string, string, error)
+	emerg  *agEmergency
 }
 
-type agOpts struct{ noService, noInstall, noEnroll bool }
+type agOpts struct{ noService, noInstall, noEnroll, emergency bool }
 
 func newAgFx(t *testing.T, o agOpts) *agFx {
 	t.Helper()
@@ -197,6 +198,11 @@ func newAgFx(t *testing.T, o agOpts) *agFx {
 	if !o.noEnroll {
 		a.issuer = &agIssuer{repo: f.st.Enrollments()}
 		deps.Enroll = api.NewEnrollService(api.EnrollConfig{Issuer: a.issuer, Enrollments: f.st.Enrollments(), Audit: f.st.Audit(), Logger: lg, Now: func() time.Time { return agNow }})
+	}
+	if o.emergency {
+		a.emerg = &agEmergency{}
+		a.fleet.states[0].Agent.SSHHost, a.fleet.states[0].Agent.SSHPort = "185.12.4.10", 22 // у hel-1 цели нет
+		deps.Emergency = &api.EmergencyService{Updater: a.emerg, Audit: f.st.Audit(), Log: lg, Now: func() time.Time { return agNow }}
 	}
 	screens.MountAgents(f.rt, deps)
 	a.sid = f.sessionCookie("alice")

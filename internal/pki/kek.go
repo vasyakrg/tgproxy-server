@@ -32,7 +32,7 @@ type KEK struct {
 // для dev и для файлов, которыми управляет root); любые биты group/other —
 // ошибка.
 func LoadKEK(path string) (*KEK, error) {
-	f, err := os.Open(path) //nolint:gosec // путь из конфигурации
+	f, err := os.Open(path) // #nosec G304 -- путь из конфигурации
 	if err != nil {
 		return nil, fmt.Errorf("pki: open kek: %w", err)
 	}
@@ -125,7 +125,7 @@ func (k *KEK) Seal(pt, aad []byte) ([]byte, error) { //nolint:unparam // реа�
 	out := make([]byte, 1+ns, 1+ns+len(pt)+k.aead.Overhead())
 	out[0] = kekVersion
 	_, _ = rand.Read(out[1:])
-	return k.aead.Seal(out, out[1:1+ns], pt, adFor(kekVersion, aad)), nil //nolint:gosec // nonce случайный (rand.Read выше)
+	return k.aead.Seal(out, out[1:1+ns], pt, adFor(kekVersion, aad)), nil // #nosec G407 -- nonce случайный (rand.Read выше)
 }
 
 // Open расшифровывает результат Seal; неверный ключ, AAD или повреждение —

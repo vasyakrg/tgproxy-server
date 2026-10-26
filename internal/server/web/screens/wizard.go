@@ -207,7 +207,8 @@ func (s *agentsScreen) installPage(w http.ResponseWriter, r *http.Request) {
 		title = st.Host
 	}
 	j := JobVM{
-		ID: st.ID, Title: title, State: st.State, Error: redact.String(st.Error), StartedMS: st.CreatedAt.UnixMilli(),
+		Emergency: st.Kind == installer.JobKindEmergency,
+		ID:        st.ID, Title: title, State: st.State, Error: redact.String(st.Error), StartedMS: st.CreatedAt.UnixMilli(),
 		EventsURL: "/api/v1/install-jobs/" + url.PathEscape(st.ID) + "/events", StatusURL: "/api/v1/install-jobs/" + url.PathEscape(st.ID),
 	}
 	if st.FinishedAt != nil {
@@ -216,7 +217,11 @@ func (s *agentsScreen) installPage(w http.ResponseWriter, r *http.Request) {
 	for _, step := range st.Steps {
 		j.Steps = append(j.Steps, JobStepVM{Key: step.Key, Label: step.Label, Status: step.Status})
 	}
-	renderPage(s.rt, w, r, http.StatusOK, "Установка агента", views.NavAgents, InstallPage(j)) //nolint:contextcheck // templ
+	pageTitle := "Установка агента"
+	if j.Emergency {
+		pageTitle = "Аварийное обновление агента"
+	}
+	renderPage(s.rt, w, r, http.StatusOK, pageTitle, views.NavAgents, InstallPage(j)) //nolint:contextcheck // templ
 }
 
 // ---------- ветка NAT ----------

@@ -42,3 +42,42 @@ func TestAgentEnrollTokenFromEnvReachesAgent(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+func TestResolveEnrollToken(t *testing.T) {
+	cases := []struct {
+		name, flag, env string
+		stdinFlag       bool
+		in              string
+		want            string
+		wantErr         bool
+	}{
+		{"flag wins", "f", "e", false, "s\n", "f", false},
+		{"env over stdin", "", "e", false, "s\n", "e", false},
+		{"stdin default", "", "", false, " tok123 \nrest", "tok123", false},
+		{"stdin explicit beats env", "", "e", true, "s", "s", false},
+		{"stdin empty", "", "", false, "", "", true},
+		{"stdin blank line", "", "", true, "\n", "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := resolveEnrollToken(c.flag, c.env, c.stdinFlag, strings.NewReader(c.in))
+			if (err != nil) != c.wantErr || got != c.want {
+				t.Fatalf("got %q err %v", got, err)
+			}
+		})
+	}
+}
+
+func TestAgentEnrollTokenFromStdinReachesAgent(t *testing.T) {
+	t.Setenv(EnrollTokenEnv, "")
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetIn(strings.NewReader("sekret\n"))
+	root.SetArgs([]string{"agent", "enroll", "--server", "https://h:8444", "--ca-fingerprint", "bad"})
+	err := root.Execute()
+	if err == nil || strings.Contains(err.Error(), "токен не задан") || strings.Contains(err.Error()+out.String(), "sekret") {
+		t.Fatalf("err %v out %q", err, out.String())
+	}
+}

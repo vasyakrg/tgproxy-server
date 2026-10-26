@@ -46,19 +46,37 @@ type pkiEnv struct {
 	cancel   context.CancelFunc
 	done     chan error
 	agents   []*e2eAgent
+	// tgHandler подменяет ответ фейкового Telegram (nil — стандартный getMe).
+	tgHandler atomic.Pointer[http.HandlerFunc]
+	ticks     chan time.Time // непустой, если тест сам управляет сэмплером истории
+}
+
+// pkiOpts — необязательные параметры newPKIEnvWith.
+type pkiOpts struct {
+	rules []config.AccessRule
+	ticks bool // ручной сэмплер: e.ticks <- time.Now() сбрасывает историю/журнал ошибок в БД
 }
 
 const pkiMetricsBearer = "pki-metrics-bearer"
 
-func newPKIEnv(t *testing.T) *pkiEnv {
+func newPKIEnv(t *testing.T) *pkiEnv { return newPKIEnvWith(t, pkiOpts{}) }
+
+func newPKIEnvWith(t *testing.T, o pkiOpts) *pkiEnv {
 	t.Helper()
 	e := &pkiEnv{t: t, logs: &syncBuf{}, dir: t.TempDir()}
+	if o.ticks {
+		e.ticks = make(chan time.Time)
+	}
 	logger, level, err := NewLogger(config.LoggingConfig{Level: "debug", Format: "text"}, e.logs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.tg = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		e.tgHits.Add(1)
+		if h := e.tgHandler.Load(); h != nil {
+			(*h)(w, r)
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/getMe") {
 			_, _ = io.WriteString(w, `{"ok":true,"result":{"id":123456,"is_bot":true,"username":"fake_bot"}}`)
 			return
@@ -76,6 +94,9 @@ func newPKIEnv(t *testing.T) *pkiEnv {
 	scfg.Buffer.TmpDir = t.TempDir()
 	scfg.Router.NoAgentWait = time.Second
 	scfg.AccessRules = []config.AccessRule{localRule("127.0.0.0/8")}
+	if o.rules != nil {
+		scfg.AccessRules = o.rules
+	}
 	scfg.Auth.UsersFile = writeTestUsers(t, e.dir, 0)
 	scfg.Auth.AllowPasswordOnly = true
 	scfg.PKI.KEKFile = filepath.Join(e.dir, "kek")
@@ -103,7 +124,7 @@ func newPKIEnv(t *testing.T) *pkiEnv {
 	e.proxyURL = "http://" + pln.Addr().String()
 	e.adminURL = "http://" + adln.Addr().String()
 	srv, err := NewServer(context.Background(), scfg, logger, ServerOptions{
-		Level: level, GatewayListener: gwLn, MetricsListener: mln,
+		Level: level, GatewayListener: gwLn, MetricsListener: mln, SamplerTicks: e.ticks,
 		GatewayURL:       "https://" + e.gwAddr,
 		DenylistInterval: 50 * time.Millisecond,
 		AccessOptions:    []access.Option{access.WithRefreshInterval(100 * time.Millisecond)},
@@ -291,9 +312,8 @@ func TestPKIReverseAgentServesProxyRequests(t *testing.T) {
 	e.startReverse("nat1", e.agentConfig(files, config.AgentModeReverse))
 
 	e.waitFor(10*time.Second, "reverse agent up", func() bool { return e.up("nat1") })
-	if n := e.srv.pki.pool.Conns("nat1"); n != 2 {
-		t.Fatalf("reverse conns: %d, want 2", n)
-	}
+	// Агент поднимается по первому соединению; второе может ещё устанавливаться.
+	e.waitFor(10*time.Second, "2 reverse conns", func() bool { return e.srv.pki.pool.Conns("nat1") == 2 })
 	before := e.tgHits.Load()
 	for range 5 {
 		if code, err := e.getMe(); err != nil || code != http.StatusOK {

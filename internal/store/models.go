@@ -18,12 +18,17 @@ const (
 
 // Agent — запись реестра агентов. Рантайм-состояние (up/down, EWMA) в БД не хранится.
 type Agent struct {
-	ID        string // slug, входит в SAN spiffe://tgproxy/agent/<id>
-	Name      string
-	URL       string // https://host:port; пусто для reverse
-	Mode      AgentMode
-	Weight    int
-	Draining  bool
+	ID       string // slug, входит в SAN spiffe://tgproxy/agent/<id>
+	Name     string
+	URL      string // https://host:port; пусто для reverse
+	Mode     AgentMode
+	Weight   int
+	Draining bool
+	// SSHHost/SSHPort — SSH-цель агента, с которой он был установлен установщиком (для
+	// аварийного обновления, когда mTLS-путь недоступен). Пусто/0 — цель неизвестна
+	// (reverse/enrollment-агент или установка до миграции без истории). Update их не меняет.
+	SSHHost   string
+	SSHPort   int
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -172,7 +177,7 @@ type ErrorOutcome string
 const (
 	OutcomeRetried     ErrorOutcome = "retried"
 	OutcomeFailedToBot ErrorOutcome = "failed_to_bot"
-	OutcomePassedToBot ErrorOutcome = "passed_to_bot" //nolint:gosec // G101: имя исхода, не секрет
+	OutcomePassedToBot ErrorOutcome = "passed_to_bot" // #nosec G101 -- G101: имя исхода, не секрет
 )
 
 // ErrorEvent — запись кольцевого журнала ошибок. Description уже очищен через redact.

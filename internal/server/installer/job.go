@@ -68,6 +68,7 @@ type JobStatus struct {
 	ID         string
 	AgentID    string
 	Host       string
+	Kind       string // install | emergency_update
 	State      string // store.Install*
 	Error      string
 	Steps      []StepStatus
@@ -122,6 +123,10 @@ type Config struct {
 	// ключам сервера, sha256 из подписанного checksums.txt, min_version. Обязателен.
 	Verifier Verifier
 
+	// remoteIncoming — каталог приёма на хосте (по умолчанию incomingDir); меняется только в тестах:
+	// путь зашит в deploy-helper.
+	remoteIncoming string
+
 	StepTimeout    time.Duration // 0 → 10m
 	DialTimeout    time.Duration // 0 → DefaultDialTimeout
 	HealthTimeout  time.Duration // 0 → 30s
@@ -147,6 +152,7 @@ type Installer struct {
 
 	mu   sync.Mutex
 	live map[string]*liveJob
+	busy map[string]struct{} // агенты с активным аварийным обновлением
 
 	hook func(*run) // тестовый хук: вызывается при создании run
 }
@@ -187,7 +193,7 @@ func New(cfg Config) (*Installer, error) {
 		lg = slog.Default()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Installer{cfg: cfg, log: lg.With("component", "installer"), base: ctx, stop: cancel, live: map[string]*liveJob{}}, nil
+	return &Installer{cfg: cfg, log: lg.With("component", "installer"), base: ctx, stop: cancel, live: map[string]*liveJob{}, busy: map[string]struct{}{}}, nil
 }
 
 // Close отменяет активные задачи (с откатом) и ждёт их завершения.
@@ -323,11 +329,19 @@ func (i *Installer) Install(ctx context.Context, req Request) (string, error) {
 
 	r := &run{i: i, id: id, req: req, target: target, pkgs: pkgs, auth: req.Auth.Clone()}
 	r.req.Auth = Auth{} // секреты остаются только в r.auth
+	r.policy = HostKeyPolicy{Repo: i.cfg.Store.HostKeys(), AgentID: req.Name, Alerter: i.cfg.Alerter, Timeout: i.cfg.DialTimeout}
+	i.launch(r, cloneAll(r.auth.secrets()), nil)
+	return id, nil
+}
+
+// launch регистрирует задачу, публикует шаги в состоянии pending и запускает её в фоне.
+// done вызывается после завершения задачи, до закрытия подписок.
+func (i *Installer) launch(r *run, scrubs [][]byte, done func()) {
+	id := r.id
 	r.lj = &liveJob{
 		id: id, bg: context.WithoutCancel(i.base), repo: i.cfg.Store.InstallJobs(), log: i.log, subs: map[chan Event]struct{}{}, done: make(chan struct{}),
-		scrubs: cloneAll(r.auth.secrets()),
+		scrubs: scrubs,
 	}
-	r.policy = HostKeyPolicy{Repo: i.cfg.Store.HostKeys(), AgentID: req.Name, Alerter: i.cfg.Alerter, Timeout: i.cfg.DialTimeout}
 	i.mu.Lock()
 	i.live[id] = r.lj
 	i.mu.Unlock()
@@ -344,9 +358,11 @@ func (i *Installer) Install(ctx context.Context, req Request) (string, error) {
 		i.mu.Lock()
 		delete(i.live, id)
 		i.mu.Unlock()
+		if done != nil {
+			done()
+		}
 		r.lj.finish()
 	}()
-	return id, nil
 }
 
 // Wait блокируется до завершения задачи (или ctx). Завершённая задача — сразу.
@@ -375,7 +391,7 @@ func (i *Installer) Status(ctx context.Context, jobID string) (JobStatus, error)
 	if err != nil {
 		return JobStatus{}, err
 	}
-	st := JobStatus{ID: j.ID, AgentID: j.AgentID, Host: j.Host, State: j.State, Error: j.Error, CreatedAt: j.CreatedAt, FinishedAt: j.FinishedAt}
+	st := JobStatus{ID: j.ID, Kind: j.Kind, AgentID: j.AgentID, Host: j.Host, State: j.State, Error: j.Error, CreatedAt: j.CreatedAt, FinishedAt: j.FinishedAt}
 	idx := map[string]int{}
 	for _, e := range evs {
 		st.LastSeq = e.ID

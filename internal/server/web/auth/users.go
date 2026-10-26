@@ -76,7 +76,7 @@ func readUsersFile(path string) (*UsersFile, error) {
 	if fi.Size() > maxUsersFileSize {
 		return nil, fmt.Errorf("auth: users file %s: too large", path)
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // путь из конфига
+	data, err := os.ReadFile(path) // #nosec G304 -- путь из конфига
 	if err != nil {
 		return nil, fmt.Errorf("auth: users file: %w", err)
 	}

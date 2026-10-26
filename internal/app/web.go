@@ -267,7 +267,8 @@ func (o observedInstaller) Install(ctx context.Context, req installer.Request) (
 		o.observe("rejected")
 		return id, err
 	}
-	go func() { //nolint:gosec,contextcheck // наблюдение за задачей живёт дольше HTTP-запроса
+	// #nosec G118 -- наблюдение за задачей живёт дольше HTTP-запроса
+	go func() { //nolint:contextcheck // задача живёт дольше запроса
 		wctx, cancel := context.WithTimeout(context.Background(), installWatchTimeout)
 		defer cancel()
 		_ = o.Wait(wctx, id)
@@ -305,6 +306,9 @@ func (s *Server) mountAgents(rt *web.Router, a *auth.Auth, cfg *config.ServerCon
 			Installer: observedInstaller{Installer: p.inst, observe: s.obs.m.InstallJob},
 			HostKeys:  s.st.HostKeys(), Audit: s.st.Audit(), Logger: s.logger,
 		})
+		if p.inst != nil {
+			deps.Emergency = &api.EmergencyService{Updater: p.inst, Audit: s.st.Audit(), Log: s.logger}
+		}
 		if p.enroll != nil {
 			deps.Enroll = api.NewEnrollService(api.EnrollConfig{
 				Issuer: p.enroll, Enrollments: s.st.Enrollments(), Audit: s.st.Audit(), Logger: s.logger,
@@ -318,6 +322,9 @@ func (s *Server) mountAgents(rt *web.Router, a *auth.Auth, cfg *config.ServerCon
 		(&api.AgentsAPI{Service: deps.Service, ClientIP: s.checker.ClientIP, Log: s.logger}).Routes(mux, w)
 		if deps.Install != nil {
 			(&api.InstallAPI{Service: deps.Install, ClientIP: s.checker.ClientIP, Log: s.logger}).Routes(mux, w)
+		}
+		if deps.Emergency != nil {
+			(&api.EmergencyAPI{Service: deps.Emergency, ClientIP: s.checker.ClientIP, Log: s.logger}).Routes(mux, w)
 		}
 		if deps.Enroll != nil {
 			(&api.EnrollAPI{Service: deps.Enroll, ClientIP: s.checker.ClientIP, Log: s.logger}).Routes(mux, w)

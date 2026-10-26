@@ -197,7 +197,7 @@ func runPKIDevAgents(cmd *cobra.Command, cfgPath, out string, agentIDs []string)
 	if err := os.MkdirAll(out, 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(out, pki.FileCACert), auth.CertPEM(), 0o644); err != nil { //nolint:gosec // CA публичный
+	if err := os.WriteFile(filepath.Join(out, pki.FileCACert), auth.CertPEM(), 0o644); err != nil { // #nosec G306 -- CA публичный
 		return err
 	}
 	w := cmd.OutOrStdout()
@@ -237,7 +237,7 @@ func issueDevAgent(ctx context.Context, auth *pki.Authority, id, crtPath, keyPat
 	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
 		return err
 	}
-	return os.WriteFile(crtPath, crt, 0o644) //nolint:gosec // сертификат публичный
+	return os.WriteFile(crtPath, crt, 0o644) // #nosec G306 -- сертификат публичный
 }
 
 // devAgentFresh: пара ключ+сертификат есть, выдана текущим CA и действует ещё devAgentRenewBefore.
@@ -245,7 +245,7 @@ func devAgentFresh(roots *x509.CertPool, crtPath, keyPath string) bool {
 	if _, err := os.Stat(keyPath); err != nil {
 		return false
 	}
-	data, err := os.ReadFile(crtPath) //nolint:gosec // путь dev-каталога
+	data, err := os.ReadFile(crtPath) // #nosec G304 -- путь dev-каталога
 	if err != nil {
 		return false
 	}
@@ -262,9 +262,9 @@ func devAgentFresh(roots *x509.CertPool, crtPath, keyPath string) bool {
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
-	data, err := os.ReadFile(src) //nolint:gosec // путь dev-каталога
+	data, err := os.ReadFile(src) // #nosec G304 -- путь dev-каталога
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, mode) //nolint:gosec // dev-каталог из флага --out
+	return os.WriteFile(dst, data, mode) // #nosec G703 -- dev-каталог из флага --out
 }

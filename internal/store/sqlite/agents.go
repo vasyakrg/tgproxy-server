@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/store"
@@ -9,7 +10,7 @@ import (
 
 type agentRepo struct{ s *Store }
 
-const agentCols = `id, name, url, mode, weight, draining, created_at, updated_at`
+const agentCols = `id, name, url, mode, weight, draining, created_at, updated_at, ssh_host, ssh_port`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -19,10 +20,13 @@ func scanAgent(r scanner) (store.Agent, error) {
 		mode     string
 		draining int
 		c, u     int64
+		host     sql.NullString
+		port     sql.NullInt64
 	)
-	if err := r.Scan(&a.ID, &a.Name, &a.URL, &mode, &a.Weight, &draining, &c, &u); err != nil {
+	if err := r.Scan(&a.ID, &a.Name, &a.URL, &mode, &a.Weight, &draining, &c, &u, &host, &port); err != nil {
 		return store.Agent{}, mapErr(err)
 	}
+	a.SSHHost, a.SSHPort = host.String, int(port.Int64)
 	a.Mode = store.AgentMode(mode)
 	a.Draining = draining != 0
 	a.CreatedAt, a.UpdatedAt = fromMS(c), fromMS(u)
@@ -36,8 +40,9 @@ func (r agentRepo) Create(ctx context.Context, a store.Agent) (store.Agent, erro
 	now := time.UnixMilli(ms(time.Now())).UTC()
 	a.CreatedAt, a.UpdatedAt = now, now
 	_, err := r.s.w.ExecContext(ctx,
-		`INSERT INTO agents (`+agentCols+`) VALUES (?,?,?,?,?,?,?,?)`,
-		a.ID, a.Name, a.URL, string(a.Mode), a.Weight, boolInt(a.Draining), ms(a.CreatedAt), ms(a.UpdatedAt))
+		`INSERT INTO agents (`+agentCols+`) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		a.ID, a.Name, a.URL, string(a.Mode), a.Weight, boolInt(a.Draining), ms(a.CreatedAt), ms(a.UpdatedAt),
+		nullStr(a.SSHHost), nullPort(a.SSHPort))
 	if err != nil {
 		return store.Agent{}, mapErr(err)
 	}
@@ -87,6 +92,29 @@ func (r agentRepo) SetWeight(ctx context.Context, id string, weight int) error {
 
 func (r agentRepo) SetDraining(ctx context.Context, id string, draining bool) error {
 	return r.s.execAffected(ctx, `UPDATE agents SET draining=?, updated_at=? WHERE id=?`, boolInt(draining), ms(time.Now()), id)
+}
+
+func (r agentRepo) SetSSHTarget(ctx context.Context, id, host string, port int) error {
+	t := store.Agent{SSHHost: host, SSHPort: port}
+	if err := t.ValidateSSHTarget(); err != nil {
+		return err
+	}
+	return r.s.execAffected(ctx, `UPDATE agents SET ssh_host=?, ssh_port=?, updated_at=? WHERE id=?`,
+		nullStr(host), nullPort(port), ms(time.Now()), id)
+}
+
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func nullPort(p int) any {
+	if p == 0 {
+		return nil
+	}
+	return p
 }
 
 func (r agentRepo) Delete(ctx context.Context, id string) error {
