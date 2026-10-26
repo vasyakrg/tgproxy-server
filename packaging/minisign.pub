@@ -1,2 +1,2 @@
-# ОВ-4: сгенерировать ключ (minisign -G) и заменить этот файл публичным ключом (2 строки:
-# "untrusted comment: ..." и строка "RW..."). Пока здесь заглушка, release.yml падает.
+untrusted comment: minisign public key 10EC18B28871CBF5
+RWT1y3GIshjsEJscvasznGtPLfvlgfFHLHvkUEVautzIrXbemp/19+pI

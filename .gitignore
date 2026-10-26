@@ -13,3 +13,6 @@ docs/diagrams/*.visual-check.*
 dist-smoke-arm64/
 dev/nat-agent/tgproxy
 deploy/.env
+
+# приватные ключи (minisign и пр.) — никогда в репозиторий
+*.key
