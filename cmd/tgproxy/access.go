@@ -60,12 +60,17 @@ func newAccessAddCmd() *cobra.Command {
 			if res.Key == "" {
 				return nil
 			}
-			scheme := "http"
-			if cfg.TLS.Mode != config.TLSModeOff && cfg.TLS.Mode != "" {
-				scheme = "https"
+			// Публичный адрес приоритетнее листенера: за reverse proxy (tls.mode=off) листенер — внутренний.
+			base := strings.TrimRight(cfg.Server.PublicBaseURL, "/")
+			if base == "" {
+				scheme := "http"
+				if cfg.TLS.Mode != config.TLSModeOff && cfg.TLS.Mode != "" {
+					scheme = "https"
+				}
+				base = scheme + "://" + cfg.Listen.Proxy
 			}
-			_, err = fmt.Fprintf(w, "ключ (показывается ОДИН раз, сохраните): %s\nbase URL: %s://%s/k/%s/bot<TOKEN>/<method>\n",
-				res.Key, scheme, cfg.Listen.Proxy, res.Key)
+			_, err = fmt.Fprintf(w, "ключ (показывается ОДИН раз, сохраните): %s\nbase URL: %s/k/%s/bot<TOKEN>/<method>\n",
+				res.Key, base, res.Key)
 			return err
 		},
 	}
