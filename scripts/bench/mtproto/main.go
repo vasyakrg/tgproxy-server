@@ -157,7 +157,7 @@ func run(o options) error {
 	need := uint64(o.n)*4 + 2000
 	lim := raiseNOFILE(need)
 	if lim < need {
-		maxN := int(min((lim-2000)/4, uint64(o.n))) //nolint:gosec // G115: результат не больше o.n (int)
+		maxN := int(min((lim-2000)/4, uint64(o.n))) // #nosec G115 -- результат не больше o.n (int)
 		fmt.Printf("ВНИМАНИЕ: лимит fd %d < нужных %d; N снижен %d -> %d (macOS: sudo sysctl kern.maxfilesperproc=...; ulimit -n)\n", lim, need, o.n, maxN)
 		if maxN < 1 {
 			return fmt.Errorf("лимит fd %d слишком мал", lim)
@@ -605,7 +605,7 @@ func startStand(o options) (*stand, error) {
 	st.httpc = &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true, ServerName: domain}, //nolint:gosec // самоподписанный сертификат стенда
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true, ServerName: domain}, // #nosec G402 -- самоподписанный сертификат стенда
 			MaxIdleConnsPerHost: 256,
 		},
 	}

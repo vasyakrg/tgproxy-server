@@ -45,7 +45,7 @@ func newDCProber(a *Agent) *dcProber {
 }
 
 func randJitter(d time.Duration) time.Duration {
-	f := rand.Float64() //nolint:gosec // джиттер расписания, не криптография
+	f := rand.Float64() // #nosec G404 -- джиттер расписания, не криптография
 	return time.Duration((f*2 - 1) * probeJitter * float64(d))
 }
 

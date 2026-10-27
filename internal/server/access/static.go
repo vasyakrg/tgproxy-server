@@ -36,7 +36,7 @@ const (
 
 	ReasonMTProtoReplay    Reason = "mtproto_replay"     // повтор рукопожатия MTProto (anti-replay)
 	ReasonMTProtoConnLimit Reason = "mtproto_conn_limit" // превышен лимит соединений MTProto
-	ReasonMTProtoBadSecret Reason = "mtproto_bad_secret" //nolint:gosec // имя причины, не секрет; резерв для dedicated-режима
+	ReasonMTProtoBadSecret Reason = "mtproto_bad_secret" // #nosec G101 -- имя причины, не секрет; резерв для dedicated-режима
 )
 
 // Reasons — все причины в порядке показа.

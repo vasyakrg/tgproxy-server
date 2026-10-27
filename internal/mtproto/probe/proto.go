@@ -110,14 +110,14 @@ func reqPQMulti(nonce [16]byte) []byte {
 // Конверсии размеров/времени: значения ограничены протоколом (длины < 64 КиБ,
 // unix-время > 0, DC — int16), переполнение невозможно.
 
-func u32(n int) uint32 { return uint32(n) } //nolint:gosec // длины ограничены maxPacket/размером записи
+func u32(n int) uint32 { return uint32(n) } // #nosec G115 -- длины ограничены maxPacket/размером записи
 
-func u16(n int) uint16 { return uint16(n) } //nolint:gosec // длина TLS-записи < 64 КиБ
+func u16(n int) uint16 { return uint16(n) } // #nosec G115 -- длина TLS-записи < 64 КиБ
 
-func u8(n int) byte { return byte(n) } //nolint:gosec // длины полей ClientHello < 256
+func u8(n int) byte { return byte(n) } // #nosec G115 -- длины полей ClientHello < 256
 
-func unix32(t time.Time) uint32 { return uint32(t.Unix()) } //nolint:gosec // unix-время в LE-поле TLS по схеме FakeTLS
+func unix32(t time.Time) uint32 { return uint32(t.Unix()) } // #nosec G115 -- unix-время в LE-поле TLS по схеме FakeTLS
 
-func msgIDAt(t time.Time, low uint64) uint64 { return uint64(t.Unix())<<32 | low } //nolint:gosec // unix-время > 0
+func msgIDAt(t time.Time, low uint64) uint64 { return uint64(t.Unix())<<32 | low } // #nosec G115 -- unix-время > 0
 
-func signedDC(v uint16) int16 { return int16(v) } //nolint:gosec // DC передаётся как int16 (media — отрицательный)
+func signedDC(v uint16) int16 { return int16(v) } // #nosec G115 -- DC передаётся как int16 (media — отрицательный)
