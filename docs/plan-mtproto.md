@@ -91,7 +91,7 @@
 - [x] **M10-T7 · Wiring сервера** (S-wire) · зависит от M10-T1…T6
   - Файлы: `internal/app/server.go` (`Serve`, ~`:348`: в shared-режиме `proxyLn` оборачивается `mux.Listener` до `srv.ServeTLS`; dedicated — свой `net.Listen` + внутренний `http.Server` с `ingTLS` и заглушкой; fronting-листенер; `Manager` в `runObs`-подобном жизненном цикле; graceful shutdown: стоп Accept → `Manager.Close` с ожиданием до `shutdownTimeout`), `internal/app/mtproto.go` (сборка зависимостей), проверка `fronting_domain` против `tlsin.CertInfo` при старте и на событии перезагрузки сертификата; NTP-проверка (предупреждение + метрика).
   - Тесты первыми: `enabled: false` — листенер прокси ведёт себя байт-в-байт как раньше (регресс Bot API: весь существующий набор `internal/app` зелёный); `fronting_domain` не в SAN → ошибка старта; dedicated listen поднимается и отдаёт TLS-заглушку.
-- [ ] **M10-T8 · Integration in-process** (S-wire) · зависит от M10-T7
+- [x] **M10-T8 · Integration in-process** (S-wire) · зависит от M10-T7
   - Файлы: `internal/app/mtproto_e2e_test.go`.
   - Сценарии: probe через server → agent (dial) → fake-DC получает `resPQ`; невалидный HMAC получает настоящий сертификат и HTTP-ответ прокси; replay → TLS-сайт + счётчик автобана; отзыв секрета рвёт соединение; DC down на агенте A → соединение через B; агент без capability не используется; Bot API `getMe` параллельно с 200 MTProto-стримами — p95 не растёт > 2×.
   - Приёмка среза: `tgproxy mtproto probe --link …` в dev до fake-DC и до реального Telegram (агент с доступом к DC); ручной вход официального клиента по ссылке.
@@ -111,7 +111,7 @@
 - [ ] **M11-T3 · Лимиты и изоляция** (S-mtproto) · зависит от M10-T2, M10-T3
   - Файлы: `internal/mtproto/mux/limits.go` (`max_conns` секрета, CIDR секрета), `internal/mtproto/budget.go` (проверка fd-бюджета против `RLIMIT_NOFILE` при старте), SIGHUP-перечитывание лимитов.
   - Тесты первыми: `max_conns` секрета → закрытие с `mtproto_conn_limit`; CIDR секрета: валидный HMAC из чужой сети → fallthrough (неотличимо от неверного секрета); новые лимиты по SIGHUP без разрыва живых; предупреждение при `max_conns×2 + 16384 > RLIMIT_NOFILE`.
-- [ ] **M11-T4 · Причины отказа и fail2ban** (S-proxy) · параллельно с M11-T3
+- [x] **M11-T4 · Причины отказа и fail2ban** (S-proxy) · параллельно с M11-T3
   - Файлы: `internal/server/access/static.go` (`ReasonMTProtoReplay` — `CountsForBan()=true`, `ReasonMTProtoConnLimit` — false, `ReasonMTProtoBadSecret` — false, резерв для dedicated-режима; список `Reasons`), `internal/server/ban/ban.go` (`Record` уже принимает `access.Reason`, `:142` — проверить, что защищённые адреса `protect.go` не банятся по новым причинам), записи `ErrorEvent{Phase: "mtproto"}`.
   - Тесты первыми: `threshold` replay с одного IP → автобан; conn_limit и bad_secret в счётчик не идут; защищённый адрес не банится; запись в «Ошибках» с фазой `mtproto`, IP и причиной, без секрета.
 - [ ] **M11-T5 · Метрики** (S-obs + инструментирование S-mtproto, S-agent — параллельно)
@@ -120,7 +120,7 @@
 - [ ] **M11-T6 · Алерты** (S-obs) · зависит от M11-T5
   - Файлы: `internal/server/notify/types.go` (`mtproto_dc_unreachable`, `mtproto_no_capable_agents`, `mtproto_overload`), правила срабатывания и resolved.
   - Тесты первыми: DC down на всех capable-агентах > 1 мин → firing, восстановление одного → resolved; 0 capable при `enabled` → firing; > 90% `max_conns` 5 мин → firing; дедуп и лимиты общие.
-- [ ] **M11-T7 · Журнал соединений и история** (S-obs + S-core) · зависит от M9-T3
+- [x] **M11-T7 · Журнал соединений и история** (S-obs + S-core) · зависит от M9-T3
   - Файлы: `internal/store/sqlite/migrations/0010_samples_mtproto.sql` (S-core), `internal/server/history/*` (ряды `mtproto_conns`, `mtproto_bytes_in/out`), `internal/mtproto/journal.go` (батч-писатель сессий раз в 10 с, очередь с потолком, переполнение → метрика, а не блокировка), retention как у `error_events`.
   - Тесты первыми: 10k завершённых соединений за 10 с пишутся одним батчем; переполнение очереди не блокирует relay; Prune по retention; ряды в 10s/5m агрегируются.
 - [ ] **M11-T8 · Wiring** (S-wire): reverse-пул в `internal/app/server.go`/`agent.go`, алерты, журнал, SIGHUP.

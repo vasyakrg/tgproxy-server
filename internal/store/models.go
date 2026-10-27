@@ -110,6 +110,10 @@ type Sample struct {
 	Buckets     []int64 // гистограмма латентности (для корректного rollup p95)
 	// Denied — отказы доступа по причинам (только у строки-агрегата: отказ никуда не маршрутизируется).
 	Denied map[string]int64
+	// MTProto — только у строки-агрегата: соединения (максимум за окно) и байты за окно.
+	MTConns    int64
+	MTBytesIn  int64 // клиент → Telegram
+	MTBytesOut int64 // Telegram → клиент
 }
 
 // AuditEntry — запись аудит-лога админов. Секреты не пишутся.

@@ -60,6 +60,9 @@ type e2eOpts struct {
 	agents int                        // число агентов (по умолчанию 1: id "local"); id остальных — "a2", "a3"…
 	obs    bool                       // метрики + история + уведомления (telegram_id получателя — obsChatID)
 	mut    func(*config.ServerConfig) // правки конфига сервера до старта
+
+	agentMut func(id string, c *config.AgentConfig) // правки конфига каждого агента до старта
+	sopt     func(*ServerOptions)                   // правки ServerOptions до NewServer
 }
 
 const (
@@ -104,6 +107,7 @@ type e2e struct {
 	metricsURL string
 	ticks      chan time.Time
 	msgs       chan tgMessage
+	agentMut   func(id string, c *config.AgentConfig)
 }
 
 func localRule(cidr string) config.AccessRule {
@@ -140,6 +144,9 @@ func (e *e2e) startAgent(id, addr string) *e2eAgent {
 	acfg.Listen.Metrics = metricsAddr
 	if err := acfg.OverrideTelegramAPIURL(e.tg.URL); err != nil {
 		e.t.Fatal(err)
+	}
+	if e.agentMut != nil {
+		e.agentMut(id, acfg)
 	}
 	var ln net.Listener
 	if addr == "" {
@@ -183,6 +190,7 @@ func newE2E(t *testing.T, o e2eOpts) *e2e {
 		t.Fatal(err)
 	}
 	e.logger, e.level = logger, level
+	e.agentMut = o.agentMut
 
 	// фейковый Telegram
 	e.tg = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -288,6 +296,9 @@ func newE2E(t *testing.T, o e2eOpts) *e2e {
 	sopts.AccessOptions = []access.Option{access.WithRefreshInterval(100 * time.Millisecond)}
 	sopts.AgentOptions = []agents.Option{agents.WithPollInterval(150 * time.Millisecond),
 		agents.WithPollTimeout(time.Second), agents.WithReloadInterval(100 * time.Millisecond)}
+	if o.sopt != nil {
+		o.sopt(&sopts)
+	}
 	srv, err := NewServer(context.Background(), scfg, logger, sopts)
 	if err != nil {
 		t.Fatal(err)

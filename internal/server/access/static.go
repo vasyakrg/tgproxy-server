@@ -33,18 +33,24 @@ const (
 	ReasonBadKey      Reason = "bad_key"      // ключ передан, но не подошёл
 	ReasonRateLimited Reason = "rate_limited" // исчерпан лимит правила
 	ReasonBanned      Reason = "banned"       // IP в бане (проверка до правил, см. internal/server/ban)
+
+	ReasonMTProtoReplay    Reason = "mtproto_replay"     // повтор рукопожатия MTProto (anti-replay)
+	ReasonMTProtoConnLimit Reason = "mtproto_conn_limit" // превышен лимит соединений MTProto
+	ReasonMTProtoBadSecret Reason = "mtproto_bad_secret" //nolint:gosec // имя причины, не секрет; резерв для dedicated-режима
 )
 
 // Reasons — все причины в порядке показа.
-var Reasons = []Reason{ReasonNoRule, ReasonKeyRequired, ReasonBadKey, ReasonRateLimited, ReasonBanned}
+var Reasons = []Reason{ReasonNoRule, ReasonKeyRequired, ReasonBadKey, ReasonRateLimited, ReasonBanned,
+	ReasonMTProtoReplay, ReasonMTProtoConnLimit, ReasonMTProtoBadSecret}
 
 // Valid сообщает, что причина из известного набора.
 func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 
 // CountsForBan сообщает, учитывается ли отказ в счётчике автобана. rate_limited — легитимный клиент,
-// упёршийся в лимит; banned — уже забанен.
+// упёршийся в лимит; banned — уже забанен; mtproto_conn_limit и mtproto_bad_secret — не признак атаки
+// (NAT, устаревшая ссылка), в счёт идёт только mtproto_replay.
 func (r Reason) CountsForBan() bool {
-	return r == ReasonNoRule || r == ReasonKeyRequired || r == ReasonBadKey
+	return r == ReasonNoRule || r == ReasonKeyRequired || r == ReasonBadKey || r == ReasonMTProtoReplay
 }
 
 // DeniedError — отказ с причиной.

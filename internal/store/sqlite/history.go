@@ -35,9 +35,12 @@ func (r historyRepo) Append(ctx context.Context, res store.Resolution, samples [
 	}
 	defer func() { _ = tx.Rollback() }()
 	upsert := `INSERT INTO ` + t + // #nosec G202 -- t — из белого списка table()
-		` (agent_id, ts, ok, err, rate_limited, p95_ms, inflight, buckets, denied) VALUES (?,?,?,?,?,?,?,?,?)
+		` (agent_id, ts, ok, err, rate_limited, p95_ms, inflight, buckets, denied,
+		   mtproto_conns, mtproto_bytes_in, mtproto_bytes_out) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(agent_id, ts) DO UPDATE SET ok=excluded.ok, err=excluded.err, rate_limited=excluded.rate_limited,
-		   p95_ms=excluded.p95_ms, inflight=excluded.inflight, buckets=excluded.buckets, denied=excluded.denied`
+		   p95_ms=excluded.p95_ms, inflight=excluded.inflight, buckets=excluded.buckets, denied=excluded.denied,
+		   mtproto_conns=excluded.mtproto_conns, mtproto_bytes_in=excluded.mtproto_bytes_in,
+		   mtproto_bytes_out=excluded.mtproto_bytes_out`
 	stmt, err := tx.PrepareContext(ctx, upsert)
 	if err != nil {
 		return mapErr(err)
@@ -56,7 +59,8 @@ func (r historyRepo) Append(ctx context.Context, res store.Resolution, samples [
 			}
 			den = string(db)
 		}
-		if _, err := stmt.ExecContext(ctx, sm.AgentID, ms(sm.At), sm.OK, sm.Err, sm.RateLimited, sm.P95Ms, sm.Inflight, string(b), den); err != nil {
+		if _, err := stmt.ExecContext(ctx, sm.AgentID, ms(sm.At), sm.OK, sm.Err, sm.RateLimited, sm.P95Ms, sm.Inflight, string(b), den,
+			sm.MTConns, sm.MTBytesIn, sm.MTBytesOut); err != nil {
 			return mapErr(err)
 		}
 	}
@@ -68,7 +72,8 @@ func (r historyRepo) Range(ctx context.Context, res store.Resolution, agentID st
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT agent_id, ts, ok, err, rate_limited, p95_ms, inflight, buckets, denied FROM ` + t + ` WHERE ts >= ? AND ts < ?` // #nosec G202 -- t — из белого списка table()
+	q := `SELECT agent_id, ts, ok, err, rate_limited, p95_ms, inflight, buckets, denied,
+		mtproto_conns, mtproto_bytes_in, mtproto_bytes_out FROM ` + t + ` WHERE ts >= ? AND ts < ?` // #nosec G202 -- t — из белого списка table()
 	args := []any{ms(from), ms(to)}
 	if agentID != "" {
 		q += ` AND agent_id = ?`
@@ -88,7 +93,8 @@ func (r historyRepo) Range(ctx context.Context, res store.Resolution, agentID st
 			b  string
 			dn string
 		)
-		if err := rows.Scan(&sm.AgentID, &ts, &sm.OK, &sm.Err, &sm.RateLimited, &sm.P95Ms, &sm.Inflight, &b, &dn); err != nil {
+		if err := rows.Scan(&sm.AgentID, &ts, &sm.OK, &sm.Err, &sm.RateLimited, &sm.P95Ms, &sm.Inflight, &b, &dn,
+			&sm.MTConns, &sm.MTBytesIn, &sm.MTBytesOut); err != nil {
 			return nil, mapErr(err)
 		}
 		sm.At = fromMS(ts)

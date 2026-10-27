@@ -324,3 +324,40 @@ func TestDigest(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestMTProtoReplayAutobans(t *testing.T) {
+	r := newRig(t, cfg(), nil)
+	r.deny("198.51.100.20", 5, access.ReasonMTProtoReplay)
+	b := r.waitBan(t)
+	if b.Prefix != PrefixOf(ip("198.51.100.20")) || !r.m.Banned(ip("198.51.100.20")) {
+		t.Fatalf("ban: %+v", b)
+	}
+}
+
+func TestMTProtoConnLimitBadSecretNotCounted(t *testing.T) {
+	r := newRig(t, cfg(), nil)
+	r.deny("198.51.100.21", 50, access.ReasonMTProtoConnLimit)
+	r.deny("198.51.100.21", 50, access.ReasonMTProtoBadSecret)
+	r.m.Wait()
+	select {
+	case b := <-r.auto:
+		t.Fatalf("unexpected ban: %+v", b)
+	default:
+	}
+	if r.m.Banned(ip("198.51.100.21")) {
+		t.Fatal("banned")
+	}
+}
+
+func TestMTProtoReplayProtectedNotBanned(t *testing.T) {
+	r := newRig(t, cfg(), StaticProtector{Trusted: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/28")}})
+	for _, a := range []string{"203.0.113.3", "10.1.2.3", "127.0.0.1"} {
+		r.deny(a, 40, access.ReasonMTProtoReplay)
+	}
+	r.m.Wait()
+	select {
+	case b := <-r.auto:
+		t.Fatalf("protected banned: %+v", b)
+	default:
+	}
+}

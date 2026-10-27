@@ -51,7 +51,7 @@ func NewServerRegistry() (*prometheus.Registry, *Server) {
 		upstream:      c("upstream_attempts_total", "Upstream attempts via agents.", "agent", "result"),
 		retries:       c("retries_total", "Retried requests.", "class", "reason"),
 		tg429:         c("telegram_429_total", "Telegram 429 responses.", "rule"),
-		denied:        c("denied_total", "Requests denied by access control (reason: no_rule|key_required|bad_key|rate_limited|banned).", "reason"),
+		denied:        c("denied_total", "Requests denied by access control (reason: no_rule|key_required|bad_key|rate_limited|banned|mtproto_replay|mtproto_conn_limit|mtproto_bad_secret).", "reason"),
 		agentUp:       g("agent_up", "1 if the agent is up.", "agent", "mode"),
 		agentInflight: g("agent_inflight", "In-flight requests per agent.", "agent"),
 		agentReverse:  g("agent_reverse_conns", "Active reverse connections per agent.", "agent"),

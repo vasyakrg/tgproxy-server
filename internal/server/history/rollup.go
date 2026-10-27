@@ -89,6 +89,9 @@ func (r *Roller) roll(ctx context.Context, from, to time.Time) error {
 		g.Inflight = max(g.Inflight, s.Inflight)
 		g.Buckets = addBuckets(g.Buckets, s.Buckets)
 		g.Denied = addDenied(g.Denied, s.Denied)
+		g.MTConns = max(g.MTConns, s.MTConns)
+		g.MTBytesIn += s.MTBytesIn
+		g.MTBytesOut += s.MTBytesOut
 	}
 	out := make([]store.Sample, 0, len(groups))
 	for _, g := range groups {

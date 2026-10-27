@@ -35,15 +35,58 @@ type window struct {
 	denied map[string]int64 // отказы доступа по причинам (отказ не маршрутизируется — агента нет)
 }
 
+// MTProtoCounters — источник значений рядов mtproto_conns / mtproto_bytes_in / mtproto_bytes_out.
+// Реализует mtproto.Journal. Вызывается раз в интервал из Drain, поэтому должен быть дешёвым.
+type MTProtoCounters interface {
+	// ActiveConns — текущее число активных соединений.
+	ActiveConns() int64
+	// TotalBytes — монотонные суммы байт: in — клиент → Telegram, out — Telegram → клиент.
+	TotalBytes() (in, out int64)
+}
+
 // Collector — потокобезопасный приёмник событий горячего пути. БД не трогает.
 // Hot path держит RLock + атомики; Drain берёт Lock, поэтому снимок целостный.
 type Collector struct {
 	mu sync.RWMutex
 	w  *window
+
+	mtMu       sync.Mutex
+	mt         MTProtoCounters
+	mtLastIn   int64
+	mtLastOut  int64
+	mtConnsMax int64
 }
 
 // NewCollector создаёт пустой сборщик.
 func NewCollector() *Collector { return &Collector{w: newWindow()} }
+
+// SetMTProto подключает источник рядов MTProto (nil — отключает). Базой для дельт байт
+// становится текущее значение источника.
+func (c *Collector) SetMTProto(src MTProtoCounters) {
+	c.mtMu.Lock()
+	defer c.mtMu.Unlock()
+	c.mt = src
+	c.mtLastIn, c.mtLastOut, c.mtConnsMax = 0, 0, 0
+	if src != nil {
+		c.mtLastIn, c.mtLastOut = src.TotalBytes()
+	}
+}
+
+// mtprotoDrain возвращает (соединения, Δin, Δout) за интервал. Соединения — максимум
+// из значения на прошлом и текущем снимках.
+func (c *Collector) mtprotoDrain() (conns, in, out int64) {
+	c.mtMu.Lock()
+	defer c.mtMu.Unlock()
+	if c.mt == nil {
+		return 0, 0, 0
+	}
+	curIn, curOut := c.mt.TotalBytes()
+	conns = max(c.mt.ActiveConns(), c.mtConnsMax)
+	in, out = max(curIn-c.mtLastIn, 0), max(curOut-c.mtLastOut, 0)
+	c.mtLastIn, c.mtLastOut = curIn, curOut
+	c.mtConnsMax = c.mt.ActiveConns()
+	return conns, in, out
+}
 
 func newWindow() *window { return &window{agents: map[string]*acc{}, denied: map[string]int64{}} }
 
@@ -160,5 +203,6 @@ func (c *Collector) Drain() []store.Sample {
 		out = append(out, s)
 	}
 	total.P95Ms = P95(total.Buckets)
+	total.MTConns, total.MTBytesIn, total.MTBytesOut = c.mtprotoDrain()
 	return append(out, total)
 }

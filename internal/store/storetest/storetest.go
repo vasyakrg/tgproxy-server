@@ -1146,7 +1146,7 @@ func testDeniedSamples(t *testing.T, s store.Store) {
 	h := s.History()
 	at := time.Now().Truncate(10 * time.Second)
 	ok(t, h.Append(ctx, store.Res10s, []store.Sample{
-		{At: at, AgentID: "*", OK: 1, Denied: map[string]int64{"no_rule": 3, "banned": 7}},
+		{At: at, AgentID: "*", OK: 1, Denied: map[string]int64{"no_rule": 3, "banned": 7}, MTConns: 5, MTBytesIn: 11, MTBytesOut: 22},
 		{At: at, AgentID: "a1", OK: 1},
 	}))
 	got, err := h.Range(ctx, store.Res10s, "", at, at.Add(time.Second))
@@ -1159,6 +1159,9 @@ func testDeniedSamples(t *testing.T, s store.Store) {
 		case "*":
 			if g.Denied["no_rule"] != 3 || g.Denied["banned"] != 7 || len(g.Denied) != 2 {
 				t.Fatalf("denied %+v", g.Denied)
+			}
+			if g.MTConns != 5 || g.MTBytesIn != 11 || g.MTBytesOut != 22 {
+				t.Fatalf("mtproto series %+v", g)
 			}
 		default:
 			if len(g.Denied) != 0 {
