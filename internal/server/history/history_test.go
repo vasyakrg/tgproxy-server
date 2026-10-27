@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -128,7 +129,8 @@ func TestRollupP95FromHistogramNotAverage(t *testing.T) {
 	fast := make([]int64, history.NumBuckets())
 	fast[1] = 1000 // 1000 запросов ≤10мс
 	slow := make([]int64, history.NumBuckets())
-	slow[9] = 10 // 10 запросов ≤5с
+	slowIdx := slices.Index(history.LatencyBoundsMs, 5000)
+	slow[slowIdx] = 10 // 10 запросов ≤5с
 	base := t0
 	for i, bk := range [][]int64{fast, slow} {
 		s := store.Sample{At: base.Add(time.Duration(i) * history.Step10s), AgentID: "a", OK: 1, Inflight: i + 1, Buckets: bk}
@@ -146,7 +148,7 @@ func TestRollupP95FromHistogramNotAverage(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("rolled %+v", got)
 	}
-	if got[0].OK != 2 || got[0].Inflight != 2 || got[0].Buckets[1] != 1000 || got[0].Buckets[9] != 10 {
+	if got[0].OK != 2 || got[0].Inflight != 2 || got[0].Buckets[1] != 1000 || got[0].Buckets[slowIdx] != 10 {
 		t.Fatalf("sums %+v", got[0])
 	}
 	if got[0].P95Ms > 10 || naive < 1000 {
@@ -591,5 +593,72 @@ func TestDeniedCollectedRolledAndQueried(t *testing.T) {
 	// агентский ряд отказов не содержит
 	if a, _ := q.Timeseries(ctx, history.Range1h, "a", time.Time{}); len(a.Points) != 0 {
 		t.Fatalf("agent series: %+v", a.Points)
+	}
+}
+
+// legacyBuckets строит гистограмму старого формата (13 бакетов) с заданными (idx → count).
+func legacyBuckets(m map[int]int64) []int64 {
+	b := make([]int64, 13)
+	for i, c := range m {
+		b[i] = c
+	}
+	return b
+}
+
+func TestNormalizeBucketsLegacy(t *testing.T) {
+	n := history.NumBuckets()
+	// старые границы: 5,10,25,50,100,250,500,1000,2500,5000,10000,30000,+inf
+	old := legacyBuckets(map[int]int64{0: 1, 5: 7, 6: 3, 11: 2, 12: 4})
+	got := history.NormalizeBuckets(old)
+	if len(got) != n {
+		t.Fatalf("len %d", len(got))
+	}
+	at := func(bound float64) int64 { return got[slices.Index(history.LatencyBoundsMs, bound)] }
+	if got[0] != 1 || at(250) != 7 || at(500) != 3 || at(30000) != 2 || got[n-1] != 4 {
+		t.Fatalf("remap %v", got)
+	}
+	if history.BucketTotal(got) != history.BucketTotal(old) {
+		t.Fatal("сумма должна сохраняться")
+	}
+	cur := make([]int64, n)
+	cur[3] = 1
+	if g := history.NormalizeBuckets(cur); &g[0] != &cur[0] {
+		t.Fatal("текущая длина — без копии")
+	}
+}
+
+func TestMixedLegacyAndNewBucketsRollupAndQuery(t *testing.T) {
+	ctx := context.Background()
+	st := memtest.New()
+	repo := st.History()
+	newB := make([]int64, history.NumBuckets())
+	newB[slices.Index(history.LatencyBoundsMs, 150)] = 10
+	rows := []store.Sample{
+		{At: t0, AgentID: "a", OK: 5, Buckets: legacyBuckets(map[int]int64{5: 5})}, // старая строка: (100,250]
+		{At: t0.Add(10 * time.Second), AgentID: "a", OK: 10, Buckets: newB},        // новая
+		{At: t0.Add(20 * time.Second), AgentID: "a", OK: 1},                        // без бакетов
+	}
+	if err := repo.Append(ctx, store.Res10s, rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := history.NewRoller(repo).Step(ctx, t0.Add(history.Step5m)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := repo.Range(ctx, store.Res5m, "a", t0, t0.Add(history.Step5m))
+	if len(got) != 1 || len(got[0].Buckets) != history.NumBuckets() || history.BucketTotal(got[0].Buckets) != 15 {
+		t.Fatalf("rolled %+v", got)
+	}
+	q := &history.Query{History: repo, Now: func() time.Time { return t0.Add(time.Minute) }}
+	s, err := q.Timeseries(ctx, history.Range1h, "a", time.Time{})
+	if err != nil || len(s.Points) != 3 {
+		t.Fatalf("%+v %v", s, err)
+	}
+	if s.Points[0].P95N != 5 || s.Points[1].P95N != 10 || s.Points[2].P95N != 0 {
+		t.Fatalf("p95_n %+v", s.Points)
+	}
+	// открытый хвост 5m: старые + новые 10s-строки складываются без паники
+	s, err = q.Timeseries(ctx, history.Range24h, "a", time.Time{})
+	if err != nil || len(s.Points) == 0 {
+		t.Fatalf("%+v %v", s, err)
 	}
 }

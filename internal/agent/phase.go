@@ -37,6 +37,7 @@ type trackerKey struct{}
 //	timeout  — истёк дедлайн (X-TGP-Timeout-Ms); считается «мог уйти»
 type phaseTracker struct {
 	start     time.Time
+	skipRTT   bool // getUpdates и файлы не учитываются в EWMA upstream RTT
 	stage     atomic.Int32
 	dialErr   atomic.Bool
 	tlsErr    atomic.Bool

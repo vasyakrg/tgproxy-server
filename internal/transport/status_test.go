@@ -11,6 +11,9 @@ func TestAgentStatusOldJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(old), &st); err != nil {
 		t.Fatal(err)
 	}
+	if st.Inflight != 1 || st.InflightLongPoll != 0 {
+		t.Fatalf("старый статус: inflight=%d lp=%d", st.Inflight, st.InflightLongPoll)
+	}
 	if st.MTProto != nil || len(st.Capabilities) != 0 || st.HasCapability(CapMTProto) {
 		t.Fatalf("старый статус не должен содержать mtproto: %+v", st)
 	}
@@ -34,5 +37,15 @@ func TestAgentStatusMTProto(t *testing.T) {
 	var nilSt *AgentStatus
 	if nilSt.HasCapability(CapMTProto) {
 		t.Fatal("nil-статус без capability")
+	}
+}
+
+func TestAgentStatusInflightLongPoll(t *testing.T) {
+	var st AgentStatus
+	if err := json.Unmarshal([]byte(`{"inflight":3,"inflight_longpoll":2}`), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Inflight != 3 || st.InflightLongPoll != 2 {
+		t.Fatalf("%+v", st)
 	}
 }

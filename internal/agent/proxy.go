@@ -95,7 +95,9 @@ func (p *proxy) modifyResponse(resp *http.Response) error {
 	h.Set(tgapi.HeaderSource, tgapi.SourceTelegram)
 	if t := trackerFrom(resp.Request.Context()); t != nil {
 		d := t.upstream()
-		p.a.stats.observeRTT(d)
+		if !t.skipRTT {
+			p.a.stats.observeRTT(d)
+		}
 		h.Set(tgapi.HeaderUpstreamMs, itoa(d.Milliseconds()))
 	}
 	return nil
@@ -112,16 +114,18 @@ func (a *Agent) handleTG(w http.ResponseWriter, r *http.Request) {
 		writeAgentError(w, http.StatusNotFound, "", "tgproxy: not found")
 		return
 	}
-	a.stats.begin()
+	kind := classifyTG(r.URL.EscapedPath())
+	a.stats.begin(kind.longPoll)
 	a.rec.SetInflight(int(a.stats.inflight.Load()))
 	defer func() {
-		a.stats.end()
+		a.stats.end(kind.longPoll)
 		a.rec.SetInflight(int(a.stats.inflight.Load()))
 	}()
 
 	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout(r.Header))
 	defer cancel()
 	t := newPhaseTracker(a.now())
+	t.skipRTT = kind.skipRTT()
 	ctx = httptrace.WithClientTrace(ctx, t.clientTrace())
 	ctx = context.WithValue(ctx, trackerKey{}, t)
 
@@ -148,6 +152,20 @@ func (a *Agent) handleTG(w http.ResponseWriter, r *http.Request) {
 // slogErrorLog направляет логи net/http в slog (с редакцией).
 func slogErrorLog(a *Agent) *log.Logger { //nolint:forbidigo // http.Server.ErrorLog требует *log.Logger, обёртка над slog
 	return slog.NewLogLogger(a.logger.Handler(), slog.LevelWarn)
+}
+
+// tgKind — вид запроса для статистики: long-poll и скачивание файлов не входят в upstream RTT.
+type tgKind struct{ longPoll, file bool }
+
+func (k tgKind) skipRTT() bool { return k.longPoll || k.file }
+
+// classifyTG разбирает путь /tg/<bot-путь> (экранированный); нераспознанный путь — обычный запрос.
+func classifyTG(escapedPath string) tgKind {
+	rt, err := tgapi.ParsePath("/" + strings.TrimPrefix(escapedPath, tgapi.AgentTGPrefix))
+	if err != nil {
+		return tgKind{}
+	}
+	return tgKind{longPoll: !rt.IsFile && tgapi.IsLongPoll(rt.Method), file: rt.IsFile}
 }
 
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }

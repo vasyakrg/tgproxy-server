@@ -103,7 +103,12 @@ templ agentRow(r AgentRowVM, vm AgentsVM) {
 		<td class="mono">{ r.Weight }</td>
 		<td class="mono">{ r.RPS }</td>
 		<td class="mono">{ r.RTT }</td>
-		<td class="mono">{ r.Inflight }</td>
+		<td class="mono">
+			{ r.Inflight }
+			if r.InflightLP != "" {
+				<span class="muted small" title="Висящие getUpdates (long-poll), не входят в активные">{ r.InflightLP }</span>
+			}
+		</td>
 		<td class={ "mono", templ.KV("ver-stale", r.VersionStale) }>{ r.Version }</td>
 		<td class={ "mono", templ.KV("tone-warn", r.CertTone == "warn"), templ.KV("tone-err", r.CertTone == "err") }>{ r.Cert }</td>
 		<td class={ "mono", templ.KV("muted", r.SeenMuted) }>{ r.Seen }</td>

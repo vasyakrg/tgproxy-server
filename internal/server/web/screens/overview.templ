@@ -60,9 +60,20 @@ templ OverviewBody(vm OverviewVM) {
 								</td>
 								<td>@views.StatusPill(a.Status, "")</td>
 								<td class="mono">{ a.RPS }</td>
-								<td class="mono">{ a.P95 }</td>
+								<td class="mono">
+									if a.P95Hint != "" {
+										<span class="muted" title={ a.P95Hint }>{ a.P95 }</span>
+									} else {
+										{ a.P95 }
+									}
+								</td>
 								<td class="mono">{ a.Err }</td>
-								<td class="mono">{ a.Inflight }</td>
+								<td class="mono">
+									{ a.Inflight }
+									if a.InflightLP != "" {
+										<span class="muted small" title="Висящие getUpdates (long-poll), не входят в активные">{ a.InflightLP }</span>
+									}
+								</td>
 								<td class={ "mono", templ.KV("ver-stale", a.VersionStale) }>{ a.Version }</td>
 							</tr>
 						}

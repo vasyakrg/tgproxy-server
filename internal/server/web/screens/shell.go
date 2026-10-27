@@ -62,6 +62,18 @@ func fmtMs(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) + " м�
 
 func fmtInt(n int64) string { return strconv.FormatInt(n, 10) }
 
+// inflightSplit делит общий in-flight агента на «активные» и висящий long-poll (getUpdates).
+// Агент отдаёт inflight общим числом (с long-poll) и inflight_longpoll; у старого агента
+// второго поля нет → lp пустой, «активные» = общее число.
+func inflightSplit(total, longPoll int) (active, lp string) {
+	longPoll = min(max(longPoll, 0), max(total, 0))
+	active = fmtInt(int64(max(total, 0) - longPoll))
+	if longPoll > 0 {
+		lp = "lp " + fmtInt(int64(longPoll))
+	}
+	return active, lp
+}
+
 func clockIn(t time.Time, loc *time.Location, layout string) string {
 	if t.IsZero() {
 		return "—"

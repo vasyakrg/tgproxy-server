@@ -175,7 +175,8 @@ func makeAgentRow(v api.AgentView, serverVersion string, now time.Time) AgentRow
 			row.VersionStale = serverVersion != "" && ls.Version != serverVersion
 		}
 		if st.Up {
-			row.RPS, row.Inflight = fmtRPS(ls.RPS1m), fmtInt(int64(ls.Inflight))
+			row.RPS = fmtRPS(ls.RPS1m)
+			row.Inflight, row.InflightLP = inflightSplit(ls.Inflight, ls.InflightLongPoll)
 			if ls.UpstreamRTTMs > 0 {
 				row.RTT = fmtMs(ls.UpstreamRTTMs)
 			}

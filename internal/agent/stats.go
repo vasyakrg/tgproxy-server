@@ -21,8 +21,10 @@ const (
 // stats — счётчики в памяти для /_agent/status (Prometheus — в M3).
 type stats struct {
 	now      func() time.Time
-	inflight atomic.Int64
-	errs     [len(phases)]atomic.Int64
+	inflight atomic.Int64 // все запросы в полёте, включая long-poll
+	// inflightLP — подмножество inflight: висящие getUpdates (long-poll).
+	inflightLP atomic.Int64
+	errs       [len(phases)]atomic.Int64
 
 	mu      sync.Mutex
 	secs    [rpsWindow]int64
@@ -33,8 +35,11 @@ type stats struct {
 
 func newStats(now func() time.Time) *stats { return &stats{now: now} }
 
-func (s *stats) begin() {
+func (s *stats) begin(longPoll bool) {
 	s.inflight.Add(1)
+	if longPoll {
+		s.inflightLP.Add(1)
+	}
 	sec := s.now().Unix()
 	i := int(sec % rpsWindow)
 	s.mu.Lock()
@@ -45,7 +50,12 @@ func (s *stats) begin() {
 	s.mu.Unlock()
 }
 
-func (s *stats) end() { s.inflight.Add(-1) }
+func (s *stats) end(longPoll bool) {
+	s.inflight.Add(-1)
+	if longPoll {
+		s.inflightLP.Add(-1)
+	}
+}
 
 func (s *stats) recordError(phase string) {
 	for i, p := range phases {

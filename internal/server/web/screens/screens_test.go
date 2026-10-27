@@ -138,7 +138,8 @@ func seedHistory(t *testing.T, e *env) {
 	for i := range 30 {
 		ss = append(ss, store.Sample{At: t0.Add(-time.Duration(30-i) * 10 * time.Second), AgentID: history.AggregateID, OK: 100, Err: 2, RateLimited: 1, P95Ms: 180, Inflight: 7})
 	}
-	ss = append(ss, store.Sample{At: t0.Add(-20 * time.Second), AgentID: "fra-1", OK: 90, Err: 10, P95Ms: 200, Inflight: 3})
+	ss = append(ss, store.Sample{At: t0.Add(-20 * time.Second), AgentID: "fra-1", OK: 90, Err: 10, P95Ms: 200, Inflight: 3, Buckets: bucketsWith(history.NumBuckets(), 7, 100)})
+	ss = append(ss, store.Sample{At: t0.Add(-20 * time.Second), AgentID: "ams-1", OK: 3, P95Ms: 242, Buckets: bucketsWith(history.NumBuckets(), 7, 3)})
 	if err := e.st.History().Append(context.Background(), store.Res10s, ss); err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +441,8 @@ func TestGolden(t *testing.T) {
 			{Key: "rps", Label: "Запросов в секунду", Value: "341", Hint: "пик за 24 ч: 690"},
 			{Key: "err_pct", Label: "Ошибки прокси", Value: "1,4 %", Hint: "502/504 за 5 мин", Tone: "warn"},
 		},
-		Agents: []screens.AgentRow{{Name: "fra-1", Addr: "185.12.4.10:8443", Status: "up", RPS: "96", P95: "182 мс", Err: "0,2 %", Inflight: "8", Version: "v1.3.9", VersionStale: true}},
+		Agents: []screens.AgentRow{{Name: "fra-1", Addr: "185.12.4.10:8443", Status: "up", RPS: "96", P95: "182 мс", Err: "0,2 %", Inflight: "8", InflightLP: "lp 2", Version: "v1.3.9", VersionStale: true},
+			{Name: "ams-1", Addr: "91.204.8.3:8443", Status: "up", RPS: "1", P95: "—", P95Hint: "Мало данных: 3 запросов за окно, p95 считается от 20", Err: "0,0 %", Inflight: "0", Version: "v1.3.9"}},
 		Events: []screens.EventRow{{Tone: "err", Text: "ist-1 недоступен", Meta: "14:32 · agent_down"}},
 	}
 	golden(t, "overview_body", screens.OverviewBody(vm))
@@ -463,4 +465,27 @@ func TestGolden(t *testing.T) {
 	golden(t, "ban_form", screens.BanForm(screens.BanFormVM{IP: "203.0.113.9", Duration: "24h", From: "errors"}))
 	golden(t, "ban_form_errors", screens.BanForm(screens.BanFormVM{IP: "10.1.2.3", Duration: "1h", From: "bans",
 		Errors: api.FieldErrors{"ip": "Этот адрес банить нельзя: приватный адрес"}}))
+}
+
+func bucketsWith(n, idx int, count int64) []int64 {
+	b := make([]int64, n)
+	b[idx] = count
+	return b
+}
+
+func TestOverviewP95LowData(t *testing.T) {
+	e := newEnv(t)
+	seedHistory(t, e)
+	rec := httptest.NewRecorder()
+	overviewHandler(e, agentStates(), nil).ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, "200 мс") {
+		t.Fatalf("p95 при достаточных данных должен показываться")
+	}
+	if !strings.Contains(body, "Мало данных: 3 запросов") {
+		t.Fatalf("нет признака «мало данных»")
+	}
+	if strings.Contains(body, "242 мс") {
+		t.Fatal("ненадёжный p95 не должен показываться числом")
+	}
 }

@@ -10,10 +10,12 @@ import (
 )
 
 type statusResponse struct {
-	Version       string           `json:"version"`
-	Commit        string           `json:"commit"`
-	UptimeS       int64            `json:"uptime_s"`
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	UptimeS int64  `json:"uptime_s"`
+	// Inflight — все запросы в полёте (включая long-poll); InflightLP — из них висящие getUpdates.
 	Inflight      int64            `json:"inflight"`
+	InflightLP    int64            `json:"inflight_longpoll"`
 	RPS1m         float64          `json:"rps_1m"`
 	ErrorsByPhase map[string]int64 `json:"errors_by_phase"`
 	UpstreamRTTMs float64          `json:"upstream_rtt_ms"`
@@ -35,6 +37,7 @@ func (a *Agent) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		Commit:        buildinfo.Commit,
 		UptimeS:       int64(a.now().Sub(a.started).Seconds()),
 		Inflight:      a.stats.inflight.Load(),
+		InflightLP:    a.stats.inflightLP.Load(),
 		RPS1m:         a.stats.rps1m(),
 		ErrorsByPhase: a.stats.errorsByPhase(),
 		UpstreamRTTMs: a.stats.upstreamRTT(),

@@ -380,9 +380,9 @@ func TestStatusAndStats(t *testing.T) {
 func TestStatsUnit(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	s := newStats(func() time.Time { return now })
-	s.begin()
-	s.begin()
-	s.end()
+	s.begin(false)
+	s.begin(true)
+	s.end(true)
 	if s.inflight.Load() != 1 || s.rps1m() != 2.0/60 {
 		t.Fatalf("inflight=%d rps=%v", s.inflight.Load(), s.rps1m())
 	}
@@ -390,7 +390,7 @@ func TestStatsUnit(t *testing.T) {
 	if s.rps1m() != 0 {
 		t.Fatal("old buckets must expire")
 	}
-	s.begin() // перезапись бакета
+	s.begin(false) // перезапись бакета
 	s.recordError("nope")
 	s.recordError(tgapi.PhaseRead)
 	if s.errorsByPhase()[tgapi.PhaseRead] != 1 {

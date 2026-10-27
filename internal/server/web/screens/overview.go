@@ -2,6 +2,7 @@ package screens
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -128,7 +129,9 @@ type AgentRow struct {
 	Name, Addr    string
 	Status        views.Status
 	RPS, P95      string
+	P95Hint       string // не пусто — p95 ненадёжен («мало данных»), показывается приглушённо с title
 	Err, Inflight string
+	InflightLP    string // «lp N» — висящие getUpdates
 	Version       string
 	VersionStale  bool
 }
@@ -258,11 +261,11 @@ func (o *overview) agentRows(ctx context.Context, states []agents.State, now tim
 			row.VersionStale = o.ServerVersion != "" && st.Version != "" && st.Version != o.ServerVersion
 			if s.Up {
 				row.RPS = fmtRPS(st.RPS1m)
-				row.Inflight = fmtInt(int64(st.Inflight))
+				row.Inflight, row.InflightLP = inflightSplit(st.Inflight, st.InflightLongPoll)
 			}
 		}
 		if s.Up {
-			row.P95, row.Err = o.agentWindow(ctx, s.Agent.ID, now)
+			row.P95, row.P95Hint, row.Err = o.agentWindow(ctx, s.Agent.ID, now)
 		}
 		rows = append(rows, row)
 	}
@@ -270,29 +273,35 @@ func (o *overview) agentRows(ctx context.Context, states []agents.State, now tim
 }
 
 // agentWindow — p95 (последняя точка) и доля ошибок за последние 5 минут по истории агента.
-func (o *overview) agentWindow(ctx context.Context, id string, now time.Time) (p95, errPct string) {
+func (o *overview) agentWindow(ctx context.Context, id string, now time.Time) (p95, p95Hint, errPct string) {
 	series, err := o.Stats.Timeseries(ctx, history.Range1h, id, now.Add(-agentWindow))
 	if err != nil {
 		o.Log.WarnContext(ctx, "overview: agent series", "agent", id, "err", err)
-		return "—", "—"
+		return "—", "", "—"
 	}
 	if len(series.Points) == 0 {
-		return "—", "—"
+		return "—", "", "—"
 	}
 	var total, errs float64
+	var n int64
 	for _, p := range series.Points {
 		total += p.OKRPS + p.ErrRPS + p.R429RPS
 		errs += p.ErrRPS
+		n += p.P95N
 	}
 	last := series.Points[len(series.Points)-1]
 	p95 = "—"
 	if last.P95Ms > 0 {
 		p95 = fmtMs(last.P95Ms)
 	}
-	if total == 0 {
-		return p95, "0,0 %"
+	if n < history.MinP95Samples {
+		p95 = "—"
+		p95Hint = fmt.Sprintf("Мало данных: %d запросов за окно, p95 считается от %d", n, history.MinP95Samples)
 	}
-	return p95, fmtPct(errs * 100 / total)
+	if total == 0 {
+		return p95, p95Hint, "0,0 %"
+	}
+	return p95, p95Hint, fmtPct(errs * 100 / total)
 }
 
 func eventTone(e Event) string {

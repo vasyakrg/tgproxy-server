@@ -53,12 +53,15 @@ func (r Range) spec() (dur time.Duration, res store.Resolution, step time.Durati
 
 // Point — точка графика (JSON для uPlot; t — unix-секунды начала интервала).
 type Point struct {
-	T        int64   `json:"t"`
-	OKRPS    float64 `json:"ok_rps"`
-	ErrRPS   float64 `json:"err_rps"`
-	R429RPS  float64 `json:"r429_rps"`
-	P95Ms    float64 `json:"p95_ms"`
-	Inflight int     `json:"inflight"`
+	T       int64   `json:"t"`
+	OKRPS   float64 `json:"ok_rps"`
+	ErrRPS  float64 `json:"err_rps"`
+	R429RPS float64 `json:"r429_rps"`
+	P95Ms   float64 `json:"p95_ms"`
+	// P95N — число наблюдений латентности (без long-poll) в окне: при P95N < MinP95Samples
+	// p95 ненадёжен.
+	P95N     int64 `json:"p95_n"`
+	Inflight int   `json:"inflight"`
 	// DeniedRPS — отказы доступа в секунду (все причины); DeniedBy — разбивка по причинам (для тултипа).
 	DeniedRPS float64            `json:"denied_rps"`
 	DeniedBy  map[string]float64 `json:"denied_by,omitempty"`
@@ -148,7 +151,7 @@ func (q *Query) Timeseries(ctx context.Context, rng Range, agentID string, since
 		}
 		s.Points = append(s.Points, Point{
 			T: r.At.Unix(), OKRPS: float64(r.OK) / sec, ErrRPS: float64(r.Err) / sec,
-			R429RPS: float64(r.RateLimited) / sec, P95Ms: r.P95Ms, Inflight: r.Inflight,
+			R429RPS: float64(r.RateLimited) / sec, P95Ms: r.P95Ms, P95N: BucketTotal(r.Buckets), Inflight: r.Inflight,
 			DeniedRPS: float64(sumDenied(r.Denied)) / sec, DeniedBy: ratePerSec(r.Denied, sec),
 		})
 	}
@@ -203,7 +206,7 @@ func (q *Query) openTail(ctx context.Context, id string, now time.Time, closed m
 		span = max(span, Step10s.Seconds())
 		out = append(out, Point{
 			T: ts.Unix(), OKRPS: float64(g.OK) / span, ErrRPS: float64(g.Err) / span,
-			R429RPS: float64(g.RateLimited) / span, P95Ms: P95(g.Buckets), Inflight: g.Inflight,
+			R429RPS: float64(g.RateLimited) / span, P95Ms: P95(g.Buckets), P95N: BucketTotal(g.Buckets), Inflight: g.Inflight,
 			DeniedRPS: float64(sumDenied(g.Denied)) / span, DeniedBy: ratePerSec(g.Denied, span),
 		})
 	}

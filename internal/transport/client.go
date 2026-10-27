@@ -37,15 +37,18 @@ type AgentTransport interface {
 
 // AgentStatus — ответ GET /_agent/status.
 type AgentStatus struct {
-	Version       string            `json:"version"`
-	Commit        string            `json:"commit"`
-	UptimeS       int64             `json:"uptime_s"`
-	Inflight      int               `json:"inflight"`
-	RPS1m         float64           `json:"rps_1m"`
-	ErrorsByPhase map[string]uint64 `json:"errors_by_phase"`
-	UpstreamRTTMs float64           `json:"upstream_rtt_ms"`
-	Draining      bool              `json:"draining"`
-	CertNotAfter  time.Time         `json:"cert_not_after"`
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	UptimeS int64  `json:"uptime_s"`
+	// Inflight — все запросы в полёте, включая long-poll; InflightLongPoll — из них висящие
+	// getUpdates (у старых агентов поля нет → 0, т.е. «активные» = Inflight).
+	Inflight         int               `json:"inflight"`
+	InflightLongPoll int               `json:"inflight_longpoll,omitempty"`
+	RPS1m            float64           `json:"rps_1m"`
+	ErrorsByPhase    map[string]uint64 `json:"errors_by_phase"`
+	UpstreamRTTMs    float64           `json:"upstream_rtt_ms"`
+	Draining         bool              `json:"draining"`
+	CertNotAfter     time.Time         `json:"cert_not_after"`
 	// Capabilities — возможности агента ("mtproto/1"); у старых агентов поля нет.
 	Capabilities []string `json:"capabilities,omitempty"`
 	// MTProto — состояние релея MTProto; nil, если агент его не публикует.

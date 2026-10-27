@@ -522,3 +522,15 @@ func TestAgentWeightFlow(t *testing.T) {
 		t.Errorf("без htmx должно быть отказано")
 	}
 }
+
+func TestAgentsInflightLongPollSplit(t *testing.T) {
+	a := newAgFx(t, agOpts{})
+	a.fleet.states[0].LastStatus.Inflight = 3
+	a.fleet.states[0].LastStatus.InflightLongPoll = 2
+	_, body, _ := a.call("GET", "/agents", nil, false)
+	// 3 всего, из них 2 long-poll → активных 1
+	contains(t, "inflight", body, "lp 2", "Висящие getUpdates")
+	if strings.Contains(body, "lp 0") {
+		t.Error("lp 0 показываться не должен")
+	}
+}

@@ -56,7 +56,8 @@ type AgentRowVM struct {
 	Status         views.Status
 	Weight         string
 	RPS, RTT       string
-	Inflight       string
+	Inflight       string // активные запросы (без long-poll)
+	InflightLP     string // «lp N» — висящие getUpdates; пусто, если нет
 	Version        string
 	VersionStale   bool
 	Cert           string
