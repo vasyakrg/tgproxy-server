@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
 	"github.com/vasyakrg/tgproxy-server/internal/server/enroll"
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/api"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
@@ -215,5 +216,72 @@ func TestEnrollmentsAPIAuthAndCSRF(t *testing.T) {
 	au, _ := f.st.Audit().List(context.Background(), store.AuditQuery{})
 	if len(au) != 1 || au[0].Action != api.AuditEnrollRevoke || au[0].Actor != "alice" || au[0].IP != "203.0.113.7" || au[0].Target != id {
 		t.Fatalf("audit: %+v", au)
+	}
+}
+
+type fakeAgentSrc []agents.State
+
+func (f fakeAgentSrc) List() []agents.State { return f }
+func (f fakeAgentSrc) Get(id string) (agents.State, bool) {
+	for _, s := range f {
+		if s.Agent.ID == id {
+			return s, true
+		}
+	}
+	return agents.State{}, false
+}
+
+func tokHash(id string) []byte { h := sha256.Sum256([]byte("st-" + id)); return h[:] }
+
+func TestEnrollStatusMatching(t *testing.T) {
+	st := memtest.New()
+	ctx := context.Background()
+	repo := st.Enrollments()
+	mk := func(id, name string, ttl time.Duration) {
+		t.Helper()
+		if err := repo.Create(ctx, store.Enrollment{ID: id, TokenHash: tokHash(id), Name: name, Weight: 100, CreatedAt: t0, ExpiresAt: t0.Add(ttl)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("a1", "waw-2", time.Hour)
+	if _, err := repo.Consume(ctx, tokHash("a1"), t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	reverse := func(id string, up bool, created time.Time) agents.State {
+		return agents.State{Agent: store.Agent{ID: id, Name: "waw-2", Mode: store.ModeReverse, CreatedAt: created}, Up: up}
+	}
+	src := fakeAgentSrc{reverse("waw-2-old", true, t0.Add(-24*time.Hour))} // агент, созданный до токена, не засчитывается
+	svc := api.NewEnrollService(api.EnrollConfig{Enrollments: repo, Agents: src, Now: func() time.Time { return t0.Add(2 * time.Minute) }})
+	got, err := svc.Status(ctx, "a1")
+	if err != nil || got.State != api.EnrollEnrolled || got.AgentID != "" {
+		t.Fatalf("старый агент: %+v %v", got, err)
+	}
+	svc = api.NewEnrollService(api.EnrollConfig{Enrollments: repo, Agents: append(src, reverse("waw-2", false, t0.Add(time.Minute))), Now: func() time.Time { return t0 }})
+	if got, _ = svc.Status(ctx, "a1"); got.State != api.EnrollEnrolled || got.AgentID != "waw-2" {
+		t.Fatalf("down: %+v", got)
+	}
+	svc = api.NewEnrollService(api.EnrollConfig{Enrollments: repo, Agents: append(src, reverse("waw-2", true, t0.Add(time.Minute))), Now: func() time.Time { return t0 }})
+	if got, _ = svc.Status(ctx, "a1"); got.State != api.EnrollConnected || got.AgentID != "waw-2" {
+		t.Fatalf("up: %+v", got)
+	}
+	// без реестра дальше enrolled не идём
+	svc = api.NewEnrollService(api.EnrollConfig{Enrollments: repo, Now: func() time.Time { return t0 }})
+	if got, _ = svc.Status(ctx, "a1"); got.State != api.EnrollEnrolled {
+		t.Fatalf("без реестра: %+v", got)
+	}
+	// waiting / expired / revoked
+	mk("b2", "x", time.Hour)
+	if got, _ = svc.Status(ctx, "b2"); got.State != api.EnrollWaiting || got.Left != time.Hour {
+		t.Fatalf("waiting: %+v", got)
+	}
+	svc = api.NewEnrollService(api.EnrollConfig{Enrollments: repo, Now: func() time.Time { return t0.Add(2 * time.Hour) }})
+	if got, _ = svc.Status(ctx, "b2"); got.State != api.EnrollExpired || got.Left != 0 {
+		t.Fatalf("expired: %+v", got)
+	}
+	if got, _ = svc.Status(ctx, "zz"); got.State != api.EnrollRevoked {
+		t.Fatalf("revoked: %+v", got)
+	}
+	if _, err = api.NewEnrollService(api.EnrollConfig{}).Status(ctx, "a1"); !errors.Is(err, api.ErrNotConfigured) {
+		t.Fatalf("not configured: %v", err)
 	}
 }

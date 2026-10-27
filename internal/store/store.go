@@ -144,6 +144,9 @@ type EnrollmentRepo interface {
 	// (причина намеренно не различается).
 	Consume(ctx context.Context, tokenHash []byte, now time.Time) (Enrollment, error)
 	ListPending(ctx context.Context, now time.Time) ([]Enrollment, error)
+	// Get возвращает токен по ID (в том числе использованный и просроченный, пока его не убрала
+	// очистка): ErrNotFound, если записи нет (отозван или удалён как просроченный).
+	Get(ctx context.Context, id string) (Enrollment, error)
 	// Delete отзывает неиспользованный токен по ID: ErrNotFound, если записи нет или токен уже использован.
 	Delete(ctx context.Context, id string) error
 	DeleteExpired(ctx context.Context, now time.Time) (int, error)

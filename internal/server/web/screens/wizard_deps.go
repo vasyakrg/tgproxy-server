@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"net/url"
 	"strconv"
 	"time"
 
@@ -71,6 +72,44 @@ type NATIssuedVM struct {
 	// CmdlineInstalled — короткая команда, если tgproxy уже установлен на хосте агента.
 	CmdlineInstalled string
 	Expires          string
+	Status           EnrollStatusVM // начальное состояние блока отслеживания (waiting)
+}
+
+// EnrollStatusVM — блок «Ожидаем подключения агента». Секретов не содержит по построению.
+type EnrollStatusVM struct {
+	ID, State, Name string
+	AgentID         string
+	Left            string // «42 мин» — сколько ещё действует неиспользованный токен
+}
+
+func (v EnrollStatusVM) polling() bool {
+	return v.State == api.EnrollWaiting || v.State == api.EnrollEnrolled
+}
+
+func (v EnrollStatusVM) tone() string {
+	switch v.State {
+	case api.EnrollConnected:
+		return "alert-ok"
+	case api.EnrollExpired, api.EnrollRevoked:
+		return "alert-warn"
+	}
+	return ""
+}
+
+func (v EnrollStatusVM) url(goFlag string) string {
+	u := "/agents/enroll/" + v.ID + "/status"
+	if goFlag != "" {
+		u += "?go=1"
+	}
+	return u
+}
+
+// agentsURL — страница агентов с подсветкой нового агента.
+func (v EnrollStatusVM) agentsURL() string {
+	if v.AgentID == "" {
+		return "/agents"
+	}
+	return "/agents?highlight=" + url.QueryEscape(v.AgentID)
 }
 
 // PendingRowVM — ожидающий токен.

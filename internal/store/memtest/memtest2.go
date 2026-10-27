@@ -479,6 +479,17 @@ func (r enrollRepo) ListPending(_ context.Context, now time.Time) ([]store.Enrol
 	return out, nil
 }
 
+func (r enrollRepo) Get(_ context.Context, id string) (store.Enrollment, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	e, ok := r.s.enrolls[id]
+	if !ok {
+		return store.Enrollment{}, store.ErrNotFound
+	}
+	e.TokenHash = clone(e.TokenHash)
+	return e, nil
+}
+
 func (r enrollRepo) Delete(_ context.Context, id string) error {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()

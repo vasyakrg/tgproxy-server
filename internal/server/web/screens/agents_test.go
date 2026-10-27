@@ -198,7 +198,7 @@ func newAgFx(t *testing.T, o agOpts) *agFx {
 	}
 	if !o.noEnroll {
 		a.issuer = &agIssuer{repo: f.st.Enrollments()}
-		deps.Enroll = api.NewEnrollService(api.EnrollConfig{Issuer: a.issuer, Enrollments: f.st.Enrollments(), Audit: f.st.Audit(), Logger: lg, Now: func() time.Time { return agNow }})
+		deps.Enroll = api.NewEnrollService(api.EnrollConfig{Issuer: a.issuer, Enrollments: f.st.Enrollments(), Agents: a.fleet, Audit: f.st.Audit(), Logger: lg, Now: func() time.Time { return agNow }})
 	}
 	if o.emergency {
 		a.emerg = &agEmergency{}

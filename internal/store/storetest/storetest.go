@@ -822,6 +822,13 @@ func testEnrollments(t *testing.T, s store.Store) {
 		t.Fatalf("revoked token consumed: %v", err)
 	}
 
+	// Get: использованный и неизвестный
+	if g, err := r.Get(ctx, "e1"); err != nil || g.UsedAt == nil || g.ID != "e1" {
+		t.Fatalf("get used: %+v %v", g, err)
+	}
+	_, err = r.Get(ctx, "e5")
+	is(t, err, store.ErrNotFound)
+
 	if d := n(r.DeleteExpired(ctx, now)); d != 1 {
 		t.Fatalf("deleted %d", d)
 	}

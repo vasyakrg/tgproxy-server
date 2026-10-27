@@ -252,6 +252,7 @@ templ natIssued(v NATIssuedVM) {
 				</div>
 			</div>
 		}
+		@NATStatus(v.Status)
 		<div class="form-actions">
 			<a class="btn" href="/agents/new?mode=nat">Выпустить ещё</a>
 			@views.IconButton("Отозвать токен: "+v.Name, "trash", true, templ.Attributes{
@@ -259,6 +260,53 @@ templ natIssued(v NATIssuedVM) {
 			})
 		</div>
 	</div>
+}
+
+// NATStatus — отслеживание подключения агента по выпущенному токену. Пока агент не подключился
+// (waiting/enrolled), блок сам опрашивает сервер и заменяет себя; в конечных состояниях hx-trigger нет —
+// опрос прекращается. При connected через 2 с отложенный запрос ?go=1 получает HX-Redirect на /agents.
+templ NATStatus(v EnrollStatusVM) {
+	<div
+		id="nat-status"
+		role="status"
+		aria-live="polite"
+		class={ "alert", "nat-status", v.tone() }
+		if v.polling() {
+			hx-get={ v.url("") }
+			hx-trigger="every 3s"
+			hx-swap="outerHTML"
+			hx-history="false"
+		}
+	>
+		switch v.State {
+			case "waiting":
+				<span class="spinner" aria-hidden="true"></span>
+				<span>Ожидаем подключения агента «{ v.Name }»…</span>
+				<span class="muted small">Токен действителен ещё { v.Left }</span>
+			case "enrolled":
+				<span class="spinner" aria-hidden="true"></span>
+				<span>Агент «{ v.Name }» зарегистрирован, ждём первое соединение…</span>
+			case "connected":
+				@views.Icon("check", 18)
+				<span>Агент «{ v.Name }» подключился</span>
+				<a href={ templ.SafeURL(v.agentsURL()) }>К списку агентов</a>
+				<span hx-get={ v.url("1") } hx-trigger="load delay:2s" hx-swap="none"></span>
+			case "expired":
+				@views.Icon("alert", 18)
+				<span>Токен для «{ v.Name }» истёк, агент не подключился.</span>
+				@natNewToken()
+			default:
+				@views.Icon("alert", 18)
+				<span>Токен отозван или удалён.</span>
+				@natNewToken()
+		}
+	</div>
+}
+
+templ natNewToken() {
+	<a class="icon-btn" href="/agents/new?mode=nat" aria-label="Выпустить новый токен" title="Выпустить новый токен">
+		@views.Icon("refresh", 18)
+	</a>
 }
 
 // NATPending — ожидающие токены; обновляется опросом. С oob=true заменяет список на странице.

@@ -86,7 +86,7 @@ templ AgentsBody(vm AgentsVM, oob bool) {
 }
 
 templ agentRow(r AgentRowVM, vm AgentsVM) {
-	<tr>
+	<tr class={ templ.KV("row-new", r.New) }>
 		<td>
 			<div class="cell-stack">
 				<span class="cell-name">{ r.Name }</span>

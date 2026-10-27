@@ -45,6 +45,7 @@ type agentsScreen struct {
 //	GET  /agents/new                     мастер (?mode=ssh|nat)
 //	POST /agents/new/ssh[/confirm]       ветка SSH
 //	POST /agents/new/nat                 ветка NAT: выпуск токена
+//	GET  /agents/enroll/{id}/status      состояние токена (опрос «Ожидаем подключения агента»)
 //	GET  /agents/new/nat/pending         список ожидающих токенов (опрос)
 //	GET|POST /agents/enroll/{id}/revoke  отзыв токена
 //	GET  /agents/new/jobs/{job}           шаг «Установка» (SSE)
@@ -219,6 +220,11 @@ func (s *agentsScreen) page(w http.ResponseWriter, r *http.Request) {
 	}
 	q, status := s.filters(r)
 	vm := s.rows(r.Context(), q, status)
+	if hl := r.URL.Query().Get("highlight"); api.ValidAgentID(hl) && !isFragment(r) {
+		for i := range vm.Rows {
+			vm.Rows[i].New = vm.Rows[i].ID == hl
+		}
+	}
 	if isFragment(r) {
 		renderFragment(w, r, http.StatusOK, AgentsBody(vm, false)) //nolint:contextcheck // templ
 		return

@@ -544,6 +544,16 @@ html.sb-collapsed { --sb-w: var(--sb-w-collapsed); }
 }
 .wiz-fp { background: var(--sidebar-bg); border: 1px solid #2D4A47; border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; }
 .wiz-fp-val { font-size: 16px; word-break: break-all; }
+.nat-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.nat-status .icon-btn { margin-left: auto; }
+.spinner {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent); animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+/* агент, только что подключённый через мастер: плавно гаснущая подсветка строки */
+.table tbody tr.row-new { animation: row-new 4s ease-out; }
+@keyframes row-new { from { background: #12261F; box-shadow: inset 3px 0 0 var(--ok); } to { background: transparent; box-shadow: inset 3px 0 0 transparent; } }
 .wiz-sep { border-top: 1px solid var(--border); }
 .wiz-cmd { margin: 0; white-space: pre-wrap; line-height: 1.6; }
 

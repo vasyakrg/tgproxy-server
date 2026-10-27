@@ -316,7 +316,7 @@ func (s *Server) mountAgents(rt *web.Router, a *auth.Auth, cfg *config.ServerCon
 		}
 		if p.enroll != nil {
 			deps.Enroll = api.NewEnrollService(api.EnrollConfig{
-				Issuer: p.enroll, Enrollments: s.st.Enrollments(), Audit: s.st.Audit(), Logger: s.logger,
+				Issuer: p.enroll, Enrollments: s.st.Enrollments(), Agents: s.reg, Audit: s.st.Audit(), Logger: s.logger,
 			})
 		}
 	}

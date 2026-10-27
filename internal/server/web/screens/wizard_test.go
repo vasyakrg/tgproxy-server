@@ -2,6 +2,8 @@ package screens_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/vasyakrg/tgproxy-server/internal/server/enroll"
 	"github.com/vasyakrg/tgproxy-server/internal/server/installer"
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/screens"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
 
@@ -419,5 +422,200 @@ func TestAgentsSummaryPlurals(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("n=%d: нет %q", n, want)
 		}
+	}
+}
+
+// ---------- отслеживание подключения агента ----------
+
+const natStatusID = "0000000000000001"
+
+// issueNAT выпускает токен waw-2 и гасит его (как это делает POST /enroll), если used.
+func (a *agFx) issueNAT(t *testing.T, used bool) string {
+	t.Helper()
+	code, body, _ := a.call("POST", "/agents/new/nat", url.Values{"name": {"waw-2"}, "weight": {"80"}, "ttl": {"30"}}, true)
+	if code != 200 {
+		t.Fatalf("issue: %d %s", code, body)
+	}
+	if used {
+		h := sha256.Sum256([]byte(fmt.Sprintf("%s-%d", wToken, a.issuer.n)))
+		if _, err := a.st.Enrollments().Consume(context.Background(), h[:], agNow); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return body
+}
+
+func (a *agFx) status(path string) (int, string, http.Header) { return a.call("GET", path, nil, true) }
+
+func TestNATIssuedShowsStatusBlock(t *testing.T) {
+	a := newAgFx(t, agOpts{})
+	body := a.issueNAT(t, false)
+	contains(t, "issued", body, `id="nat-status"`, `hx-get="/agents/enroll/`+natStatusID+`/status"`, `hx-trigger="every 3s"`,
+		`hx-swap="outerHTML"`, `class="spinner"`, "Ожидаем подключения агента «waw-2»", "Токен действителен ещё 30 мин")
+	assertStrictCSP(t, body)
+}
+
+func TestEnrollStatusLifecycle(t *testing.T) {
+	a := newAgFx(t, agOpts{})
+	issued := a.issueNAT(t, false)
+	path := "/agents/enroll/" + natStatusID + "/status"
+
+	// waiting
+	code, body, hdr := a.status(path)
+	if code != 200 || hdr.Get("Cache-Control") != "no-store" {
+		t.Fatalf("waiting: %d %v", code, hdr)
+	}
+	contains(t, "waiting", body, `hx-trigger="every 3s"`, "Ожидаем подключения агента «waw-2»", "ещё 30 мин")
+	if hdr.Get("HX-Redirect") != "" {
+		t.Error("редирект при waiting")
+	}
+	waiting := body
+
+	// токен использован, агента в реестре ещё нет → enrolled, опрос продолжается
+	h := sha256.Sum256([]byte(fmt.Sprintf("%s-%d", wToken, a.issuer.n)))
+	if _, err := a.st.Enrollments().Consume(context.Background(), h[:], agNow); err != nil {
+		t.Fatal(err)
+	}
+	_, body, hdr = a.status(path)
+	contains(t, "enrolled", body, `hx-trigger="every 3s"`, "зарегистрирован, ждём первое соединение")
+	if strings.Contains(hdr.Get("HX-Trigger"), "toast") {
+		t.Error("тост до подключения")
+	}
+
+	// агент зарегистрирован, но не в работе → всё ещё enrolled
+	a.fleet.states = append(a.fleet.states, agState("waw-2", store.ModeReverse, false, "v1.4.1", 90))
+	_, body, _ = a.status(path)
+	contains(t, "enrolled+agent", body, `hx-trigger="every 3s"`, "ждём первое соединение")
+
+	// агент up → connected: опроса нет, отложенный переход, тост
+	a.fleet.states[len(a.fleet.states)-1].Up = true
+	code, body, hdr = a.status(path)
+	if code != 200 {
+		t.Fatalf("connected: %d", code)
+	}
+	contains(t, "connected", body, "Агент «waw-2» подключился", `hx-get="/agents/enroll/`+natStatusID+`/status?go=1"`, `hx-trigger="load delay:2s"`,
+		`href="/agents?highlight=waw-2"`)
+	if strings.Contains(body, "every 3s") {
+		t.Errorf("опрос не остановлен: %s", body)
+	}
+	var trig struct {
+		Toast struct{ Kind, Message string }
+	}
+	if err := json.Unmarshal([]byte(hdr.Get("HX-Trigger")), &trig); err != nil || trig.Toast.Kind != "ok" || trig.Toast.Message != "Агент «waw-2» подключился" {
+		t.Errorf("тост: %q %v", hdr.Get("HX-Trigger"), err)
+	}
+	assertStrictCSP(t, body)
+
+	// отложенный запрос → HX-Redirect на /agents с подсветкой
+	code, _, hdr = a.status(path + "?go=1")
+	if code != 200 || hdr.Get("HX-Redirect") != "/agents?highlight=waw-2" {
+		t.Errorf("go=1: %d %v", code, hdr)
+	}
+	// go=1 без подключения не перенаправляет
+	a.fleet.states[len(a.fleet.states)-1].Up = false
+	if _, _, hdr = a.status(path + "?go=1"); hdr.Get("HX-Redirect") != "" {
+		t.Errorf("редирект без подключения: %v", hdr)
+	}
+	a.fleet.states[len(a.fleet.states)-1].Up = true
+
+	// агент с другим именем или режимом dial не считается подключённым по этому токену
+	a.fleet.states[len(a.fleet.states)-1].Agent.Mode = store.ModeDial
+	if _, body, _ = a.status(path); strings.Contains(body, "подключился") {
+		t.Error("dial-агент засчитан")
+	}
+
+	// отсутствие утечек: токена, хеша, секретов нет нигде
+	a.leakCheck(t, issued, waiting, body)
+	for _, b := range []string{waiting, body} {
+		if strings.Contains(b, wToken) || strings.Contains(b, fmt.Sprintf("%x", h)) {
+			t.Errorf("утечка токена/хеша: %s", b)
+		}
+	}
+}
+
+func TestEnrollStatusExpiredAndRevoked(t *testing.T) {
+	a := newAgFx(t, agOpts{})
+	ctx := context.Background()
+	// просроченный неиспользованный
+	if err := a.st.Enrollments().Create(ctx, store.Enrollment{ID: "ab", TokenHash: []byte("0123456789abcdef0123456789abcdef"), Name: "old-1", Weight: 100,
+		CreatedAt: agNow.Add(-2 * time.Hour), ExpiresAt: agNow.Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	code, body, _ := a.status("/agents/enroll/ab/status")
+	if code != 200 {
+		t.Fatalf("%d", code)
+	}
+	contains(t, "expired", body, "Токен для «old-1» истёк", `href="/agents/new?mode=nat"`, `aria-label="Выпустить новый токен"`)
+	if strings.Contains(body, "every 3s") || strings.Contains(body, "hx-get") {
+		t.Errorf("опрос expired не остановлен: %s", body)
+	}
+	// отозван
+	a.issueNAT(t, false)
+	if c, _, _ := a.call("POST", "/agents/enroll/"+natStatusID+"/revoke", url.Values{"confirm": {"yes"}}, true); c != 200 {
+		t.Fatalf("revoke %d", c)
+	}
+	_, body, _ = a.status("/agents/enroll/" + natStatusID + "/status")
+	contains(t, "revoked", body, "Токен отозван", `href="/agents/new?mode=nat"`, `aria-label="Выпустить новый токен"`)
+	if strings.Contains(body, "every 3s") || strings.Contains(body, "waw-2") {
+		t.Errorf("revoked: %s", body)
+	}
+	// неизвестный id → revoked, а не 404 (запись могла быть убрана очисткой)
+	if _, body, _ = a.status("/agents/enroll/ff/status"); !strings.Contains(body, "Токен отозван") {
+		t.Errorf("unknown: %s", body)
+	}
+}
+
+func TestEnrollStatusAccess(t *testing.T) {
+	a := newAgFx(t, agOpts{})
+	a.issueNAT(t, false)
+	path := "/agents/enroll/" + natStatusID + "/status"
+	// без сессии — на логин
+	if w := a.do(req{method: "GET", path: path, hdr: hx}); w.Code != http.StatusUnauthorized || w.Header().Get("HX-Redirect") != "/login" {
+		t.Errorf("без сессии: %d %v", w.Code, w.Header())
+	}
+	if w := a.do(req{method: "GET", path: path}); w.Code != http.StatusFound || w.Header().Get("Location") != "/login" {
+		t.Errorf("без сессии (не htmx): %d", w.Code)
+	}
+	// не htmx — на мастер
+	if c, _, h := a.call("GET", path, nil, false); c != http.StatusSeeOther || h.Get("Location") != "/agents/new?mode=nat" {
+		t.Errorf("не htmx: %d %v", c, h)
+	}
+	// кривой id
+	if c, _, _ := a.status("/agents/enroll/NOT-HEX/status"); c != 404 {
+		t.Errorf("bad id: %d", c)
+	}
+	// NAT не настроен — ничего не раскрываем
+	b := newAgFx(t, agOpts{noEnroll: true})
+	if c, body, _ := b.status(path); c != 200 || strings.TrimSpace(body) != "" {
+		t.Errorf("не настроено: %d %q", c, body)
+	}
+}
+
+func TestEnrollStatusGolden(t *testing.T) {
+	for name, vm := range map[string]screens.EnrollStatusVM{
+		"enroll_status_waiting":   {ID: natStatusID, State: "waiting", Name: "waw-2", Left: "42 мин"},
+		"enroll_status_enrolled":  {ID: natStatusID, State: "enrolled", Name: "waw-2", AgentID: "waw-2"},
+		"enroll_status_connected": {ID: natStatusID, State: "connected", Name: "waw-2", AgentID: "waw-2"},
+		"enroll_status_expired":   {ID: natStatusID, State: "expired", Name: "waw-2"},
+		"enroll_status_revoked":   {ID: natStatusID, State: "revoked"},
+	} {
+		golden(t, name, screens.NATStatus(vm))
+	}
+}
+
+func TestAgentsHighlight(t *testing.T) {
+	a := newAgFx(t, agOpts{})
+	_, body, _ := a.call("GET", "/agents?highlight=waw-1", nil, false)
+	if n := strings.Count(body, `class="row-new"`); n != 1 {
+		t.Errorf("подсвеченных строк: %d", n)
+	}
+	for _, q := range []string{"/agents", "/agents?highlight=nope", "/agents?highlight=%22%3E%3Cx"} {
+		if _, body, _ = a.call("GET", q, nil, false); strings.Contains(body, "row-new") {
+			t.Errorf("%s: лишняя подсветка", q)
+		}
+	}
+	// опрос таблицы (фрагмент) не подсвечивает
+	if _, body, _ = a.call("GET", "/agents?highlight=waw-1", nil, true); strings.Contains(body, "row-new") {
+		t.Error("подсветка во фрагменте опроса")
 	}
 }

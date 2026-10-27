@@ -79,6 +79,10 @@ func (r enrollmentRepo) ListPending(ctx context.Context, now time.Time) ([]store
 	return out, mapErr(rows.Err())
 }
 
+func (r enrollmentRepo) Get(ctx context.Context, id string) (store.Enrollment, error) {
+	return scanEnroll(r.s.r.QueryRowContext(ctx, `SELECT `+enrollCols+` FROM enrollments WHERE id = ?`, id))
+}
+
 func (r enrollmentRepo) DeleteExpired(ctx context.Context, now time.Time) (int, error) {
 	return r.s.execCount(ctx, `DELETE FROM enrollments WHERE expires_at <= ?`, ms(now))
 }

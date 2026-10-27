@@ -85,6 +85,8 @@ IP Geolocation by [DB-IP](https://db-ip.com) — база «IP to Country Lite»
 
   Требования: на сервере в кэше загрузок (`update.downloads_dir`, UI «Система → Обновления») должен лежать **подписанный релиз той же версии, что и сервер** (`tgproxy_<версия>_amd64.deb` + `checksums.txt` + `.minisig`); иначе токен не выдаётся — «загрузите релиз X в Система → Обновления». Хост gateway входит в SAN серверного сертификата — после обновления сервера до этой версии перезапустите его, чтобы сертификат перевыпустился.
 
+  После выпуска токена экран сам отслеживает подключение (опрос htmx каждые 3 с, пока страница открыта): «Ожидаем подключения» → «зарегистрирован» → «подключился» (тост и через 2 с переход на «Агенты» с подсветкой строки); истёкший или отозванный токен останавливает опрос и предлагает выпустить новый.
+
   Утёкший или ненужный токен отзывается до использования: в UI «Агенты → Агент за NAT → Ожидающие подключения» (иконка «Отозвать», подтверждение модалкой), через `DELETE /api/v1/enrollments/{id}?confirm=yes` или CLI `tgproxy agents enroll-token -c /etc/tgproxy/server.yaml --list` / `--revoke <id|имя>`. После отзыва `/enroll` и `/enroll/package/*` отвечают `401`, действие пишется в аудит (`enrollment.revoke`). `tgproxy agent enroll` в конфиге `reverse`-агента не пишет `listen.api` (входящих нет); для перехода в `dial`/`both` адрес `listen.api` задаётся вручную.
 
   Если tgproxy на хосте уже установлен, там же показана короткая команда (`printf %s '<токен>' | sudo tgproxy agent enroll --token-stdin --server https://<сервер>:8444 --ca-fingerprint SHA256:...`; в CLI — `agents enroll-token --installed`, пакет в кэше не нужен), затем `systemctl enable --now tgproxy-agent`. Отпечаток CA: `tgproxy pki fingerprint -c /etc/tgproxy/server.yaml`.

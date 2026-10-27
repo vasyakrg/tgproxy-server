@@ -23,6 +23,7 @@ func (s *agentsScreen) mountWizard(m func(string, http.HandlerFunc)) {
 	m("POST /agents/new/ssh/confirm", s.sshConfirm)
 	m("POST /agents/new/nat", s.natIssue)
 	m("GET /agents/new/nat/pending", s.natPending)
+	m("GET /agents/enroll/{id}/status", s.enrollStatus)
 	m("GET /agents/enroll/{id}/revoke", s.revokeConfirm)
 	m("POST /agents/enroll/{id}/revoke", s.revoke)
 	m("GET /agents/new/jobs/{job}", s.installPage)
@@ -261,7 +262,8 @@ func (s *agentsScreen) natIssue(w http.ResponseWriter, r *http.Request) {
 		renderFragment(w, r, http.StatusUnprocessableEntity, NATBody(f, nil, s.pendingList(r), true)) //nolint:contextcheck // templ
 		return
 	}
-	issued := NATIssuedVM{ID: is.ID, Name: f.Name, Cmdline: is.Cmdline, CmdlineInstalled: is.CmdlineInstalled, Expires: is.ExpiresAt.Local().Format("15:04")}
+	issued := NATIssuedVM{ID: is.ID, Name: f.Name, Cmdline: is.Cmdline, CmdlineInstalled: is.CmdlineInstalled, Expires: is.ExpiresAt.Local().Format("15:04"),
+		Status: EnrollStatusVM{ID: is.ID, State: api.EnrollWaiting, Name: f.Name, Left: leftRu(is.ExpiresAt.Sub(s.now()))}}
 	toast(w, "ok", "Токен для «"+f.Name+"» выпущен")
 	renderFragment(w, r, http.StatusOK, NATBody(f, &issued, s.pendingList(r), true)) //nolint:contextcheck // templ
 }
@@ -271,6 +273,34 @@ func (s *agentsScreen) natPending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	renderFragment(w, r, http.StatusOK, NATPending(s.pendingList(r), false)) //nolint:contextcheck // templ
+}
+
+// enrollStatus — фрагмент опроса «Ожидаем подключения агента». ?go=1 (отложенный запрос после
+// успеха) отвечает HX-Redirect на /agents с подсветкой нового агента.
+func (s *agentsScreen) enrollStatus(w http.ResponseWriter, r *http.Request) {
+	if !htmxOnlyTo(w, r, "/agents/new?mode=nat") || !s.d.Enroll.Configured() {
+		return
+	}
+	id, ok := s.enrollID(w, r)
+	if !ok {
+		return
+	}
+	st, err := s.d.Enroll.Status(r.Context(), id)
+	if err != nil {
+		s.log.WarnContext(r.Context(), "wizard: enrollment status", "err", redact.Error(err))
+		http.Error(w, "Внутренняя ошибка", http.StatusInternalServerError)
+		return
+	}
+	vm := EnrollStatusVM{ID: id, State: st.State, Name: st.Name, AgentID: st.AgentID, Left: leftRu(st.Left)}
+	if st.State == api.EnrollConnected {
+		if r.URL.Query().Get("go") == "1" {
+			w.Header().Set("HX-Redirect", vm.agentsURL())
+			renderFragment(w, r, http.StatusOK, templ.NopComponent) //nolint:contextcheck // templ
+			return
+		}
+		toast(w, "ok", "Агент «"+st.Name+"» подключился")
+	}
+	renderFragment(w, r, http.StatusOK, NATStatus(vm)) //nolint:contextcheck // templ
 }
 
 func (s *agentsScreen) enrollID(w http.ResponseWriter, r *http.Request) (string, bool) {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
 	"github.com/vasyakrg/tgproxy-server/internal/server/enroll"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
@@ -35,9 +36,12 @@ type EnrollIssuer interface {
 type EnrollConfig struct {
 	Issuer      EnrollIssuer
 	Enrollments store.EnrollmentRepo
-	Audit       store.AuditRepo
-	Logger      *slog.Logger
-	Now         func() time.Time
+	// Agents — реестр агентов: по нему определяется, что агент по токену подключился (Status).
+	// nil — дальше «зарегистрирован» статус не идёт.
+	Agents AgentSource
+	Audit  store.AuditRepo
+	Logger *slog.Logger
+	Now    func() time.Time
 }
 
 // EnrollService — выпуск, список и отзыв токенов подключения агентов за NAT.
@@ -141,6 +145,77 @@ func (s *EnrollService) List(ctx context.Context) ([]EnrollmentItem, error) {
 		out = append(out, EnrollmentItem{ID: e.ID, Name: e.Name, Weight: e.Weight, CreatedBy: e.CreatedBy, CreatedAt: e.CreatedAt, ExpiresAt: e.ExpiresAt})
 	}
 	return out, nil
+}
+
+// Состояния токена подключения (Status).
+const (
+	EnrollWaiting   = "waiting"   // токен не использован и не истёк
+	EnrollEnrolled  = "enrolled"  // токен использован, агент зарегистрирован, соединения ещё нет
+	EnrollConnected = "connected" // агент зарегистрирован и в работе
+	EnrollExpired   = "expired"   // истёк неиспользованным
+	EnrollRevoked   = "revoked"   // записи нет: отозван (или убран очисткой после истечения)
+)
+
+// EnrollStatus — состояние токена для отслеживания подключения. Ни токена, ни хеша здесь нет.
+type EnrollStatus struct {
+	State     string
+	Name      string // имя из токена (пусто для revoked)
+	AgentID   string // id агента (enrolled и connected)
+	ExpiresAt time.Time
+	Left      time.Duration // сколько жить неиспользованному токену (waiting); иначе 0
+}
+
+// Status определяет состояние токена по его id: ErrNotConfigured, если хранилище не подключено.
+func (s *EnrollService) Status(ctx context.Context, id string) (EnrollStatus, error) {
+	if !s.storeConfigured() {
+		return EnrollStatus{}, ErrNotConfigured
+	}
+	e, err := s.cfg.Enrollments.Get(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return EnrollStatus{State: EnrollRevoked}, nil
+	}
+	if err != nil {
+		return EnrollStatus{}, err
+	}
+	st := EnrollStatus{Name: e.Name, ExpiresAt: e.ExpiresAt}
+	if e.UsedAt == nil {
+		now := s.now()
+		if !e.ExpiresAt.After(now) {
+			st.State = EnrollExpired
+			return st, nil
+		}
+		st.State, st.Left = EnrollWaiting, e.ExpiresAt.Sub(now)
+		return st, nil
+	}
+	// Токен использован: агент создаётся сразу после гашения, id — slug имени (возможно с суффиксом),
+	// поэтому ищем по имени среди агентов, созданных не раньше выпуска токена.
+	st.State = EnrollEnrolled
+	if a, ok := s.enrolledAgent(e); ok {
+		st.AgentID = a.Agent.ID
+		if a.Up {
+			st.State = EnrollConnected
+		}
+	}
+	return st, nil
+}
+
+// enrolledAgent находит агента, созданного по токену; при нескольких предпочитает работающего.
+func (s *EnrollService) enrolledAgent(e store.Enrollment) (agents.State, bool) {
+	if s.cfg.Agents == nil {
+		return agents.State{}, false
+	}
+	since := e.CreatedAt.Truncate(time.Second)
+	var best agents.State
+	found := false
+	for _, a := range s.cfg.Agents.List() {
+		if a.Agent.Name != e.Name || a.Agent.Mode != store.ModeReverse || (!a.Agent.CreatedAt.IsZero() && a.Agent.CreatedAt.Before(since)) {
+			continue
+		}
+		if !found || (a.Up && !best.Up) {
+			best, found = a, true
+		}
+	}
+	return best, found
 }
 
 // Revoke отзывает неиспользованный токен. confirm обязателен.
