@@ -155,6 +155,113 @@ ReadWritePaths=/data/tgproxy/agent
 
 Для сервера то же с `tgproxy-update-server.{path,service}`, `--component server`, `--work-dir /run/tgproxy-update-server`. После правки: `systemctl daemon-reload && systemctl restart tgproxy-update-agent.path`. Пустая строка перед новым значением обязательна (сбрасывает дефолт).
 
+## MTProto
+
+Прокси для клиентов Telegram (FakeTLS, beta): клиент подключается по ссылке `tg://proxy?…`, трафик уходит в Telegram через агентов. Выключен по умолчанию. Дизайн и контракты — [mtproto.md](mtproto.md).
+
+### Включение
+
+1. KEK обязателен: `pki.kek_file` в `server.yaml` (секреты MTProto шифруются им; без KEK `mtproto.enabled: true` не пройдёт валидацию).
+2. `tls.mode` — `files` или `acme`. `tls.mode: off` с `listen: shared` несовместим: невалидные соединения должны получить настоящий TLS сервера, а MTProto без TLS на входе не поднимается.
+3. `fronting_domain` — домен, который есть в SAN входного сертификата (для `acme` — в `tls.domains`; wildcard `*.example.com` покрывает одну метку). Он же попадает в секрет и в SNI клиентов. Не совпал — сервер не стартует; после перевыпуска сертификата без этого домена — предупреждение в логе, а клиенты получают обычный TLS-сайт.
+4. Конфиг (остальные поля и дефолты — [mtproto.md](mtproto.md) §10):
+   ```yaml
+   mtproto:
+     enabled: true
+     listen: shared                 # либо "203.0.113.10:443" — отдельный листенер
+     fronting_domain: tgproxy.example.com
+     public_host: ""                # хост в ссылке; пусто — хост server.public_base_url
+   ```
+5. `tgproxy config validate --mode server -c /etc/tgproxy/server.yaml`, затем `systemctl restart tgproxy-server`. `enabled`, `listen` и `fronting_domain` применяются только рестартом; `max_conns`, `max_conns_per_ip`, `max_pending_handshakes`, `handshake_timeout` — по `SIGHUP`/`systemctl reload`; остальное (`idle_timeout`, `time_skew`, `replay_cache`, `agent_pool.*`) — рестартом.
+6. Агенты: на `agent.yaml` `mtproto.enabled: true` (по умолчанию), версия с поддержкой MTProto. Сервер берёт в пул только агентов с capability `mtproto/1` (чип «MTProto» в UI «Агенты»); старые агенты продолжают обслуживать Bot API.
+
+**Shared или dedicated.** `listen: shared` — MTProto на том же порту, что прокси ботов (`listen.proxy`): мало настроек, но блокировка IP по признакам MTProto заденет и Bot API. Для прода рекомендуем `listen: "<отдельный IP>:443"` (`host:port` не должен совпадать с `listen.proxy/admin/metrics/agent_gateway`): на нём невалидные соединения получают 404 с тем же сертификатом, а блокировка этого IP не трогает ботов. Укажите `public_host`/`public_port`, если адрес в ссылке отличается от `public_base_url`.
+
+### Подготовка хостов
+
+- **NTP (обязательно на сервере).** Рукопожатие FakeTLS содержит время клиента; допустимое расхождение — `mtproto.time_skew` (по умолчанию 2 мин, 30 с…10 мин). Часы сервера ушли — валидные клиенты не проходят и видят обычный сайт: растёт `tgp_mtproto_fallthrough_total`, отдельной причины нет. `chronyc tracking` или `timedatectl` (`System clock synchronized: yes`). При включении сервер пишет в лог напоминание о синхронизации.
+- **sysctl** (пакет их не меняет):
+  ```sh
+  # агент: много исходящих соединений к DC
+  sysctl -w net.ipv4.ip_local_port_range="10000 65000"
+  sysctl -w net.ipv4.tcp_tw_reuse=1
+  # сервер: очередь приёма и быстрое обнаружение мёртвых клиентов
+  sysctl -w net.core.somaxconn=4096
+  sysctl -w net.ipv4.tcp_keepalive_time=60
+  ```
+  Постоянно — в `/etc/sysctl.d/90-tgproxy.conf`.
+- **LimitNOFILE.** Юниты пакета: сервер `1048576`, агент `262144`. Сервер при старте и по `SIGHUP` предупреждает (`mtproto: fd-бюджет не хватает`), если `max_conns × 2 + 16384` превышает лимит процесса; при своём drop-in юнита либо поднимите `LimitNOFILE`, либо уменьшите `mtproto.max_conns`.
+- **Фаервол.** Сервер: входящий TCP на порт MTProto (shared — порт `listen.proxy`, dedicated — порт `mtproto.listen`). Агент: исходящий TCP 443 к сетям Telegram (список вшит в бинарь, `tgapi.TelegramPrefixes`; адреса вне него агент не откроет, даже если разрешит фаервол):
+  ```
+  149.154.160.0/20   91.108.4.0/22     91.108.8.0/22     91.108.12.0/22
+  91.108.16.0/22     91.108.20.0/22    91.108.56.0/22    95.161.64.0/20
+  185.76.151.0/24    91.105.192.0/23
+  2001:b28:f23d::/48 2001:b28:f23f::/48 2001:67c:4e8::/48
+  2001:b28:f23c::/48 2a0a:f280::/32
+  ```
+  IPv6 используется только при `mtproto.ipv6: true` на агенте. Для `reverse`-агентов на сервере по-прежнему нужен открытый `:8444`.
+
+### Секреты: создание, ссылка, ротация, отзыв
+
+Источник правды — таблица `mtproto_secrets` (ключ зашифрован KEK, наружу — только префикс из 4 hex-символов). Сервер перечитывает её по версии каждые ~2 с, поэтому изменения из UI/CLI/API действуют без рестарта; секрет можно подготовить и при `mtproto.enabled: false`.
+
+- **UI**: вкладка «MTProto» — создать, ротировать, отозвать, показать ссылку и QR. Ссылка при создании/ротации показывается **один раз**; повторно — «Ссылка» с вводом свежего TOTP-кода (окно 5 мин), действие пишется в аудит `mtproto_secret.reveal`.
+- **CLI** (напрямую в БД, нужен KEK; от владельца данных):
+  ```sh
+  sudo runuser -u tgproxy -- tgproxy mtproto secret add --name team-a --cidr 203.0.113.0/24 --max-conns 200 -c /etc/tgproxy/server.yaml
+  sudo runuser -u tgproxy -- tgproxy mtproto secret list -c /etc/tgproxy/server.yaml
+  sudo runuser -u tgproxy -- tgproxy mtproto secret link team-a -c /etc/tgproxy/server.yaml
+  sudo runuser -u tgproxy -- tgproxy mtproto secret rotate team-a --grace 1h -c /etc/tgproxy/server.yaml
+  sudo runuser -u tgproxy -- tgproxy mtproto secret delete team-a --yes -c /etc/tgproxy/server.yaml
+  ```
+  `--cidr` (повторяемый) ограничивает сети клиентов секрета, `--max-conns` — число одновременных соединений (0 — без лимита). `link` CLI TOTP не спрашивает (доступ к хосту, БД и KEK уже достаточен), но пишет `mtproto_secret.reveal` в аудит.
+- **API**: `GET|POST /api/v1/mtproto/secrets`, `PATCH|DELETE /api/v1/mtproto/secrets/{id}` (отзыв — `?confirm=yes`), `POST …/{id}/rotate` (`{"grace":"1h"}`), `GET …/{id}/link` (свежий TOTP, иначе `401 totp_required`). Те же права, что у остальных `/api/v1`.
+- **Ротация.** Создаётся новый ключ с тем же именем, CIDR и `max_conns`; старый получает `grace_until` (`--grace`, до 720h; по умолчанию 0 — перестаёт работать сразу) и переименовывается в `<имя>~<id>`. Раздайте новую ссылку, дождитесь окончания grace — старые соединения рвутся сами.
+- **Отзыв** необратим: активные соединения секрета закрываются в течение ~2 с. Утёкшую ссылку отзывайте сразу.
+- Ключ не пишется ни в логи, ни в метрики, ни в аудит. Метка `secret` в метриках — имя секрета; не кладите в имя ничего чувствительного.
+
+### Диагностика
+
+1. **Проба с клиентской стороны.** Полный путь (FakeTLS → obfuscated2 → запрос к DC → ответ `resPQ`):
+   ```sh
+   printf %s 'tg://proxy?server=…&port=443&secret=ee…' | tgproxy mtproto probe --link-stdin --dc 2
+   ```
+   Код возврата 0 — прокси работает целиком. `--handshake-only` проверяет только FakeTLS (DC и агенты не нужны). Передавайте ссылку через `--link-stdin`: ключ в аргументах виден в `ps`. Ссылка не попадает в сообщения об ошибках.
+2. **Матрица агент × DC.** UI «MTProto» (или `GET /api/v1/mtproto/stats`): по каждому агенту — `up`, RTT и число стримов по DC 1…5 и 203. Агент в матрице без DC или с `capable: false` — MTProto на нём выключен или версия старая. DC `up=false` исключает агента только для этого DC.
+3. **Метрики** (`/metrics`, подробнее — [mtproto.md](mtproto.md) §13):
+   - `tgp_mtproto_client_conns{listener}` — активные клиенты; `tgp_mtproto_connections_total{secret,result}` — итоги (`ok` — дошли до DC, `closed` — закрыто до DC, `replay`, `conn_limit`);
+   - `tgp_mtproto_fallthrough_total` — соединения, отданные TLS-сайту (чужие зонды, клиенты с чужим секретом/временем, а также валидные клиенты, когда нет живых секретов или capable-агентов);
+   - `tgp_mtproto_handshake_failures_total{reason}` (`timeout`, `bad_record`, `replay`, `conn_limit`);
+   - `tgp_mtproto_streams{agent,dc}`, `tgp_mtproto_dc_up{agent,dc}`, `tgp_mtproto_dc_rtt_seconds{agent,dc}`, `tgp_mtproto_upstream_errors_total{agent,dc,phase}` (`dial`, `timeout`, `no_agent`, `unknown_dc`, `other`; `agent="none"` — агента для DC не нашлось), `tgp_mtproto_bytes_total{direction,agent}`;
+   - на агенте: `tgp_agent_mtproto_streams{dc}`, `tgp_agent_mtproto_dial_errors_total{dc,kind}`, `tgp_agent_mtproto_bytes_total{direction}`.
+4. **Алерты** (Telegram админам): `mtproto_dc_unreachable` — DC недоступен со всех capable-агентов дольше минуты (проверьте фаервол агентов и маршрут до сетей Telegram); `mtproto_no_capable_agents` — MTProto включён, но нет живых агентов с поддержкой (версия, `mtproto.enabled` на агентах, статус агентов); `mtproto_overload` — больше 90% `mtproto.max_conns` дольше 5 минут (поднимайте лимит вместе с `LimitNOFILE` или добавьте листенер/сервер).
+5. **Причины отказов** в «Ошибках» (фаза `mtproto`, фильтр «Причина»; секрета в записи нет): `mtproto_replay` — повтор ClientHello (ретрансляция перехваченного рукопожатия; **учитывается автобаном**, см. «Баны и автобан»); `mtproto_conn_limit` — превышены `max_conns`, `max_conns_per_ip` (64 по умолчанию; за NAT много клиентов с одного IP), `max_pending_handshakes` или `max_conns` секрета (в автобан не идёт). `mtproto_bad_secret` в фильтре есть, но сервер её не выставляет.
+6. **Типичные случаи.**
+   - Клиент «подключается» и видит обычный сайт/не работает, `fallthrough_total` растёт: секрет не тот или отозван; `fronting_domain`≠домен ссылки; часы клиента или сервера вне `time_skew`; нет capable-агентов (смотрите `mtproto_no_capable_agents`); клиент не из CIDR секрета.
+   - `connections_total{result="closed"}` растёт, `ok` нет: клиент прошёл FakeTLS, но до DC не дошёл — смотрите `upstream_errors_total` и матрицу агент × DC.
+   - `upstream_errors_total{phase="timeout"|"dial"}` у одного агента: агент не достаёт DC (фаервол, маршрут); логи агента `mtproto dial failed`/`mtproto dial timeout`.
+   - `phase="no_agent"`: для DC нет подходящего агента (все `down`, draining, без проб — первая проба идёт при старте агента и далее раз в `dc_probe_interval`).
+   - Обрыв всех соединений агента при перезапуске/обновлении агента — штатно: клиент Telegram переподключается сам.
+   - Журнал соединений (`mtproto_sessions`: время, IP, секрет, DC, байты) хранится 30 суток; поле агента и причина закрытия в нём не заполняются.
+
+### Признаки блокировки и переход на dedicated IP
+
+Признаки: падает `rate(tgp_mtproto_connections_total{result="ok"})` и число клиентов при росте `tgp_mtproto_fallthrough_total` или `handshake_failures_total{reason="timeout"}`; жалобы пользователей из конкретных сетей при рабочем `mtproto probe` с вашей стороны; блокировка порта ботов при shared (Bot API ботов страдает вместе с MTProto).
+
+Порядок действий:
+1. Проверьте, что это не NTP и не сертификат: `chronyc tracking`, UI «Система → Сертификат входа», `mtproto probe` с внешнего хоста.
+2. Если IP сервера под блокировкой, выделите отдельный IP под MTProto и переведите на него `listen: "<IP>:443"`, при необходимости `public_host`/`public_port` (рестарт). Сертификат и `fronting_domain` должны остаться валидными для имени, которое резолвится в этот IP. Разошлите новые ссылки (адрес в ссылке меняется — `secret` остаётся тем же, но клиентам нужна ссылка с новым `server`/`port`: `tgproxy mtproto secret link`).
+3. Прод-рекомендация — dedicated с самого начала: блокировка IP MTProto-прокси не затрагивает прокси ботов.
+
+Ограничение: ServerHello FakeTLS (библиотека mtg) отличается по отпечатку от `crypto/tls`; активный зонд видит настоящий сайт, пассивный DPI отличить может. Критерии перехода на собственную реализацию — [mtproto.md](mtproto.md) §15.
+
+### Reverse-агенты (за NAT)
+
+- MTProto идёт по отдельному классу соединений агент → сервер с ALPN `tgproxy-mtproto/1` (тот же `:8444`, клиентский сертификат обязателен), независимо от Bot API: медиа не блокирует запросы ботов. Отдельных портов и настроек сертификатов не нужно.
+- Размер пула MTProto-соединений агента динамический: старт с `mtproto.reverse_conns_min` агента (2); сервер просит больше, когда на соединении ≥ `mtproto.agent_pool.max_streams_per_conn` (500) стримов, и сжимает при простое (не чаще раза в 60 с); запрос — `PUT /_agent/mtproto/pool`. Границы: агент `reverse_conns_min`…`reverse_conns_max` (по умолчанию 2…16), сервер `agent_pool.max_reverse_conns` (16) — держите их согласованными, иначе сервер будет вытеснять лишние соединения. Ключ `agent_pool.reverse_conns` на сервере сейчас не влияет на размер пула.
+- Совместимость: агент без capability `mtproto/1` в MTProto-пул не попадает, но Bot API обслуживает как раньше. Новый reverse-агент при старом сервере (нет ALPN) не ломает подключение для ботов и раз в 10 минут тихо повторяет MTProto-класс.
+- Проверка: серверная `tgp_agent_reverse_conns{agent}` считает только Bot API-класс; MTProto-стримы агента — `tgp_mtproto_streams{agent,dc}` и матрица в UI. В журнале сервера `gateway: reverse channel attached … class=mtproto`.
+
 ## Troubleshooting
 
 Журналы: `journalctl -u tgproxy-server -o cat` (JSON), `journalctl -u tgproxy-agent -o cat`, `journalctl -u tgproxy-update-server -u tgproxy-update-agent`.

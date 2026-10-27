@@ -281,6 +281,7 @@ func newMTProbeCmd() *cobra.Command {
 		fromStdin bool
 		dc        int
 		timeout   time.Duration
+		hsOnly    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "probe",
@@ -309,6 +310,16 @@ func newMTProbeCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
 			addr := net.JoinHostPort(host, strconv.Itoa(port))
+			if hsOnly {
+				// Только FakeTLS (ServerHello с верным HMAC): DC и агенты не нужны — для smoke без сети к Telegram.
+				c, derr := probe.Dial(ctx, addr, key, domain, dc)
+				if derr != nil {
+					return fmt.Errorf("проба %s не прошла: %w", addr, redact(derr, raw, key[:]))
+				}
+				_ = c.Close()
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "OK %s: FakeTLS-рукопожатие пройдено (DC не проверялся)\n", addr)
+				return err
+			}
 			res, err := probe.RunDC(ctx, addr, key, domain, dc)
 			if err != nil {
 				return fmt.Errorf("проба %s не прошла: %w", addr, redact(err, raw, key[:]))
@@ -324,6 +335,7 @@ func newMTProbeCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&fromStdin, "link-stdin", false, "читать ссылку из stdin")
 	cmd.Flags().IntVar(&dc, "dc", probe.DefaultDC, "номер DC")
 	cmd.Flags().DurationVar(&timeout, "timeout", 10*time.Second, "общий таймаут пробы")
+	cmd.Flags().BoolVar(&hsOnly, "handshake-only", false, "только FakeTLS-рукопожатие, без обмена с DC (код 0 — ServerHello верен)")
 	return cmd
 }
 

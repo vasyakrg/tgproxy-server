@@ -163,9 +163,10 @@ func (s *Server) wireWeb(cfg *config.ServerConfig) error {
 	screens.MountAccess(accessRouter{rt, refresh}, screens.AccessDeps{
 		Auth: a, Service: svc, Env: env, Bots: s.obs.top, ClientIP: s.checker.ClientIP, Logger: s.logger,
 	})
+	mtLive, mountMTProto := s.mountMTProto(rt, a, kek, protected)
 	rt.SetOverview(protected(screens.NewOverview(screens.OverviewDeps{
 		Shell: rt, Stats: s.obs.hq, Agents: s.reg, Events: outboxEvents{s.st.Outbox()}, Live: liveInflight{s.obs.inflight},
-		ServerVersion: buildinfo.Version, Log: s.logger,
+		MTProto: mtLive, ServerVersion: buildinfo.Version, Log: s.logger,
 	})))
 	rt.Mount("GET /errors", protected(screens.NewErrors(screens.ErrorsDeps{
 		Shell: rt, Source: s.obs.hq, Agents: s.reg, Geo: s.geo, Log: s.logger,
@@ -187,6 +188,7 @@ func (s *Server) wireWeb(cfg *config.ServerConfig) error {
 	(&api.StatsAPI{Stats: s.obs.hq, Agents: s.reg, Live: liveInflight{s.obs.inflight}, Log: s.logger}).Routes(apiMux, protected)
 	(&api.ErrorsAPI{Source: s.obs.hq, Log: s.logger}).Routes(apiMux, protected)
 	(&api.BansAPI{Service: bansSvc, ClientIP: s.checker.ClientIP, Country: s.geo.LookupString}).Routes(muxMounter{apiMux}, api.Wrap(protected))
+	mountMTProto(apiMux)
 	agentsAPI(apiMux, protected)
 	sysAPI(apiMux, protected)
 	rt.Mount("/api/v1/", apiMux)

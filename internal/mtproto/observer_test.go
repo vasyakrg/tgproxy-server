@@ -109,3 +109,20 @@ func TestMultiObserver(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsObserverActive(t *testing.T) {
+	o := NewMetricsObserver(&recMR{}, fixedNames{1: "alice"})
+	ip := netip.MustParseAddr("203.0.113.9")
+	o.Start(1, "a", ip)
+	o.Start(1, "b", ip)
+	o.Start(2, "c", ip)
+	if o.Active(1) != 2 || o.Active(2) != 1 || o.Active(3) != 0 {
+		t.Fatalf("active = %d %d %d", o.Active(1), o.Active(2), o.Active(3))
+	}
+	o.Finish(1, "a")
+	o.Finish(1, "a") // повторный Finish не уменьшает
+	o.Finish(2, "c")
+	if o.Active(1) != 1 || o.Active(2) != 0 || len(o.active) != 1 {
+		t.Fatalf("active after finish = %d %d %v", o.Active(1), o.Active(2), o.active)
+	}
+}

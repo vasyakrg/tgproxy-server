@@ -46,13 +46,14 @@ type MetricsObserver struct {
 	names SecretNamer
 	now   func() time.Time
 
-	mu   sync.Mutex
-	live map[obsKey]*obsSession
+	mu     sync.Mutex
+	live   map[obsKey]*obsSession
+	active map[int64]int // активные соединения по id секрета
 }
 
 // NewMetricsObserver создаёт Observer метрик. names может быть nil (метка "unknown").
 func NewMetricsObserver(rec MetricsRecorder, names SecretNamer) *MetricsObserver {
-	return &MetricsObserver{rec: rec, names: names, now: time.Now, live: make(map[obsKey]*obsSession)}
+	return &MetricsObserver{rec: rec, names: names, now: time.Now, live: make(map[obsKey]*obsSession), active: make(map[int64]int)}
 }
 
 func (o *MetricsObserver) name(id int64) string {
@@ -67,7 +68,11 @@ func (o *MetricsObserver) name(id int64) string {
 // Start — Observer.
 func (o *MetricsObserver) Start(secretID int64, streamID string, _ netip.Addr) {
 	o.mu.Lock()
-	o.live[obsKey{secretID, streamID}] = &obsSession{started: o.now()}
+	k := obsKey{secretID, streamID}
+	if _, dup := o.live[k]; !dup {
+		o.active[secretID]++
+	}
+	o.live[k] = &obsSession{started: o.now()}
 	o.mu.Unlock()
 }
 
@@ -95,6 +100,11 @@ func (o *MetricsObserver) Finish(secretID int64, streamID string) {
 	o.mu.Lock()
 	s := o.live[k]
 	delete(o.live, k)
+	if s != nil {
+		if o.active[secretID]--; o.active[secretID] <= 0 {
+			delete(o.active, secretID)
+		}
+	}
 	o.mu.Unlock()
 	if s == nil {
 		return
@@ -103,6 +113,13 @@ func (o *MetricsObserver) Finish(secretID int64, streamID string) {
 		o.rec.MTProtoConnection(o.name(secretID), "closed")
 	}
 	o.rec.MTProtoSession(o.now().Sub(s.started))
+}
+
+// Active возвращает число активных соединений секрета с данным id.
+func (o *MetricsObserver) Active(secretID int64) int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.active[secretID]
 }
 
 // Reject учитывает отказ рукопожатия. reason — причина mux (conn_limit,

@@ -99,14 +99,29 @@ IP Geolocation by [DB-IP](https://db-ip.com) — база «IP to Country Lite»
 | server | `127.0.0.1:8090` | Web-UI, `/api/v1`, `/healthz`, `/readyz` (наружу — через reverse proxy) |
 | server | `127.0.0.1:9090` | `/metrics` |
 | server | `:8444` | `agent_gateway`: reverse-соединения агентов (mTLS), `/enroll`, раздача пакетов |
+| server | `mtproto.listen` (по умолчанию `shared` — порт `listen.proxy`) | MTProto-прокси для клиентов Telegram (FakeTLS), только при `mtproto.enabled`; отдельный порт — режим dedicated |
 | agent | `:8443` | mTLS: `/tg/*`, `/_agent/*` (только для `dial`) |
 | agent | `127.0.0.1:9443` | `/metrics` |
 
-Для `reverse` на агенте входящих портов не нужно; на сервере должен быть открыт `:8444` из сетей агентов.
+Для `reverse` на агенте входящих портов не нужно; на сервере должен быть открыт `:8444` из сетей агентов. Агентам для MTProto нужен исходящий TCP 443 к сетям Telegram.
+
+## MTProto для клиентов Telegram (beta)
+
+Те же агенты умеют проксировать обычные клиенты Telegram: пользователь открывает ссылку `tg://proxy?…` с FakeTLS-секретом (`ee…`), сервер принимает соединение и ведёт его к дата-центрам Telegram через агента. Невалидные соединения (зонды, чужие секреты) получают обычный TLS-сайт с настоящим сертификатом. По умолчанию выключено.
+
+```yaml
+# server.yaml: нужны pki.kek_file и tls.mode files|acme
+mtproto:
+  enabled: true
+  listen: shared                       # или "203.0.113.10:443" — отдельный IP (рекомендуется для прода)
+  fronting_domain: tgproxy.example.com # домен из сертификата входа
+```
+
+Секреты и ссылки — UI «MTProto» либо `tgproxy mtproto secret add|list|link|rotate|delete`; проверка — `tgproxy mtproto probe`. Ограничения beta: нет ad-tag/спонсорского канала, ServerHello FakeTLS отличается по отпечатку от `crypto/tls`. Подготовка хостов (NTP, sysctl, фаервол), диагностика, ротация, переход на dedicated IP — [docs/operations.md](docs/operations.md) («MTProto»); дизайн — [docs/mtproto.md](docs/mtproto.md).
 
 ## Метрики
 
-Префикс `tgp_`, `bot_id` в метках нет. `/metrics` на не-loopback адресе требует `metrics.bearer_file` (Bearer-токен, `openssl rand -hex 24 > файл`, права 0640 `root:tgproxy`). Метрики агентов сервер отдаёт федеративно: `/api/v1/agents/{id}/metrics`. Список — [docs/architecture.md](docs/architecture.md) §10.
+Префикс `tgp_`, `bot_id` в метках нет. `/metrics` на не-loopback адресе требует `metrics.bearer_file` (Bearer-токен, `openssl rand -hex 24 > файл`, права 0640 `root:tgproxy`). Метрики агентов сервер отдаёт федеративно: `/api/v1/agents/{id}/metrics`. Список — [docs/architecture.md](docs/architecture.md) §10 (MTProto — `tgp_mtproto_*`, [docs/mtproto.md](docs/mtproto.md) §13).
 
 ## Обновления
 
@@ -117,7 +132,7 @@ IP Geolocation by [DB-IP](https://db-ip.com) — база «IP to Country Lite»
 
 ## Эксплуатация
 
-[docs/operations.md](docs/operations.md): бэкап и восстановление, потеря KEK, ротация ключей и сертификатов, lockout, troubleshooting.
+[docs/operations.md](docs/operations.md): бэкап и восстановление, потеря KEK, ротация ключей и сертификатов, lockout, MTProto, troubleshooting.
 
 ## Разработка и локальный запуск (macOS)
 
@@ -132,5 +147,6 @@ make dev-setup && make run-server     # + make run-agent в соседнем т�
 
 - [docs/architecture.md](docs/architecture.md) — архитектура (источник правды)
 - [docs/operations.md](docs/operations.md) — эксплуатация
+- [docs/mtproto.md](docs/mtproto.md) — MTProto-прокси для клиентов Telegram
 - [docs/release.md](docs/release.md) — релизы и ключ подписи
 - [docs/plan.md](docs/plan.md) — план реализации по вехам

@@ -76,6 +76,7 @@ func newMTEnv(t *testing.T, o mtOpts) *mtEnv {
 			c.TLS = config.IngressTLS{Mode: config.TLSModeFiles, CertFile: cf, KeyFile: kf}
 			c.MTProto.Enabled = true
 			c.MTProto.FrontingDomain = mtDomain
+			c.MTProto.PublicPort = 4443 // порт в ссылках API (листенер стенда — :0)
 			c.MTProto.MaxConnsPerIP = perIP
 			if o.banThresh > 0 {
 				c.Ban.Threshold = o.banThresh

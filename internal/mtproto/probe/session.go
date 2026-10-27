@@ -63,6 +63,17 @@ func (c *Conn) Exchange(timeout time.Duration) error {
 	return nil
 }
 
+// WritePacket отправляет один пакет (длина + payload) в obfuscated2-потоке.
+// Вместе с ReadPacket допускает по одной горутине на запись и на чтение
+// (конвейерный обмен для нагрузочных тестов); дедлайны — на вызывающем (SetDeadline).
+func (c *Conn) WritePacket(p []byte) error { return c.s.writePacket(p) }
+
+// ReadPacket читает один пакет (см. WritePacket).
+func (c *Conn) ReadPacket() ([]byte, error) { return c.s.readPacket() }
+
+// SetDeadline задаёт дедлайн чтения и записи соединения.
+func (c *Conn) SetDeadline(t time.Time) error { return c.conn.SetDeadline(t) }
+
 // Close закрывает соединение.
 func (c *Conn) Close() error { return c.conn.Close() }
 

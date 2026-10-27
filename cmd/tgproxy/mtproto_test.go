@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -227,3 +230,71 @@ func TestRedact(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// fakeTLSServer отвечает на ClientHello корректным ServerHello (HMAC по ключу) и закрывает соединение.
+func fakeTLSServer(t *testing.T, key [16]byte) int {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		hdr := make([]byte, 5)
+		if _, err := io.ReadFull(c, hdr); err != nil {
+			return
+		}
+		body := make([]byte, int(hdr[3])<<8|int(hdr[4]))
+		if _, err := io.ReadFull(c, body); err != nil {
+			return
+		}
+		clientRandom := body[6:38]
+		rec1 := append([]byte{0x16, 3, 3, 0, 46, 2, 0, 0, 42, 3, 3}, make([]byte, 40)...)
+		rec2 := []byte{0x14, 3, 3, 0, 1, 1}
+		rec3 := append([]byte{0x17, 3, 3, 0, 8}, make([]byte, 8)...)
+		all := append(append(append([]byte{}, rec1...), rec2...), rec3...)
+		mac := hmac.New(sha256.New, key[:])
+		mac.Write(clientRandom)
+		mac.Write(all)
+		copy(rec1[11:43], mac.Sum(nil))
+		_, _ = c.Write(append(append(rec1, rec2...), rec3...))
+		// ждём obfuscated2-инициализацию клиента и закрываем (DC нет)
+		_, _ = io.Copy(io.Discard, io.LimitReader(c, 1024))
+	}()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+func TestMTProtoProbeHandshakeOnly(t *testing.T) {
+	var k [16]byte
+	for i := range k {
+		k[i] = byte(0x10 + i)
+	}
+	port := fakeTLSServer(t, k)
+	tg, _ := link.Build("127.0.0.1", port, k, "tg.example.com")
+	out, err := run(t, "mtproto", "probe", "--link", tg, "--handshake-only", "--timeout", "3s")
+	if err != nil {
+		t.Fatalf("handshake-only must pass: %v out=%q", err, out)
+	}
+	if strings.Contains(out, "tg://") || strings.Contains(out, "secret=") {
+		t.Fatalf("leak: %q", out)
+	}
+	// без флага DC не отвечает -> ошибка
+	port = fakeTLSServer(t, k)
+	tg, _ = link.Build("127.0.0.1", port, k, "tg.example.com")
+	if _, err := run(t, "mtproto", "probe", "--link", tg, "--timeout", "2s"); err == nil {
+		t.Fatal("full probe must fail without DC")
+	}
+	// неверный ключ -> handshake-only падает
+	port = fakeTLSServer(t, k)
+	k2 := k
+	k2[0] ^= 0xff
+	bad, _ := link.Build("127.0.0.1", port, k2, "tg.example.com")
+	if _, err := run(t, "mtproto", "probe", "--link", bad, "--handshake-only", "--timeout", "2s"); err == nil {
+		t.Fatal("wrong key must fail")
+	}
+}

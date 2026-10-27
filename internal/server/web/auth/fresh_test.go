@@ -31,6 +31,22 @@ func TestLoginMarksFresh(t *testing.T) {
 	}
 }
 
+func TestPasswordOnlyLoginNotFresh(t *testing.T) {
+	e := newEnv(t, true)
+	ctx := context.Background()
+	pend, _, err := e.a.PasswordStep(ctx, "bob", "bob-pw", ip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := e.a.TOTPStep(ctx, pend, "", ip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.a.TOTPFresh(ctx, s, FreshTOTPWindow) {
+		t.Fatal("вход без TOTP не должен давать свежесть")
+	}
+}
+
 func TestFreshExpires(t *testing.T) {
 	e := newEnv(t, false)
 	s, _ := loginSession(t, e)

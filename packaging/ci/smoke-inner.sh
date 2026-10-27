@@ -8,7 +8,7 @@ fail() { echo "FAIL: $*" >&2; systemctl status tgproxy-server --no-pager -l >&2 
 
 wait_healthz() {
   for _ in $(seq 1 30); do
-    curl -fsS http://127.0.0.1:8090/healthz >/dev/null 2>&1 && return 0
+    curl -fsSk https://127.0.0.1:8090/healthz >/dev/null 2>&1 && return 0
     sleep 1
   done
   return 1
@@ -32,6 +32,12 @@ tgproxy config validate --mode server -c /etc/tgproxy/server.yaml
 tgproxy config validate --mode agent -c /etc/tgproxy/agent.yaml
 
 step "минимальный валидный конфиг (на лету)"
+# самоподписанный вход (SAN = fronting_domain MTProto): FakeTLS требует TLS на входе
+install -d -o root -g tgproxy -m 0750 /etc/tgproxy/tls
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 -subj "/CN=tg.smoke.test" \
+  -addext "subjectAltName=DNS:tg.smoke.test" -keyout /etc/tgproxy/tls/server.key -out /etc/tgproxy/tls/server.crt 2>/dev/null
+chown root:tgproxy /etc/tgproxy/tls/server.key /etc/tgproxy/tls/server.crt
+chmod 0640 /etc/tgproxy/tls/server.key /etc/tgproxy/tls/server.crt
 cat > /etc/tgproxy/server.yaml <<'YAML'
 # smoke-marker: локальная правка администратора
 listen:
@@ -40,7 +46,19 @@ listen:
   metrics: "127.0.0.1:9090"
   agent_gateway: "127.0.0.1:8444"
 tls:
-  mode: "off"
+  mode: files
+  cert_file: /etc/tgproxy/tls/server.crt
+  key_file: /etc/tgproxy/tls/server.key
+mtproto:
+  enabled: true
+  listen: "127.0.0.1:8445"
+  public_host: 127.0.0.1
+  public_port: 8445
+  fronting_domain: tg.smoke.test
+agents:
+  - id: smoke
+    url: https://127.0.0.1:8443
+    mode: dial
 auth:
   users_file: /etc/tgproxy/users_database.yml
   allow_password_only: true   # только smoke
@@ -66,6 +84,10 @@ tgproxy pki kek-init --out /etc/tgproxy/kek
 chown tgproxy:tgproxy /etc/tgproxy/kek
 # CA создаётся один раз в БД сервера (ключ CA под KEK); от имени tgproxy — БД принадлежит ему.
 runuser -u tgproxy -- tgproxy pki init -c /etc/tgproxy/server.yaml
+# mTLS-материал dial-агента из CA сервера (в каталог данных агента из packaging/etc/agent.yaml)
+runuser -u tgproxy -- tgproxy pki dev-agents -c /etc/tgproxy/server.yaml --out /var/lib/tgproxy/agent --agent smoke
+sed -i 's|^  api: ":8443"|  api: "127.0.0.1:8443"|' /etc/tgproxy/agent.yaml
+tgproxy config validate --mode agent -c /etc/tgproxy/agent.yaml
 tgproxy config validate --mode server -c /etc/tgproxy/server.yaml
 
 step "systemd-analyze verify"
@@ -74,9 +96,49 @@ systemd-analyze verify tgproxy-server.service tgproxy-agent.service tgproxy-upda
 step "start + healthz"
 systemctl start tgproxy-server.service || fail "start"
 wait_healthz || fail "healthz не ответил"
-curl -fsS http://127.0.0.1:8090/healthz
+curl -fsSk https://127.0.0.1:8090/healthz
 PID1="$(systemctl show -p MainPID --value tgproxy-server.service)"
 [ "$(ps -o user= -p "$PID1")" = tgproxy ] || fail "процесс не под tgproxy: $(ps -o user= -p "$PID1")"
+
+step "mtproto: секрет, FakeTLS-рукопожатие через dial-агента, отзыв"
+# Путь проверки: сети к DC Telegram в CI нет, поэтому главный критерий — probe --handshake-only
+# (ServerHello с верным HMAC возможен только когда сервер сопоставил секрет и видит capable-агента
+# mtproto/1; иначе соединение уходит в обычный TLS и probe падает). Полный обмен resPQ с DC — информативно.
+# Ссылка (содержит ключ) живёт только в переменной и в stdin probe, в лог не попадает.
+systemctl start tgproxy-agent.service || fail "agent start"
+LINK="$(runuser -u tgproxy -- tgproxy mtproto secret add -c /etc/tgproxy/server.yaml --name smoke | grep -o 'tg://proxy[^ ]*' | head -n1)"
+[ -n "$LINK" ] || fail "секрет MTProto не создан / ссылка не получена"
+mt_ok=0
+for _ in $(seq 1 40); do
+  if printf '%s' "$LINK" | tgproxy mtproto probe --link-stdin --handshake-only --timeout 5s >/dev/null 2>&1; then mt_ok=1; break; fi
+  sleep 1
+done
+if [ "$mt_ok" != 1 ]; then
+  systemctl status tgproxy-agent --no-pager -l >&2 || true
+  journalctl -u tgproxy-agent --no-pager -n 20 >&2 || true
+  fail "FakeTLS-рукопожатие MTProto не прошло за 40с (нет capable-агента mtproto/1 или секрет не принят)"
+fi
+echo "FakeTLS-рукопожатие: OK"
+if printf '%s' "$LINK" | tgproxy mtproto probe --link-stdin --timeout 8s >/dev/null 2>&1; then
+  echo "resPQ от DC: OK (в контейнере есть сеть к Telegram)"
+else
+  echo "resPQ от DC: нет (ожидаемо без сети к Telegram; не критерий smoke)"
+fi
+# ключ секрета не должен попасть в журнал сервера
+KEYHEX="$(printf '%s' "$LINK" | sed -nE 's/.*secret=ee([0-9a-f]{32}).*/\1/p')"
+[ -n "$KEYHEX" ] || fail "не удалось выделить ключ секрета для проверки утечек"
+JLOG="$(journalctl -u tgproxy-server -u tgproxy-agent --no-pager 2>&1 || true)"
+case "${JLOG,,}" in *"$KEYHEX"*) fail "ключ секрета MTProto найден в журнале" ;; esac
+unset JLOG
+runuser -u tgproxy -- tgproxy mtproto secret delete smoke --yes -c /etc/tgproxy/server.yaml >/dev/null
+mt_rev=0
+for _ in $(seq 1 10); do
+  if ! printf '%s' "$LINK" | tgproxy mtproto probe --link-stdin --handshake-only --timeout 3s >/dev/null 2>&1; then mt_rev=1; break; fi
+  sleep 1
+done
+[ "$mt_rev" = 1 ] || fail "после отзыва секрета рукопожатие всё ещё проходит"
+echo "отзыв секрета: OK"
+unset LINK KEYHEX
 
 step "systemd-analyze security"
 systemd-analyze security tgproxy-server.service --no-pager | tee /tmp/security.txt
@@ -99,6 +161,7 @@ echo "restarted: $PID1 -> $PID2"
 step "remove: юниты остановлены"
 "${APT[@]}" remove tgproxy >/dev/null
 systemctl is-active tgproxy-server.service >/dev/null 2>&1 && fail "server активен после remove"
+systemctl is-active tgproxy-agent.service >/dev/null 2>&1 && fail "agent активен после remove"
 [ ! -x /usr/bin/tgproxy ] || fail "бинарь остался"
 [ -f /etc/tgproxy/server.yaml ] || fail "конфиг удалён при remove"
 getent passwd tgproxy >/dev/null || fail "пользователь удалён при remove"

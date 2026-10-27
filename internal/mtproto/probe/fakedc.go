@@ -17,8 +17,9 @@ import (
 // (без секрета, ключ/IV из открытых байт 8..56) и на req_pq_multi отвечает
 // resPQ с тем же nonce. Предназначен для тестов и dev-стенда.
 type FakeDC struct {
-	ln net.Listener
-	wg sync.WaitGroup
+	ln   net.Listener
+	wg   sync.WaitGroup
+	echo bool // потоковое эхо: любой пакет возвращается как есть (нагрузочный стенд)
 
 	accepted atomic.Int64
 	answered atomic.Int64
@@ -28,12 +29,18 @@ type FakeDC struct {
 const fakeDCReadTimeout = 30 * time.Second
 
 // NewFakeDC слушает 127.0.0.1:0 и возвращает сервер и его адрес.
-func NewFakeDC() (*FakeDC, string, error) {
+func NewFakeDC() (*FakeDC, string, error) { return newFakeDC(false) }
+
+// NewFakeDCEcho — как NewFakeDC, но после handshake каждый пакет возвращается
+// клиенту без разбора (эхо-трафик для нагрузочного smoke M13-T5).
+func NewFakeDCEcho() (*FakeDC, string, error) { return newFakeDC(true) }
+
+func newFakeDC(echo bool) (*FakeDC, string, error) {
 	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, "", err
 	}
-	d := &FakeDC{ln: ln}
+	d := &FakeDC{ln: ln, echo: echo}
 	d.wg.Add(1)
 	go d.loop()
 	return d, ln.Addr().String(), nil
@@ -131,6 +138,15 @@ func (d *FakeDC) handle(c net.Conn) {
 		pkt, err := readN(n)
 		if err != nil {
 			return
+		}
+		if d.echo {
+			out := append(binary.LittleEndian.AppendUint32(make([]byte, 0, 4+len(pkt)), u32(len(pkt))), pkt...)
+			send.XORKeyStream(out, out)
+			if _, err := c.Write(out); err != nil {
+				return
+			}
+			d.answered.Add(1)
+			continue
 		}
 		_, body, err := parseUnencrypted(pkt)
 		if err != nil || len(body) < 20 || binary.LittleEndian.Uint32(body) != ctorReqPQMulti {

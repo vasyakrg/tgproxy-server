@@ -426,3 +426,43 @@ func TestParseUnencrypted(t *testing.T) {
 }
 
 func slicesClone(b []byte) []byte { return append([]byte(nil), b...) }
+
+func TestFakeDCEcho_ReturnsPacketsAsIs(t *testing.T) {
+	d, _, err := NewFakeDCEcho()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	c, err := (&net.Dialer{}).DialContext(ctxT(t, 5*time.Second), "tcp", d.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	wire, send, recv, err := obfuscatedClient(nil, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Write(wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range []int{1, 100, 16 << 10} { // не req_pq: произвольная нагрузка
+		payload := bytes.Repeat([]byte{byte(size)}, size)
+		pkt := append(binary.LittleEndian.AppendUint32(nil, uint32(size)), payload...)
+		send.XORKeyStream(pkt, pkt)
+		if _, err := c.Write(pkt); err != nil {
+			t.Fatal(err)
+		}
+		got := make([]byte, 4+size)
+		if _, err := io.ReadFull(c, got); err != nil {
+			t.Fatal(err)
+		}
+		recv.XORKeyStream(got, got)
+		if binary.LittleEndian.Uint32(got) != uint32(size) || !bytes.Equal(got[4:], payload) {
+			t.Fatalf("эхо size=%d не совпало", size)
+		}
+	}
+	if d.Answered() != 3 {
+		t.Fatalf("answered=%d, want 3", d.Answered())
+	}
+}

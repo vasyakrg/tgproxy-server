@@ -307,8 +307,12 @@ func (a *Auth) TOTPStep(ctx context.Context, pending, code, ip string) (*Session
 	}
 	_ = a.store.RateState().Delete(ctx, failKey(p.User, ip))
 	_ = a.store.RateState().Delete(ctx, failKeyGlobal(p.User))
-	if err := a.MarkTOTPFresh(ctx, s); err != nil {
-		return nil, err
+	// Свежесть — только после реальной проверки кода: вход по одному паролю (allow_password_only)
+	// не открывает действий под RequireFreshTOTP.
+	if usr.TOTPSecretEnc != "" {
+		if err := a.MarkTOTPFresh(ctx, s); err != nil {
+			return nil, err
+		}
 	}
 	a.audit(ctx, p.User, AuditLoginOK, ip, "")
 	return s, nil

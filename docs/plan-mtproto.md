@@ -148,7 +148,7 @@
 - [x] **M12-T5 · UI: интеграция в существующие экраны** (S-web) · параллельно с M12-T4
   - Файлы: `screens/agents.templ` (чип `mtproto/1`, статус DC), `screens/overview.templ` (KPI «MTProto: соединения, полоса», ряды на графике), `screens/errors.templ` (фаза `mtproto`).
   - Тесты первыми: golden-рендер с/без capability; KPI скрыт при `enabled:false`.
-- [ ] **M12-T6 · Wiring** (S-wire): маршруты API/UI, зависимость `Manager` → stats.
+- [x] **M12-T6 · Wiring** (S-wire): маршруты API/UI, зависимость `Manager` → stats.
   - Приёмка среза: секрет создан в UI, QR отсканирован официальным клиентом, клиент работает; отзыв из UI рвёт соединение ≤2 с; матрица agent×DC живая.
 
 **Срез M12:** MTProto управляется из UI/CLI/API без правки конфигов.
@@ -160,10 +160,10 @@
 - [x] **M13-T1 · Пакет** (S-pkg)
   - Файлы: `packaging/systemd/tgproxy-server.service:17` (`LimitNOFILE=1048576`), `tgproxy-agent.service:17` (`262144`), `packaging/etc/server.yaml`/`agent.yaml` (закомментированный блок `mtproto:`), `NOTICE` в пакете.
   - Приёмка: `systemd-analyze security` не хуже 2.0; deb-smoke зелёный.
-- [ ] **M13-T2 · Smoke и деплой** (S-pkg)
+- [x] **M13-T2 · Smoke и деплой** (S-pkg)
   - Файлы: `packaging/ci/smoke-inner.sh` (сервер+агент+fake-DC в контейнере, `tgproxy mtproto probe`), `scripts/deploy.sh` (опциональный шаг: при `PROD_MTPROTO_LINK` в `deploy/.env` → `tgproxy mtproto probe --link-stdin` на сервере; значение не печатается), `deploy/.env.example`.
   - Тест: `shellcheck`; `DEPLOY_DRY_RUN=1` показывает шаг probe без значения ссылки.
-- [ ] **M13-T3 · Документация** (S-pkg)
+- [x] **M13-T3 · Документация** (S-pkg)
   - Файлы: `docs/operations.md` (раздел «MTProto»: включение, NTP, sysctl, фаервол агентов — исходящий 443 к сетям Telegram, ротация/отзыв, диагностика, признаки блокировки, переход на dedicated IP), `README.md` (кратко + ссылка), актуализация `docs/mtproto.md` по итогам реализации.
 - [ ] **M13-T4 · Security-проход** (все скоупы, параллельно по своим файлам)
   - Фаззеры `faketls`, `mux` (первая запись) — 60 s без находок; `internal/app/mtprotoleak_e2e_test.go` — ключ секрета не находится в логах сервера/агентов, метриках, ответах API (кроме create/link), аудите, SSE, дампе БД (кроме `secret_enc`); `redact` маскирует `ee[0-9a-f]{32,}` и `secret=`; `gosec`, `govulncheck` (включая зависимости mtg) чисты.

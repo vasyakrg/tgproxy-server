@@ -43,7 +43,8 @@ type mtprotoState struct {
 	names    *secretNames
 	mobs     *mtproto.MetricsObserver
 	journal  *mtproto.Journal
-	listener string // метка tgp_mtproto_client_conns: shared|dedicated
+	dcs      *dcCounters // стримы/ошибки по (agent, dc) для матрицы UI
+	listener string      // метка tgp_mtproto_client_conns: shared|dedicated
 }
 
 // Route реализует mux.Router: до создания Manager MTProto недоступен (fallthrough).
@@ -185,12 +186,13 @@ func (s *Server) wireMTProto(cfg *config.ServerConfig) error {
 	m.mobs = mtproto.NewMetricsObserver(s.obs.m, m.names)
 	m.journal = mtproto.NewJournal(s.st.MTProtoSessions(), s.logger)
 	s.obs.coll.SetMTProto(m.journal)
+	m.dcs = newDCCounters(s.obs.m)
 	m.network, err = upstream.New(upstream.Options{
 		Picker:      upstream.KeyedPicker{K: m.keyed},
 		Streams:     s.tr,
 		Resolve:     s.reg.Ref,
 		DialTimeout: cfg.MTProto.AgentPool.DialTimeout,
-		Metrics:     s.obs.m,
+		Metrics:     m.dcs,
 	})
 	if err != nil {
 		return fmt.Errorf("app: mtproto network: %w", err)

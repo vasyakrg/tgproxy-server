@@ -17,7 +17,7 @@ if [ -f "$ENV_FILE" ]; then
   # Файл оператора (deploy/.env, не коммитится); уже заданные в окружении переменные приоритетнее.
   for _v in PROD_SERVER_HOST PROD_SERVER_SSH_USER PROD_SERVER_SSH_PORT PROD_SSH_KEY PROD_PUBLIC_URL \
     PROD_ADMIN_URL PROD_AGENT_HOSTS PROD_AGENT_SSH_USER DEPLOY_MODE DEPLOY_TAG DEPLOY_REPO DEPLOY_DEB \
-    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT DEPLOY_KNOWN_HOSTS DEPLOY_DOWNLOADS_DIR; do
+    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT DEPLOY_KNOWN_HOSTS DEPLOY_DOWNLOADS_DIR PROD_MTPROTO_LINK; do
     if [ -n "${!_v+x}" ]; then eval "_keep_$_v=\${$_v}"; fi
   done
   set -a
@@ -26,11 +26,14 @@ if [ -f "$ENV_FILE" ]; then
   set +a
   for _v in PROD_SERVER_HOST PROD_SERVER_SSH_USER PROD_SERVER_SSH_PORT PROD_SSH_KEY PROD_PUBLIC_URL \
     PROD_ADMIN_URL PROD_AGENT_HOSTS PROD_AGENT_SSH_USER DEPLOY_MODE DEPLOY_TAG DEPLOY_REPO DEPLOY_DEB \
-    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT DEPLOY_KNOWN_HOSTS DEPLOY_DOWNLOADS_DIR; do
+    DEPLOY_ALLOW_DOWNGRADE DEPLOY_HEALTH_TIMEOUT DEPLOY_KNOWN_HOSTS DEPLOY_DOWNLOADS_DIR PROD_MTPROTO_LINK; do
     _k="_keep_$_v"
     if [ -n "${!_k+x}" ]; then export "$_v=${!_k}"; fi
   done
 fi
+
+# Ссылка MTProto содержит ключ секрета: не экспортируем в окружение дочерних процессов (ssh, make).
+export -n PROD_MTPROTO_LINK 2>/dev/null || true
 
 DRY="${DEPLOY_DRY_RUN:-0}"
 MODE="${DEPLOY_MODE:-snapshot}"
@@ -67,6 +70,8 @@ if [ "$MODE" = release ]; then
 fi
 
 # ---------- план ----------
+MT_PLAN="пропуск (PROD_MTPROTO_LINK не задана)"
+[ -z "${PROD_MTPROTO_LINK:-}" ] || MT_PLAN="ssh: tgproxy mtproto probe --link-stdin (PROD_MTPROTO_LINK задана; значение не печатается, идёт через stdin)"
 AGENTS_PLAN="пропуск"
 [ -z "${PROD_AGENT_HOSTS:-}" ] || AGENTS_PLAN="systemctl is-active tgproxy-agent + версия (только чтение)"
 cat <<PLAN
@@ -82,7 +87,8 @@ cat <<PLAN
     4. sudo dpkg --force-confdef --force-confold -i (сохраняет конфиг оператора), sudo systemctl restart tgproxy-server, сверка версии, очистка
     5. $ADMIN_URL/healthz, затем /readyz (>=1 агент up)
     6. агенты: $AGENTS_PLAN
-    7. $( [ "$MODE" = release ] && echo "агенты: обновить из UI «Система -> Обновления» (сервер сам скачивает подписанный релиз из GitHub)" || echo "агенты НЕ трогаем: snapshot не подписан, агенты его не примут (так задумано)" )
+    7. MTProto: $MT_PLAN; неуспех -> деплой помечается failed (exit 1), без отката
+    8. $( [ "$MODE" = release ] && echo "агенты: обновить из UI «Система -> Обновления» (сервер сам скачивает подписанный релиз из GitHub)" || echo "агенты НЕ трогаем: snapshot не подписан, агенты его не примут (так задумано)" )
 PLAN
 if [ "$DRY" = 1 ]; then log "DEPLOY_DRY_RUN=1: ничего не выполнено"; exit 0; fi
 
@@ -222,6 +228,23 @@ wait_ok() { # path
 wait_ok /healthz || die "$ADMIN_URL/healthz не ответил 200 за ${HEALTH_TIMEOUT}s"
 wait_ok /readyz  || die "$ADMIN_URL/readyz: нет ни одного агента up за ${HEALTH_TIMEOUT}s"
 
+# ---------- 5b. MTProto probe (опционально) ----------
+# Служебный секрет deploy-probe (deploy/.env.example). Ссылка уходит в stdin удалённой команды:
+# не попадает ни в argv (ps), ни в лог. Вывод probe не содержит ссылку/ключ (redact в CLI).
+# Неуспех не откатывает релиз: Bot API-прокси уже прошёл /healthz и /readyz, пакет установлен и
+# работает, а откат на прошлую версию не лечит типичные причины (нет capable-агентов, DC недоступен
+# с агентов, отозван секрет, fronting_domain). Поэтому деплой помечается failed в конце, оператор решает сам.
+MT_FAIL=0
+if [ -n "${PROD_MTPROTO_LINK:-}" ]; then
+  log "MTProto probe на сервере (ссылка через stdin)"
+  if printf '%s' "$PROD_MTPROTO_LINK" | SRV "tgproxy mtproto probe --link-stdin --timeout 20s"; then
+    log "MTProto probe: OK"
+  else
+    warn "MTProto probe НЕ прошёл: проверьте mtproto.enabled, capable-агентов mtproto/1 (UI «Агенты»), доступ агентов к DC Telegram, действующий секрет deploy-probe. Ручная проверка: ssh на сервер, tgproxy mtproto probe --link-stdin."
+    MT_FAIL=1
+  fi
+fi
+
 # ---------- 6. агенты (только чтение) ----------
 rc=0
 for h in ${PROD_AGENT_HOSTS:-}; do
@@ -239,4 +262,5 @@ else
   warn "snapshot не подписан: агенты не обновлены и не примут этот пакет (проверка подписи на агенте — по замыслу)."
 fi
 [ "$rc" = 0 ] || die "часть агентов не active"
+[ "$MT_FAIL" = 0 ] || die "деплой $NEW_VER выполнен, но MTProto probe не прошёл (релиз НЕ откатывался: /healthz и /readyz в норме)"
 log "деплой завершён: $NEW_VER"
