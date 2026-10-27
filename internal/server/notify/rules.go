@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/buildinfo"
@@ -64,6 +65,9 @@ type EvalOptions struct {
 type Evaluator struct {
 	o   EvalOptions
 	log *slog.Logger
+
+	mu  sync.Mutex
+	mtp mtprotoState
 }
 
 // NewEvaluator создаёт Evaluator.

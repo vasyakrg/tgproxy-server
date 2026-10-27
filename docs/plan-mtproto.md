@@ -117,7 +117,7 @@
 - [x] **M11-T5 · Метрики** (S-obs + инструментирование S-mtproto, S-agent — параллельно)
   - Файлы: `internal/metrics/server.go`, `internal/metrics/agent.go` (метрики из `docs/mtproto.md` §13), `internal/mtproto/observer.go`, `internal/agent/metrics.go`.
   - Тесты первыми: `testutil.CollectAndCompare` на каждую метрику; `promlint` чист; в метках нет IP/ключей (сквозной regex по выдаче `/metrics`); `secret` — имя, не префикс.
-- [ ] **M11-T6 · Алерты** (S-obs) · зависит от M11-T5
+- [x] **M11-T6 · Алерты** (S-obs) · зависит от M11-T5
   - Файлы: `internal/server/notify/types.go` (`mtproto_dc_unreachable`, `mtproto_no_capable_agents`, `mtproto_overload`), правила срабатывания и resolved.
   - Тесты первыми: DC down на всех capable-агентах > 1 мин → firing, восстановление одного → resolved; 0 capable при `enabled` → firing; > 90% `max_conns` 5 мин → firing; дедуп и лимиты общие.
 - [x] **M11-T7 · Журнал соединений и история** (S-obs + S-core) · зависит от M9-T3

@@ -26,6 +26,10 @@ const (
 	AllAgentsDown       AlertType = "all_agents_down"
 	RolloutFailed       AlertType = "rollout_failed"
 	IPAutoBan           AlertType = "ip_autoban"
+
+	MTProtoDCUnreachable   AlertType = "mtproto_dc_unreachable"
+	MTProtoNoCapableAgents AlertType = "mtproto_no_capable_agents"
+	MTProtoOverload        AlertType = "mtproto_overload"
 )
 
 // Severity — важность алерта.

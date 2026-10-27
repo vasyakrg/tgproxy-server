@@ -59,6 +59,12 @@ func resolvedTitle(t AlertType, agent string) string {
 		return "Версия агента" + who + " совпадает с сервером"
 	case AllAgentsDown:
 		return "Доступность агентов восстановлена"
+	case MTProtoDCUnreachable:
+		return "MTProto: DC снова доступен"
+	case MTProtoNoCapableAgents:
+		return "MTProto: снова есть агенты с поддержкой"
+	case MTProtoOverload:
+		return "MTProto: нагрузка в норме"
 	default:
 		return "Восстановлено: " + string(t) + who
 	}
