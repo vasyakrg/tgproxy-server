@@ -11,9 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a-h/templ"
+
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
 	"github.com/vasyakrg/tgproxy-server/internal/server/access"
 	"github.com/vasyakrg/tgproxy-server/internal/server/history"
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/api"
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/auth"
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/views"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 	"github.com/vasyakrg/tgproxy-server/internal/tgapi"
@@ -33,10 +37,14 @@ type ErrorsDeps struct {
 	Location *time.Location
 	Now      func() time.Time
 	Log      *slog.Logger
+	// Purge — очистка журнала; nil — кнопка «Очистить журнал» не показывается.
+	Purge    *api.ErrorsPurgeService
+	ClientIP func(*http.Request) string // nil — хост из RemoteAddr (для аудита)
 }
 
 const (
 	errorsPath    = "/errors"
+	errorsPurgeP  = "/errors/purge"
 	kpiWindow     = 24 * time.Hour
 	kpiPageLimit  = 200
 	kpiMaxPages   = 10
@@ -105,6 +113,8 @@ type ErrorsVM struct {
 	Rows       []ErrorRow
 	MoreURL    string // пусто — страниц больше нет
 	Filtered   bool
+	CanPurge   bool // показывать «Очистить журнал»
+	OOB        bool // отдать таблицу и сводку как out-of-band (ответ на очистку)
 }
 
 var (
@@ -140,27 +150,51 @@ func reasonView(reason string) (string, views.Tone) {
 	return dash(reason), views.ToneNeutral
 }
 
-func (s *errorsScreen) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
+// parseFilters читает фильтры из query/формы; мусор в причине и коде игнорируется, а не ломает страницу.
+func parseFilters(q url.Values) (ErrorsFilter, history.Filters) {
 	f := ErrorsFilter{
 		Agent: q.Get("agent"), BotID: strings.TrimSpace(q.Get("bot_id")), Phase: q.Get("phase"),
 		Code: q.Get("code"), RequestID: strings.TrimSpace(q.Get("request_id")),
 		Reason: q.Get("reason"), ClientIP: strings.TrimSpace(q.Get("client_ip")),
 	}
 	if !access.Reason(f.Reason).Valid() {
-		f.Reason = "" // мусор в причине игнорируем, а не ломаем страницу
+		f.Reason = ""
 	}
 	hf := history.Filters{AgentID: f.Agent, BotID: f.BotID, Phase: f.Phase, RequestID: f.RequestID, Reason: f.Reason, ClientIP: f.ClientIP}
 	if f.Code != "" {
 		n, err := strconv.Atoi(f.Code)
 		if err != nil || n < 0 || n > 999 {
-			f.Code = "" // мусор в коде игнорируем, а не ломаем страницу
+			f.Code = ""
 		} else {
 			hf.Code = n
 		}
 	}
-	cursor := q.Get("cursor")
-	page, err := s.Source.Errors(r.Context(), cursor, hf)
+	return f, hf
+}
+
+// resultsVM собирает модель таблицы (без сводки) для фильтров f и курсора.
+func (s *errorsScreen) resultsVM(ctx context.Context, f ErrorsFilter, hf history.Filters, cursor string) (ErrorsVM, error) {
+	page, err := s.Source.Errors(ctx, cursor, hf)
+	if err != nil {
+		return ErrorsVM{}, err
+	}
+	rows := s.rows(page.Items)
+	more := ""
+	if page.NextCursor != "" {
+		more = moreURL(f, page.NextCursor)
+	}
+	return ErrorsVM{
+		Filter: f, Rows: rows, MoreURL: more, Filtered: hf != (history.Filters{}),
+		PhaseOpts: withCurrent(phaseOptions, f.Phase), CodeOpts: withCurrent(codeOptions, f.Code),
+		AgentOpts: s.agentOptions(f.Agent), ReasonOpts: reasonLabels, GeoAttr: geoAvailable(s.Geo),
+		CanPurge: s.Purge != nil,
+	}, nil
+}
+
+func (s *errorsScreen) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f, hf := parseFilters(r.URL.Query())
+	cursor := r.URL.Query().Get("cursor")
+	vm, err := s.resultsVM(r.Context(), f, hf, cursor)
 	if err != nil {
 		if errors.Is(err, history.ErrBadCursor) {
 			http.Error(w, "некорректный cursor", http.StatusBadRequest)
@@ -170,22 +204,11 @@ func (s *errorsScreen) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "внутренняя ошибка", http.StatusInternalServerError)
 		return
 	}
-	rows := s.rows(page.Items)
-	more := ""
-	if page.NextCursor != "" {
-		more = moreURL(f, page.NextCursor)
-	}
 
 	// Подгрузка следующей страницы: только строки + новая строка «Показать ещё».
 	if cursor != "" && isFragment(r) {
-		renderFragment(w, r, http.StatusOK, ErrorRows(rows, more)) //nolint:contextcheck // templ-компонент получает ctx в Render
+		renderFragment(w, r, http.StatusOK, ErrorRows(vm.Rows, vm.MoreURL)) //nolint:contextcheck // templ-компонент получает ctx в Render
 		return
-	}
-
-	vm := ErrorsVM{
-		Filter: f, Rows: rows, MoreURL: more, Filtered: hf != (history.Filters{}),
-		PhaseOpts: withCurrent(phaseOptions, f.Phase), CodeOpts: withCurrent(codeOptions, f.Code),
-		AgentOpts: s.agentOptions(f.Agent), ReasonOpts: reasonLabels, GeoAttr: geoAvailable(s.Geo),
 	}
 	if isFragment(r) {
 		renderFragment(w, r, http.StatusOK, ErrorsResults(vm)) //nolint:contextcheck // templ
@@ -414,4 +437,99 @@ func toneIf(cond bool, tone string) string {
 		return tone
 	}
 	return "muted"
+}
+
+// ---------- очистка журнала ----------
+
+// PurgeOpt — вариант очистки в модалке.
+type PurgeOpt struct {
+	Days  string // значение keep_days
+	Label string
+}
+
+// ErrorsPurgeVM — модалка «Очистить журнал».
+type ErrorsPurgeVM struct {
+	Opts     []PurgeOpt
+	Selected string
+	Err      string
+	// Filter — текущие фильтры страницы: после очистки список перерисовывается с ними.
+	Filter ErrorsFilter
+}
+
+func purgeOpts() []PurgeOpt {
+	return []PurgeOpt{
+		{"0", "Всё — удалить все записи"},
+		{"30", "Оставить последние 30 дней"},
+		{"15", "Оставить последние 15 дней"},
+		{"5", "Оставить последние 5 дней"},
+		{"3", "Оставить последние 3 дня"},
+	}
+}
+
+// MountErrorsPurge регистрирует GET /errors/purge (модалка выбора) и POST /errors/purge (очистка).
+// Оба — за Protect + RequireAuth; изменяющий — только htmx (CSRF: http.CrossOriginProtection в Protect).
+func MountErrorsPurge(rt AccessRouter, a *auth.Auth, d ErrorsDeps) {
+	if d.Log == nil {
+		d.Log = slog.Default()
+	}
+	if d.Now == nil {
+		d.Now = time.Now
+	}
+	if d.Location == nil {
+		d.Location = time.Local
+	}
+	s := &errorsScreen{d}
+	m := func(pattern string, h http.HandlerFunc) { rt.Mount(pattern, auth.Protect(a.RequireAuth(h))) }
+	m("GET "+errorsPurgeP, s.purgeForm)
+	m("POST "+errorsPurgeP, s.purge)
+}
+
+func (s *errorsScreen) purgeForm(w http.ResponseWriter, r *http.Request) {
+	if !htmxOnlyTo(w, r, errorsPath) {
+		return
+	}
+	f, _ := parseFilters(r.URL.Query())
+	renderFragment(w, r, http.StatusOK, ErrorsPurgeForm(ErrorsPurgeVM{Opts: purgeOpts(), Selected: "30", Filter: f})) //nolint:contextcheck // templ
+}
+
+func (s *errorsScreen) purge(w http.ResponseWriter, r *http.Request) {
+	if !htmxOnlyTo(w, r, errorsPath) || !parseForm(w, r) {
+		return
+	}
+	f, hf := parseFilters(r.PostForm)
+	vm := ErrorsPurgeVM{Opts: purgeOpts(), Selected: r.PostFormValue("keep_days"), Filter: f}
+	days, err := strconv.Atoi(vm.Selected)
+	if err != nil || !api.ValidKeepDays(days) {
+		vm.Err = "Выберите вариант очистки."
+		renderFragment(w, r, http.StatusUnprocessableEntity, ErrorsPurgeForm(vm)) //nolint:contextcheck // templ
+		return
+	}
+	n, err := s.Purge.Purge(r.Context(), s.actor(r), days)
+	if err != nil {
+		s.Log.ErrorContext(r.Context(), "errors screen: purge", "err", err)
+		http.Error(w, "внутренняя ошибка", http.StatusInternalServerError)
+		return
+	}
+	res, err := s.resultsVM(r.Context(), f, hf, "")
+	if err != nil {
+		s.Log.ErrorContext(r.Context(), "errors screen: list after purge", "err", err)
+		http.Error(w, "внутренняя ошибка", http.StatusInternalServerError)
+		return
+	}
+	res.OOB = true
+	res.KPIs, res.KPIsCapped = s.phaseKPIs(r.Context())
+	toast(w, "ok", "Журнал очищен, удалено записей: "+strconv.FormatInt(n, 10))
+	renderFragment(w, r, http.StatusOK, templ.Join(ErrorsKPIs(res), ErrorsResults(res), ErrorsPurgeModal(true))) //nolint:contextcheck // templ
+}
+
+func (s *errorsScreen) actor(r *http.Request) api.Actor {
+	ip := remoteHost(r)
+	if s.ClientIP != nil {
+		ip = s.ClientIP(r)
+	}
+	sess, _ := auth.SessionFromContext(r.Context())
+	if sess == nil {
+		return api.Actor{IP: ip}
+	}
+	return api.Actor{User: sess.User, IP: ip}
 }

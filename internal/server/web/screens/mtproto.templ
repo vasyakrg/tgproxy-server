@@ -8,6 +8,16 @@ import (
 
 var mtHeaders = []string{"Секрет", "Префикс", "Статус", "Сети", "Соединения", views.ActionsHeader}
 
+func purgeable(rows []MTSecretRow) int {
+	n := 0
+	for _, r := range rows {
+		if r.CanPurge {
+			n++
+		}
+	}
+	return n
+}
+
 func mtURL(id int64, tail string) string { return "/mtproto/" + strconv.FormatInt(id, 10) + "/" + tail }
 
 // MTProtoPage — экран «MTProto».
@@ -53,6 +63,18 @@ templ MTSecretsSection(rows []MTSecretRow, oob bool) {
 			hx-swap-oob="true"
 		}
 	>
+		if n := purgeable(rows); n > 0 {
+			<div class="mt-toolbar">
+				<button
+					type="button"
+					class="btn btn-danger"
+					data-modal-open="mt-modal"
+					hx-get="/mtproto/purge-revoked"
+					hx-target="#mt-modal-body"
+					hx-swap="innerHTML"
+				>Удалить отозванные ({ strconv.Itoa(n) })</button>
+			</div>
+		}
 		if len(rows) == 0 {
 			@views.EmptyState("Секретов пока нет", "Создайте секрет: по нему клиент Telegram подключится к прокси через ссылку или QR-код.")
 		} else {
@@ -97,6 +119,11 @@ templ mtRow(r MTSecretRow) {
 				if r.CanRevoke {
 					@views.IconButton("Отозвать секрет "+r.Name, "trash", true, templ.Attributes{
 						"hx-get": mtURL(r.ID, "revoke"), "hx-target": "#mt-modal-body", "hx-swap": "innerHTML", "data-modal-open": "mt-modal",
+					})
+				}
+				if r.CanPurge {
+					@views.IconButton("Удалить окончательно секрет "+r.Name, "trash", true, templ.Attributes{
+						"hx-get": mtURL(r.ID, "purge"), "hx-target": "#mt-modal-body", "hx-swap": "innerHTML", "data-modal-open": "mt-modal",
 					})
 				}
 			</div>
@@ -323,6 +350,48 @@ templ MTRevokeConfirm(v MTRevokeVM) {
 			@views.Button("Отозвать", views.ButtonDanger, templ.Attributes{
 				"hx-post": mtURL(v.ID, "revoke"), "hx-target": "#mt-modal-body", "hx-swap": "innerHTML",
 			})
+		</div>
+	</div>
+}
+
+// MTPurgeConfirm — подтверждение окончательного удаления отозванного секрета.
+templ MTPurgeConfirm(v MTPurgeVM) {
+	<div class="stack">
+		<h3 class="form-title">Удалить секрет окончательно?</h3>
+		if v.Err != "" {
+			<div class="alert alert-err" role="alert">{ v.Err }</div>
+		} else {
+			<p>Отозванный секрет <strong>{ v.Name }</strong> будет удалён из списка и из базы.</p>
+			<p class="muted">Действие нельзя отменить. Журнал соединений сохранится.</p>
+		}
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			if v.Err == "" {
+				@views.Button("Удалить", views.ButtonDanger, templ.Attributes{
+					"hx-post": mtURL(v.ID, "purge"), "hx-target": "#mt-modal-body", "hx-swap": "innerHTML",
+				})
+			}
+		</div>
+	</div>
+}
+
+// MTPurgeAllConfirm — подтверждение массового удаления отозванных секретов.
+templ MTPurgeAllConfirm(v MTPurgeAllVM) {
+	<div class="stack">
+		<h3 class="form-title">Удалить отозванные секреты?</h3>
+		if v.Count == 0 {
+			<p class="muted">Отозванных секретов, которые можно удалить, нет.</p>
+		} else {
+			<p>Будет удалено секретов: <strong>{ strconv.Itoa(v.Count) }</strong>. Секреты в статусе grace и действующие не затрагиваются.</p>
+			<p class="muted">Действие нельзя отменить. Журнал соединений сохранится.</p>
+		}
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			if v.Count > 0 {
+				@views.Button("Удалить "+strconv.Itoa(v.Count), views.ButtonDanger, templ.Attributes{
+					"hx-post": "/mtproto/purge-revoked", "hx-target": "#mt-modal-body", "hx-swap": "innerHTML",
+				})
+			}
 		</div>
 	</div>
 }

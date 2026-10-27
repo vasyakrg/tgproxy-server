@@ -107,3 +107,16 @@ func (r errorRepo) Trim(ctx context.Context, keep int, before time.Time) (int64,
 	}
 	return total, nil
 }
+
+func (r errorRepo) Purge(ctx context.Context, before time.Time) (int64, error) {
+	var (
+		n   int
+		err error
+	)
+	if before.IsZero() {
+		n, err = r.s.execCount(ctx, `DELETE FROM error_events`)
+	} else {
+		n, err = r.s.execCount(ctx, `DELETE FROM error_events WHERE at < ?`, ms(before))
+	}
+	return int64(n), err
+}

@@ -26,7 +26,7 @@ const errNeedKEK = "для секретов MTProto нужен pki.kek_file (с�
 func newMTProtoCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "mtproto", Short: "MTProto-прокси для клиентов Telegram"}
 	secret := &cobra.Command{Use: "secret", Short: "Секреты MTProto (напрямую в БД; действия пишутся в аудит)"}
-	secret.AddCommand(newMTSecretAddCmd(), newMTSecretListCmd(), newMTSecretDeleteCmd(), newMTSecretRotateCmd(), newMTSecretLinkCmd())
+	secret.AddCommand(newMTSecretAddCmd(), newMTSecretListCmd(), newMTSecretDeleteCmd(), newMTSecretPurgeCmd(), newMTSecretRotateCmd(), newMTSecretLinkCmd())
 	cmd.AddCommand(secret, newMTProbeCmd())
 	return cmd
 }
@@ -200,6 +200,76 @@ func newMTSecretDeleteCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "путь к server.yaml")
 	cmd.Flags().BoolVar(&yes, "yes", false, "без подтверждения")
+	_ = cmd.MarkFlagRequired("config")
+	return cmd
+}
+
+func newMTSecretPurgeCmd() *cobra.Command {
+	var (
+		cfgPath    string
+		yes, allRv bool
+	)
+	cmd := &cobra.Command{
+		Use:   "purge <id|name> | --all-revoked",
+		Short: "Удалить отозванный секрет окончательно (активный — отказ: сначала delete)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if allRv == (len(args) == 1) {
+				return errors.New("укажите либо <id|name>, либо --all-revoked")
+			}
+			svc, st, err := mtService(cmd, cfgPath)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+			if allRv {
+				list, err := svc.List(cmd.Context())
+				if err != nil {
+					return err
+				}
+				now, n := time.Now(), 0
+				for _, s := range list {
+					if api.MTProtoPurgeable(s, now) {
+						n++
+					}
+				}
+				if n == 0 {
+					_, err = fmt.Fprintln(cmd.OutOrStdout(), "отозванных секретов для удаления нет")
+					return err
+				}
+				if !yes && !confirm(cmd, fmt.Sprintf("Удалить окончательно отозванные секреты: %d? Действие необратимо. [y/N] ", n)) {
+					return errors.New("отменено (используйте --yes)")
+				}
+				done, err := svc.PurgeRevoked(cmd.Context(), cliActor())
+				if err != nil {
+					return mtErr(err)
+				}
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "удалено отозванных секретов: %d\n", done)
+				return err
+			}
+			s, err := mtResolve(cmd.Context(), svc, args[0])
+			if err != nil {
+				return err
+			}
+			if !api.MTProtoPurgeable(s, time.Now()) {
+				return fmt.Errorf("секрет %q (id=%d) ещё действует: сначала отзовите его (mtproto secret delete) и дождитесь конца grace", s.Name, s.ID)
+			}
+			if !yes && !confirm(cmd, fmt.Sprintf("Удалить секрет %q (id=%d) окончательно? Действие необратимо. [y/N] ", s.Name, s.ID)) {
+				return errors.New("отменено (используйте --yes)")
+			}
+			if _, err := svc.Purge(cmd.Context(), cliActor(), s.ID); err != nil {
+				if errors.Is(err, api.ErrMTProtoActive) {
+					return fmt.Errorf("секрет %q (id=%d) ещё действует: сначала отзовите его", s.Name, s.ID)
+				}
+				return mtErr(err)
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "секрет %q (id=%d) удалён\n", s.Name, s.ID)
+			return err
+		},
+	}
+	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "путь к server.yaml")
+	cmd.Flags().BoolVar(&yes, "yes", false, "без подтверждения")
+	cmd.Flags().BoolVar(&allRv, "all-revoked", false, "удалить все отозванные секреты с истёкшим grace")
 	_ = cmd.MarkFlagRequired("config")
 	return cmd
 }

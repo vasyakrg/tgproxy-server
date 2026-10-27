@@ -236,6 +236,98 @@ func TestMTProtoRotateAndRevoke(t *testing.T) {
 	}
 }
 
+func TestMTProtoPurgeUI(t *testing.T) {
+	m := newMTFx(t, mtEP, nil)
+	live := m.create("live")
+	dead := m.create("dead")
+	pd, pl := "/mtproto/"+itoa(dead), "/mtproto/"+itoa(live)
+
+	// у активного нет иконки удаления, кнопки «Удалить отозванные» тоже
+	_, body := m.call("GET", "/mtproto", nil, false)
+	if strings.Contains(body, "Удалить окончательно") || strings.Contains(body, "Удалить отозванные") {
+		t.Fatal("кнопки удаления без отозванных секретов")
+	}
+	if code, body := m.call("POST", pd+"/revoke", nil, true); code != 200 || !strings.Contains(body, "отозван") {
+		t.Fatalf("revoke: %d", code)
+	}
+	_, body = m.call("GET", "/mtproto", nil, false)
+	for _, want := range []string{`aria-label="Удалить окончательно секрет dead"`, "Удалить отозванные (1)", `hx-get="/mtproto/purge-revoked"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("нет %q", want)
+		}
+	}
+	if strings.Contains(body, `aria-label="Удалить окончательно секрет live"`) {
+		t.Error("иконка удаления у активного секрета")
+	}
+
+	// модалки подтверждения
+	if code, body := m.call("GET", pd+"/purge", nil, true); code != 200 || !strings.Contains(body, "нельзя отменить") || !strings.Contains(body, `hx-post="`+pd+`/purge"`) {
+		t.Errorf("confirm: %d %s", code, body)
+	}
+	if code, body := m.call("GET", pl+"/purge", nil, true); code != 200 || !strings.Contains(body, "ещё действует") || strings.Contains(body, "hx-post") {
+		t.Errorf("confirm активного: %d %s", code, body)
+	}
+	if code, body := m.call("GET", "/mtproto/purge-revoked", nil, true); code != 200 || !strings.Contains(body, "<strong>1</strong>") {
+		t.Errorf("confirm all: %d %s", code, body)
+	}
+	if code, _ := m.call("GET", pd+"/purge", nil, false); code != http.StatusSeeOther {
+		t.Errorf("без htmx: %d", code)
+	}
+
+	// активный удалить нельзя
+	if code, body := m.call("POST", pl+"/purge", nil, true); code != 409 || !strings.Contains(body, "ещё действует") {
+		t.Errorf("purge активного: %d %s", code, body)
+	}
+	if code, _ := m.call("POST", pd+"/purge", nil, false); code != 400 {
+		t.Errorf("POST без htmx: %d", code)
+	}
+	// удаление отозванного
+	code, body := m.call("POST", pd+"/purge", nil, true)
+	if code != 200 || !strings.Contains(body, `id="mt-modal-wrap"`) || !strings.Contains(body, `id="mt-secrets"`) || strings.Contains(body, ">dead<") {
+		t.Fatalf("purge: %d %s", code, body)
+	}
+	if code, _ = m.call("POST", pd+"/purge", nil, true); code != 404 {
+		t.Errorf("повтор: %d", code)
+	}
+	all, _ := m.svc.List(context.Background())
+	if len(all) != 1 || all[0].ID != live {
+		t.Fatalf("осталось %+v", all)
+	}
+	// массово
+	extra := m.create("extra")
+	m.call("POST", "/mtproto/"+itoa(extra)+"/revoke", nil, true)
+	if code, body := m.call("POST", "/mtproto/purge-revoked", nil, true); code != 200 || !strings.Contains(body, `id="mt-secrets"`) {
+		t.Fatalf("purge all: %d", code)
+	}
+	if all, _ = m.svc.List(context.Background()); len(all) != 1 {
+		t.Fatalf("после массового: %+v", all)
+	}
+	if code, body := m.call("GET", "/mtproto/purge-revoked", nil, true); code != 200 || !strings.Contains(body, "нет") {
+		t.Errorf("confirm пустой: %d %s", code, body)
+	}
+}
+
+func TestMTProtoPurgeAuthAndCSRF(t *testing.T) {
+	m := newMTFx(t, mtEP, nil)
+	id := m.create("dead")
+	m.call("POST", "/mtproto/"+itoa(id)+"/revoke", nil, true)
+	for _, p := range []string{"/mtproto/" + itoa(id) + "/purge", "/mtproto/purge-revoked"} {
+		if w := m.do(req{method: "GET", path: p}); w.Code != http.StatusFound || w.Header().Get("Location") != "/login" {
+			t.Errorf("GET %s без сессии: %d", p, w.Code)
+		}
+		if w := m.do(req{method: "POST", path: p, hdr: hx}); w.Code != 401 {
+			t.Errorf("POST %s без сессии: %d", p, w.Code)
+		}
+		w := m.do(req{method: "POST", path: p, hdr: map[string]string{"HX-Request": "true", "Sec-Fetch-Site": "cross-site"}, cookies: []*http.Cookie{m.sid}})
+		if w.Code != 403 {
+			t.Errorf("cross-site POST %s: %d", p, w.Code)
+		}
+	}
+	if all, _ := m.svc.List(context.Background()); len(all) != 1 {
+		t.Error("секрет удалён без авторизации/CSRF")
+	}
+}
+
 func TestMTProtoCrossOriginRejected(t *testing.T) {
 	m := newMTFx(t, mtEP, nil)
 	id := m.create("phones")
@@ -255,22 +347,26 @@ func TestMTProtoGolden(t *testing.T) {
 	rows := []screens.MTSecretRow{
 		{ID: 1, Name: "phones", Prefix: "ab12…", Status: "active", StatusText: "активен", StatusTone: "ok", CIDRs: []string{"203.0.113.0/24"}, Conns: "3 / 100", CanLink: true, CanRotate: true, CanRevoke: true},
 		{ID: 2, Name: "old", Prefix: "cd34…", Status: "grace", StatusText: "grace до 02.03 12:00 UTC", StatusTone: "warn", Conns: "1", CanLink: true, CanRevoke: true},
-		{ID: 3, Name: "dead", Prefix: "ef56…", Status: "revoked", StatusText: "отозван", StatusTone: "err", Conns: "—"},
+		{ID: 3, Name: "dead", Prefix: "ef56…", Status: "revoked", StatusText: "отозван", StatusTone: "err", Conns: "—", CanPurge: true},
 	}
 	matrix := screens.MTMatrixVM{Enabled: true, DCs: []int{1, 2}, Agents: []screens.MTAgentRow{
 		{ID: "a1", Capable: true, Streams: "5", Cells: []screens.MTCell{{Present: true, Up: true, Text: "41 мс · 3 стр."}, {Present: true, Text: "недоступен"}}},
 		{ID: "old", Streams: "0", Cells: []screens.MTCell{{Text: "—"}, {Text: "—"}}},
 	}}
 	cases := map[string]templ.Component{
-		"mtproto_page":          screens.MTProtoPage(screens.MTProtoVM{Rows: rows, Matrix: matrix}),
-		"mtproto_page_empty":    screens.MTProtoPage(screens.MTProtoVM{Matrix: screens.MTMatrixVM{Enabled: true}}),
-		"mtproto_page_disabled": screens.MTProtoPage(screens.MTProtoVM{Disabled: true, NoEndpoint: true}),
-		"mtproto_form_new":      screens.MTCreateForm(screens.MTFormVM{}),
-		"mtproto_form_errors":   screens.MTCreateForm(screens.MTFormVM{Name: "!!", MaxConns: "x", Errors: api.FieldErrors{"name": "Буквы, цифры", "max_conns": "Целое число"}}),
-		"mtproto_link_created":  screens.MTLinkPanel(mtStatic),
-		"mtproto_link_totp":     screens.MTTOTPPrompt(screens.MTTOTPVM{ID: 1, Name: "phones", Error: "Неверный код."}),
-		"mtproto_rotate":        screens.MTRotateForm(screens.MTRotateVM{ID: 1, Name: "phones", Grace: "24h"}),
-		"mtproto_revoke":        screens.MTRevokeConfirm(screens.MTRevokeVM{ID: 1, Name: "phones"}),
+		"mtproto_page":           screens.MTProtoPage(screens.MTProtoVM{Rows: rows, Matrix: matrix}),
+		"mtproto_page_empty":     screens.MTProtoPage(screens.MTProtoVM{Matrix: screens.MTMatrixVM{Enabled: true}}),
+		"mtproto_page_disabled":  screens.MTProtoPage(screens.MTProtoVM{Disabled: true, NoEndpoint: true}),
+		"mtproto_form_new":       screens.MTCreateForm(screens.MTFormVM{}),
+		"mtproto_form_errors":    screens.MTCreateForm(screens.MTFormVM{Name: "!!", MaxConns: "x", Errors: api.FieldErrors{"name": "Буквы, цифры", "max_conns": "Целое число"}}),
+		"mtproto_link_created":   screens.MTLinkPanel(mtStatic),
+		"mtproto_link_totp":      screens.MTTOTPPrompt(screens.MTTOTPVM{ID: 1, Name: "phones", Error: "Неверный код."}),
+		"mtproto_rotate":         screens.MTRotateForm(screens.MTRotateVM{ID: 1, Name: "phones", Grace: "24h"}),
+		"mtproto_revoke":         screens.MTRevokeConfirm(screens.MTRevokeVM{ID: 1, Name: "phones"}),
+		"mtproto_purge":          screens.MTPurgeConfirm(screens.MTPurgeVM{ID: 3, Name: "dead"}),
+		"mtproto_purge_active":   screens.MTPurgeConfirm(screens.MTPurgeVM{ID: 1, Err: "Секрет ещё действует: сначала отзовите его (и дождитесь конца grace)."}),
+		"mtproto_purge_all":      screens.MTPurgeAllConfirm(screens.MTPurgeAllVM{Count: 2}),
+		"mtproto_purge_all_none": screens.MTPurgeAllConfirm(screens.MTPurgeAllVM{}),
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) { accGolden(t, name, c) })

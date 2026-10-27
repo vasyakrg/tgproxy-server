@@ -180,6 +180,27 @@ func (r mtSecretRepo) Rotate(_ context.Context, id int64, seal store.SealFunc, p
 	return cloneMT(nm), nil
 }
 
+func (r mtSecretRepo) Delete(_ context.Context, id int64) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	i := r.find(id)
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	if r.s.mtSecrets[i].RevokedAt == nil {
+		return fmt.Errorf("%w: mtproto secret %d is not revoked", store.ErrConflict, id)
+	}
+	for j := range r.s.mtSecrets {
+		if rf := r.s.mtSecrets[j].RotatedFrom; rf != nil && *rf == id {
+			r.s.mtSecrets[j].RotatedFrom = nil
+			r.s.mtSecretsVer++ // update, как триггер sqlite
+		}
+	}
+	r.s.mtSecrets = slices.Delete(r.s.mtSecrets, i, i+1)
+	r.s.mtSecretsVer++
+	return nil
+}
+
 func (r mtSecretRepo) Version(_ context.Context) (int64, error) {
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()

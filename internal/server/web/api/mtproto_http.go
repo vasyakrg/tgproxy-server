@@ -61,6 +61,8 @@ func (a *MTProtoAPI) Routes(m Mounter, wrap Wrap) {
 	m.Mount("POST /api/v1/mtproto/secrets", wrap.apply(http.HandlerFunc(a.create)))
 	m.Mount("PATCH /api/v1/mtproto/secrets/{id}", wrap.apply(http.HandlerFunc(a.patch)))
 	m.Mount("DELETE /api/v1/mtproto/secrets/{id}", wrap.apply(http.HandlerFunc(a.revoke)))
+	m.Mount("POST /api/v1/mtproto/secrets/{id}/purge", wrap.apply(http.HandlerFunc(a.purge)))
+	m.Mount("POST /api/v1/mtproto/secrets/purge-revoked", wrap.apply(http.HandlerFunc(a.purgeRevoked)))
 	m.Mount("POST /api/v1/mtproto/secrets/{id}/rotate", wrap.apply(http.HandlerFunc(a.rotate)))
 	m.Mount("GET /api/v1/mtproto/secrets/{id}/link", wrap.apply(a.fresh(http.HandlerFunc(a.reveal))))
 }
@@ -116,6 +118,8 @@ func (a *MTProtoAPI) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, http.StatusUnprocessableEntity, errorJSON{Error: "validation", Message: "ошибка валидации", Fields: ve.Fields})
 	case errors.Is(err, store.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, errorJSON{Error: "not_found"})
+	case errors.Is(err, ErrMTProtoActive):
+		writeJSON(w, http.StatusConflict, errorJSON{Error: "still_active", Message: "Секрет действует: сначала отзовите его (и дождитесь конца grace)."})
 	case errors.Is(err, ErrMTProtoEndpoint):
 		writeJSON(w, http.StatusConflict, errorJSON{Error: "endpoint_not_configured", Message: "Задайте mtproto.fronting_domain и public_host/public_base_url."})
 	default:
@@ -208,6 +212,38 @@ func (a *MTProtoAPI) revoke(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// purge — окончательное удаление отозванного секрета: POST …/{id}/purge?confirm=yes.
+func (a *MTProtoAPI) purge(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if r.URL.Query().Get("confirm") != "yes" {
+		writeJSON(w, http.StatusBadRequest, errorJSON{Error: "confirm_required", Message: "Добавьте ?confirm=yes: удаление необратимо."})
+		return
+	}
+	if _, err := a.Service.Purge(r.Context(), a.actor(r), id); err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// purgeRevoked — массовое удаление всех отозванных секретов с истёкшим grace.
+func (a *MTProtoAPI) purgeRevoked(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("confirm") != "yes" {
+		writeJSON(w, http.StatusBadRequest, errorJSON{Error: "confirm_required", Message: "Добавьте ?confirm=yes: удаление необратимо."})
+		return
+	}
+	n, err := a.Service.PurgeRevoked(r.Context(), a.actor(r))
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"deleted": n})
 }
 
 func (a *MTProtoAPI) rotate(w http.ResponseWriter, r *http.Request) {

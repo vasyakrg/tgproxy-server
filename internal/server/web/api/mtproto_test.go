@@ -3,6 +3,7 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -151,6 +152,7 @@ func TestMTProtoRequiresAuthAndCSRF(t *testing.T) {
 		{"GET", "/api/v1/mtproto/secrets"}, {"POST", "/api/v1/mtproto/secrets"},
 		{"PATCH", "/api/v1/mtproto/secrets/1"}, {"DELETE", "/api/v1/mtproto/secrets/1?confirm=yes"},
 		{"POST", "/api/v1/mtproto/secrets/1/rotate"}, {"GET", "/api/v1/mtproto/secrets/1/link"},
+		{"POST", "/api/v1/mtproto/secrets/1/purge?confirm=yes"}, {"POST", "/api/v1/mtproto/secrets/purge-revoked?confirm=yes"},
 	} {
 		if code, _ := f.call(c[0], c[1], `{}`, false); code != 401 {
 			t.Errorf("%s %s без сессии: %d", c[0], c[1], code)
@@ -160,6 +162,8 @@ func TestMTProtoRequiresAuthAndCSRF(t *testing.T) {
 		{"POST", "/api/v1/mtproto/secrets", `{"name":"x"}`},
 		{"PATCH", "/api/v1/mtproto/secrets/1", `{"enabled":false}`},
 		{"DELETE", "/api/v1/mtproto/secrets/1?confirm=yes", ``},
+		{"POST", "/api/v1/mtproto/secrets/1/purge?confirm=yes", ``},
+		{"POST", "/api/v1/mtproto/secrets/purge-revoked?confirm=yes", ``},
 		{"POST", "/api/v1/mtproto/secrets/1/rotate", `{}`},
 	} {
 		if code, _ := f.call(c[0], c[1], c[2], true, "Sec-Fetch-Site", "cross-site"); code != 403 {
@@ -465,4 +469,93 @@ func TestResolveMTProtoEndpoint(t *testing.T) {
 			t.Errorf("%s: %+v", c.name, ep)
 		}
 	}
+}
+
+func (f *mtFx) count(action string) int {
+	n := 0
+	for _, a := range f.auditActions() {
+		if a == action {
+			n++
+		}
+	}
+	return n
+}
+
+func TestMTProtoPurge(t *testing.T) {
+	f := newMtFx(t)
+	ctx := context.Background()
+	live := int(f.create("live")["id"].(float64))
+	p := fmt.Sprintf("/api/v1/mtproto/secrets/%d/purge", live)
+
+	for _, q := range []string{"", "?confirm=no"} {
+		if code, body := f.call("POST", p+q, "", true); code != 400 || !strings.Contains(body, "confirm_required") {
+			t.Fatalf("%q: %d %s", q, code, body)
+		}
+	}
+	// активный — отказ, секрет остаётся
+	if code, body := f.call("POST", p+"?confirm=yes", "", true); code != 409 || !strings.Contains(body, "still_active") {
+		t.Fatalf("активный: %d %s", code, body)
+	}
+	// grace не истёк — тоже отказ
+	rot := f.call2(t, "POST", p[:len(p)-len("purge")]+"rotate", `{"grace":"1m"}`)
+	if code, _ := f.call("POST", p+"?confirm=yes", "", true); code != 409 {
+		t.Fatalf("grace: %d", code)
+	}
+	if _, err := f.st.MTProtoSecrets().Get(ctx, int64(live)); err != nil {
+		t.Fatal("секрет удалён раньше времени")
+	}
+	// grace истёк — можно
+	f.clock.advance(2 * time.Minute)
+	if code, body := f.call("POST", p+"?confirm=yes", "", true); code != 204 {
+		t.Fatalf("grace истёк: %d %s", code, body)
+	}
+	if _, err := f.st.MTProtoSecrets().Get(ctx, int64(live)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("не удалён: %v", err)
+	}
+	if code, _ := f.call("POST", p+"?confirm=yes", "", true); code != 404 {
+		t.Fatalf("повтор: %d", code)
+	}
+	if f.count(api.AuditMTProtoPurge) != 1 {
+		t.Fatalf("аудит: %v", f.auditActions())
+	}
+	// новый (ротированный) остаётся и работает
+	if _, err := f.st.MTProtoSecrets().Get(ctx, int64(rot["id"].(float64))); err != nil {
+		t.Fatal(err)
+	}
+
+	// массовое: отозванные удаляются, активные — нет
+	a := int(f.create("a")["id"].(float64))
+	b := int(f.create("b")["id"].(float64))
+	f.create("c")
+	for _, id := range []int{a, b} {
+		if code, _ := f.call("DELETE", fmt.Sprintf("/api/v1/mtproto/secrets/%d?confirm=yes", id), "", true); code != 204 {
+			t.Fatal(code)
+		}
+	}
+	if code, body := f.call("POST", "/api/v1/mtproto/secrets/purge-revoked", "", true); code != 400 {
+		t.Fatalf("без confirm: %d %s", code, body)
+	}
+	code, body := f.call("POST", "/api/v1/mtproto/secrets/purge-revoked?confirm=yes", "", true)
+	if code != 200 || decodeMap(t, body)["deleted"].(float64) != 2 {
+		t.Fatalf("bulk: %d %s", code, body)
+	}
+	left, _ := f.st.MTProtoSecrets().List(ctx)
+	if len(left) != 2 { // ротированный "live" и "c"
+		t.Fatalf("осталось %d", len(left))
+	}
+	if f.count(api.AuditMTProtoPurge) != 3 {
+		t.Fatalf("аудит bulk: %v", f.auditActions())
+	}
+	if _, body = f.call("POST", "/api/v1/mtproto/secrets/purge-revoked?confirm=yes", "", true); decodeMap(t, body)["deleted"].(float64) != 0 {
+		t.Fatalf("повторный bulk: %s", body)
+	}
+}
+
+func (f *mtFx) call2(t *testing.T, method, path, body string) map[string]any {
+	t.Helper()
+	code, out := f.call(method, path, body, true)
+	if code != 200 {
+		t.Fatalf("%s %s: %d %s", method, path, code, out)
+	}
+	return decodeMap(t, out)
 }

@@ -27,6 +27,7 @@ const (
 	AuditMTProtoRevoke = "mtproto_secret.revoke"
 	AuditMTProtoRotate = "mtproto_secret.rotate"
 	AuditMTProtoReveal = "mtproto_secret.reveal"
+	AuditMTProtoPurge  = "mtproto_secret.purge"
 )
 
 const (
@@ -41,6 +42,9 @@ var mtNameRe = regexp.MustCompile(`^[\p{L}\p{N}](?:[\p{L}\p{N} ._-]{0,62}[\p{L}\
 
 // ErrMTProtoEndpoint — не заданы хост или fronting_domain для ссылки.
 var ErrMTProtoEndpoint = errors.New("mtproto: endpoint is not configured")
+
+// ErrMTProtoActive — секрет ещё действует (не отозван или не истёк grace): удалять нельзя, сначала отзыв.
+var ErrMTProtoActive = errors.New("mtproto: secret is still active")
 
 // Sealer — шифрование секретов (pki.KEK).
 type Sealer interface {
@@ -254,6 +258,53 @@ func (s *MTProtoService) Revoke(ctx context.Context, act Actor, id int64) (store
 	}
 	s.record(ctx, act, AuditMTProtoRevoke, cur, "")
 	return cur, nil
+}
+
+// MTProtoPurgeable — секрет можно удалить окончательно: он отозван и больше не принимается (grace нет или истёк).
+func MTProtoPurgeable(m store.MTProtoSecret, now time.Time) bool {
+	return m.RevokedAt != nil && (m.GraceUntil == nil || !m.GraceUntil.After(now))
+}
+
+// Purge окончательно удаляет отозванный секрет с истёкшим grace (в том числе переименованный
+// «<имя>~<id>» после ротации). Активный секрет — ErrMTProtoActive. Пишет аудит mtproto_secret.purge.
+func (s *MTProtoService) Purge(ctx context.Context, act Actor, id int64) (store.MTProtoSecret, error) {
+	cur, err := s.secrets.Get(ctx, id)
+	if err != nil {
+		return store.MTProtoSecret{}, err
+	}
+	if !MTProtoPurgeable(cur, s.now()) {
+		return store.MTProtoSecret{}, ErrMTProtoActive
+	}
+	if err := s.secrets.Delete(ctx, id); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return store.MTProtoSecret{}, ErrMTProtoActive
+		}
+		return store.MTProtoSecret{}, err
+	}
+	s.record(ctx, act, AuditMTProtoPurge, cur, "")
+	return cur, nil
+}
+
+// PurgeRevoked удаляет все секреты, пригодные для удаления (см. MTProtoPurgeable); возвращает их число.
+func (s *MTProtoService) PurgeRevoked(ctx context.Context, act Actor) (int, error) {
+	all, err := s.secrets.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, m := range all {
+		if !MTProtoPurgeable(m, s.now()) {
+			continue
+		}
+		if _, err := s.Purge(ctx, act, m.ID); err != nil {
+			if errors.Is(err, store.ErrNotFound) || errors.Is(err, ErrMTProtoActive) {
+				continue // удалён/изменён параллельно
+			}
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // Rotate создаёт новый секрет (новый ключ) вместо id; старый действует ещё grace (0 — сразу отзывается).

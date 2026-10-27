@@ -23,6 +23,9 @@ type ErrorSource interface {
 type ErrorsAPI struct {
 	Source ErrorSource
 	Log    *slog.Logger // nil — slog.Default()
+	// Purge — очистка журнала (POST /api/v1/errors/purge); nil — маршрут не регистрируется.
+	Purge    *ErrorsPurgeService
+	ClientIP func(*http.Request) string // nil — пустой IP в аудите
 }
 
 // ErrorItem — запись журнала в JSON.
@@ -61,6 +64,37 @@ func ToItem(e store.ErrorEvent) ErrorItem {
 // Routes регистрирует GET /api/v1/errors; wrap — RequireAuth (+Protect).
 func (a *ErrorsAPI) Routes(mux *http.ServeMux, wrap Wrap) {
 	mux.Handle("GET /api/v1/errors", wrap.apply(http.HandlerFunc(a.list)))
+	if a.Purge != nil {
+		mux.Handle("POST /api/v1/errors/purge", wrap.apply(http.HandlerFunc(a.purge)))
+	}
+}
+
+// purge — POST /api/v1/errors/purge {"keep_days": 0|3|5|15|30}: 0 — удалить всё, иначе записи старше N дней.
+// keep_days обязателен: пустое тело не должно стирать журнал.
+func (a *ErrorsAPI) purge(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		KeepDays *int `json:"keep_days"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.KeepDays == nil {
+		writeJSON(w, http.StatusUnprocessableEntity, errorJSON{Error: "validation", Message: "ошибка валидации",
+			Fields: FieldErrors{"keep_days": "Обязательное поле: 0 (всё), 3, 5, 15, 30"}})
+		return
+	}
+	n, err := a.Purge.Purge(r.Context(), actorOf(r, a.ClientIP), *in.KeepDays)
+	var ve *ValidationError
+	switch {
+	case errors.As(err, &ve):
+		writeJSON(w, http.StatusUnprocessableEntity, errorJSON{Error: "validation", Message: "ошибка валидации", Fields: ve.Fields})
+		return
+	case err != nil:
+		a.log().ErrorContext(r.Context(), "api: errors purge", "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal", "Внутренняя ошибка.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": n})
 }
 
 func (a *ErrorsAPI) list(w http.ResponseWriter, r *http.Request) {

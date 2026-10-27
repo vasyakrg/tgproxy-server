@@ -724,12 +724,12 @@ func chartCard(vm OverviewVM) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "</span></button> <span class=\"mono ov-updated\" data-updated>обновлено 0 с назад</span><ul class=\"legend\" aria-label=\"Серии графика\"><li><span class=\"legend-sw legend-ok\" aria-hidden=\"true\"></span>успешные</li><li><span class=\"legend-sw legend-err\" aria-hidden=\"true\"></span>ошибки прокси</li><li><span class=\"legend-sw legend-r429\" aria-hidden=\"true\"></span>429 Telegram</li><li><span class=\"legend-sw legend-denied\" aria-hidden=\"true\"></span>отказы</li>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "</span></button> <span class=\"mono ov-updated\" data-updated>обновлено 0 с назад</span><ul class=\"legend\" aria-label=\"Серии графика: клик — оставить только эту, Ctrl/Cmd/Shift+клик — переключить\"><li><button type=\"button\" class=\"legend-item\" data-series=\"ok\" aria-pressed=\"true\"><span class=\"legend-sw legend-ok\" aria-hidden=\"true\"></span>успешные</button></li><li><button type=\"button\" class=\"legend-item\" data-series=\"err\" aria-pressed=\"true\"><span class=\"legend-sw legend-err\" aria-hidden=\"true\"></span>ошибки прокси</button></li><li><button type=\"button\" class=\"legend-item\" data-series=\"r429\" aria-pressed=\"true\"><span class=\"legend-sw legend-r429\" aria-hidden=\"true\"></span>429 Telegram</button></li><li><button type=\"button\" class=\"legend-item\" data-series=\"denied\" aria-pressed=\"true\"><span class=\"legend-sw legend-denied\" aria-hidden=\"true\"></span>отказы</button></li>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if vm.MTProto {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "<li><span class=\"legend-sw legend-mt\" aria-hidden=\"true\"></span>MTProto, соед.</li><li><span class=\"legend-sw legend-mtbps\" aria-hidden=\"true\"></span>MTProto, полоса</li>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "<li><button type=\"button\" class=\"legend-item\" data-series=\"mt\" aria-pressed=\"true\"><span class=\"legend-sw legend-mt\" aria-hidden=\"true\"></span>MTProto, соед.</button></li><li><button type=\"button\" class=\"legend-item\" data-series=\"mtbps\" aria-pressed=\"true\"><span class=\"legend-sw legend-mtbps\" aria-hidden=\"true\"></span>MTProto, полоса</button></li>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

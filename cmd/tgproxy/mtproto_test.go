@@ -127,6 +127,7 @@ func TestMTProtoSecretCLINoKEK(t *testing.T) {
 		{"mtproto", "secret", "link", "a"},
 		{"mtproto", "secret", "rotate", "a"},
 		{"mtproto", "secret", "delete", "a", "--yes"},
+		{"mtproto", "secret", "purge", "a", "--yes"},
 	} {
 		_, err := run(t, with(a...)...)
 		if err == nil || !strings.Contains(err.Error(), "pki.kek_file") {
@@ -296,5 +297,77 @@ func TestMTProtoProbeHandshakeOnly(t *testing.T) {
 	bad, _ := link.Build("127.0.0.1", port, k2, "tg.example.com")
 	if _, err := run(t, "mtproto", "probe", "--link", bad, "--handshake-only", "--timeout", "2s"); err == nil {
 		t.Fatal("wrong key must fail")
+	}
+}
+
+func TestMTProtoSecretPurgeCLI(t *testing.T) {
+	with := mtEnv(t, false)
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("USER", "tester")
+	for _, n := range []string{"a", "b", "c"} {
+		if _, err := run(t, with("mtproto", "secret", "add", "--name", n)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// аргументы: ни id, ни флага / оба сразу
+	for _, bad := range [][]string{{"mtproto", "secret", "purge"}, {"mtproto", "secret", "purge", "a", "--all-revoked"}} {
+		if _, err := run(t, with(bad...)...); err == nil {
+			t.Fatalf("%v must fail", bad)
+		}
+	}
+	// активный не удаляется
+	if _, err := run(t, with("mtproto", "secret", "purge", "a", "--yes")...); err == nil || !strings.Contains(err.Error(), "отзовите") {
+		t.Fatalf("purge active: %v", err)
+	}
+	if _, err := run(t, with("mtproto", "secret", "delete", "a", "--yes")...); err != nil {
+		t.Fatal(err)
+	}
+	// без --yes и пустого stdin — отмена
+	if _, err := run(t, with("mtproto", "secret", "purge", "a")...); err == nil {
+		t.Fatal("purge without confirmation must fail")
+	}
+	out, err := run(t, with("mtproto", "secret", "purge", "a", "--yes")...)
+	if err != nil || !strings.Contains(out, "удалён") {
+		t.Fatalf("purge: %v %q", err, out)
+	}
+	if _, err = run(t, with("mtproto", "secret", "purge", "a", "--yes")...); err == nil {
+		t.Fatal("purge of missing must fail")
+	}
+
+	// массово: b отзываем и удаляем пачкой, c остаётся
+	if _, err = run(t, with("mtproto", "secret", "delete", "b", "--yes")...); err != nil {
+		t.Fatal(err)
+	}
+	out, err = run(t, with("mtproto", "secret", "purge", "--all-revoked", "--yes")...)
+	if err != nil || !strings.Contains(out, "удалено отозванных секретов: 1") {
+		t.Fatalf("all-revoked: %v %q", err, out)
+	}
+	out, _ = run(t, with("mtproto", "secret", "purge", "--all-revoked", "--yes")...)
+	if !strings.Contains(out, "нет") {
+		t.Fatalf("повтор: %q", out)
+	}
+	out, _ = run(t, with("mtproto", "secret", "list")...)
+	if strings.Contains(out, " a ") || strings.Contains(out, " b ") || !strings.Contains(out, "c ") {
+		t.Fatalf("list: %q", out)
+	}
+	cmd := newRootCmd()
+	cmd.SetContext(t.Context())
+	_, st, err := openAdminStore(cmd, "dev/server.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	ents, err := st.Audit().List(t.Context(), store.AuditQuery{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	purges := 0
+	for _, e := range ents {
+		if e.Action == "mtproto_secret.purge" && strings.HasPrefix(e.Actor, "cli:") {
+			purges++
+		}
+	}
+	if purges != 2 {
+		t.Fatalf("аудит purge: %d из %+v", purges, ents)
 	}
 }

@@ -575,6 +575,18 @@ func (r errRepo) Trim(_ context.Context, keep int, before time.Time) (int64, err
 	return int64(n0 - len(r.s.errs)), nil
 }
 
+func (r errRepo) Purge(_ context.Context, before time.Time) (int64, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	n0 := len(r.s.errs)
+	if before.IsZero() {
+		r.s.errs = nil
+	} else {
+		r.s.errs = slices.DeleteFunc(r.s.errs, func(e store.ErrorEvent) bool { return e.At.Before(trunc(before)) })
+	}
+	return int64(n0 - len(r.s.errs)), nil
+}
+
 // ---- install jobs ----
 
 type jobRepo struct{ s *Store }

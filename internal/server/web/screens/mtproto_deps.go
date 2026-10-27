@@ -40,6 +40,7 @@ type MTSecretRow struct {
 	CanLink    bool
 	CanRotate  bool
 	CanRevoke  bool
+	CanPurge   bool // отозван и grace истёк: можно удалить окончательно
 }
 
 // MTCell — ячейка матрицы agent×DC.
@@ -92,6 +93,19 @@ type MTRotateVM struct {
 type MTRevokeVM struct {
 	ID   int64
 	Name string
+}
+
+// MTPurgeVM — подтверждение удаления отозванного секрета.
+type MTPurgeVM struct {
+	ID   int64
+	Name string
+	Err  string
+}
+
+// MTPurgeAllVM — подтверждение массового удаления отозванных секретов.
+type MTPurgeAllVM struct {
+	Count int
+	Err   string
 }
 
 // MTTOTPVM — запрос кода TOTP перед показом ссылки.
@@ -159,6 +173,7 @@ func mtSecretRow(m store.MTProtoSecret, conns func(string) int, now time.Time) M
 	row.CanLink = key == "active" || key == "grace"
 	row.CanRotate = key == "active" || key == "disabled"
 	row.CanRevoke = key != "revoked"
+	row.CanPurge = api.MTProtoPurgeable(m, now)
 	return row
 }
 

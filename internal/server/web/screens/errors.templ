@@ -5,16 +5,20 @@ import "github.com/vasyakrg/tgproxy-server/internal/server/web/views"
 // ErrorsPage — полная страница «Ошибки».
 templ ErrorsPage(vm ErrorsVM) {
 	<div id="errors" class="errs">
-		@views.PageHeader("Ошибки", "Отказы прокси и агентов. Тела запросов не сохраняются, токены замаскированы.")
-		<section class="phase-grid" aria-label="Сводка за 24 часа">
-			for _, k := range vm.KPIs {
-				<div class="phase-card">
-					<div class="phase-label mono">{ k.Label }</div>
-					<div class="phase-value mono">{ k.Value }</div>
-					<div class={ "phase-hint", "tone-" + k.Tone }>{ k.Hint }</div>
-				</div>
+		@views.PageHeader("Ошибки", "Отказы прокси и агентов. Тела запросов не сохраняются, токены замаскированы.") {
+			if vm.CanPurge {
+				<button
+					type="button"
+					class="btn btn-danger"
+					data-modal-open="errors-purge-modal"
+					hx-get="/errors/purge"
+					hx-include="#errors-filters"
+					hx-target="#errors-purge-body"
+					hx-swap="innerHTML"
+				>Очистить журнал</button>
 			}
-		</section>
+		}
+		@ErrorsKPIs(vm)
 		<section class="card errs-card" hx-history="false">
 			@errorsFilters(vm)
 			@ErrorsResults(vm)
@@ -23,7 +27,78 @@ templ ErrorsPage(vm ErrorsVM) {
 			@views.GeoAttribution()
 		}
 		@BanModal(false)
+		if vm.CanPurge {
+			@ErrorsPurgeModal(false)
+		}
 	</div>
+}
+
+// ErrorsKPIs — сводка по фазам за 24 часа (с vm.OOB заменяет сводку на странице).
+templ ErrorsKPIs(vm ErrorsVM) {
+	<section
+		id="errors-kpis"
+		class="phase-grid"
+		aria-label="Сводка за 24 часа"
+		if vm.OOB {
+			hx-swap-oob="true"
+		}
+	>
+		for _, k := range vm.KPIs {
+			<div class="phase-card">
+				<div class="phase-label mono">{ k.Label }</div>
+				<div class="phase-value mono">{ k.Value }</div>
+				<div class={ "phase-hint", "tone-" + k.Tone }>{ k.Hint }</div>
+			</div>
+		}
+	</section>
+}
+
+// ErrorsPurgeModal — диалог очистки журнала (тело подгружается htmx). С oob=true заменяет открытый диалог закрытым.
+templ ErrorsPurgeModal(oob bool) {
+	<div
+		id="errors-purge-wrap"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		@views.Modal("errors-purge-modal", "Очистка журнала") {
+			<div id="errors-purge-body"></div>
+		}
+	</div>
+}
+
+// ErrorsPurgeForm — выбор, что удалить из журнала ошибок. Явно предупреждает о необратимости.
+templ ErrorsPurgeForm(v ErrorsPurgeVM) {
+	<form
+		class="stack"
+		method="post"
+		action="/errors/purge"
+		hx-post="/errors/purge"
+		hx-include="#errors-filters"
+		hx-target="#errors-purge-body"
+		hx-swap="innerHTML"
+		hx-disabled-elt="find button[type=submit]"
+		novalidate
+	>
+		<h3 class="form-title">Очистить журнал ошибок?</h3>
+		<div class="alert alert-warn" role="status">Удалённые записи восстановить нельзя. Сводка за 24 часа пересчитается по оставшимся записям. История запросов и графики не затрагиваются.</div>
+		if v.Err != "" {
+			<div class="alert alert-err" role="alert">{ v.Err }</div>
+		}
+		<fieldset class="stack fieldset-plain">
+			<legend class="field-label">Что удалить</legend>
+			for _, o := range v.Opts {
+				<label class="check">
+					<input type="radio" name="keep_days" value={ o.Days } checked?={ o.Days == v.Selected }/>
+					<span>{ o.Label }</span>
+				</label>
+			}
+		</fieldset>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-danger">Удалить без возврата</button>
+		</div>
+	</form>
 }
 
 templ errorsFilters(vm ErrorsVM) {
@@ -36,6 +111,7 @@ templ errorsFilters(vm ErrorsVM) {
 		hx-target="#errors-results"
 		hx-swap="outerHTML"
 		hx-push-url="true"
+		id="errors-filters"
 	>
 		<div class="field errs-f-agent">
 			<label class="field-label" for="f-agent">Агент</label>
@@ -91,7 +167,13 @@ templ errorsFilters(vm ErrorsVM) {
 
 // ErrorsResults — таблица журнала (подменяется целиком при смене фильтров).
 templ ErrorsResults(vm ErrorsVM) {
-	<div id="errors-results" class="errs-results">
+	<div
+		id="errors-results"
+		class="errs-results"
+		if vm.OOB {
+			hx-swap-oob="true"
+		}
+	>
 		if len(vm.Rows) == 0 {
 			if vm.Filtered {
 				@views.EmptyState("Ничего не найдено", "Под выбранные фильтры записей нет. Сбросьте фильтры или расширьте условия.")

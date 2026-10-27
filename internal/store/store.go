@@ -160,6 +160,9 @@ type ErrorEventRepo interface {
 	List(ctx context.Context, q ErrorQuery) ([]ErrorEvent, error)
 	// Trim оставляет последние keep записей и удаляет всё старше before (zero — не ограничивать по времени).
 	Trim(ctx context.Context, keep int, before time.Time) (int64, error)
+	// Purge — ручная очистка журнала админом: удаляет записи старше before (at < before);
+	// нулевой before — все записи. Возвращает число удалённых. Агрегаты и история rps не затрагиваются.
+	Purge(ctx context.Context, before time.Time) (int64, error)
 }
 
 // InstallJobRepo — задачи SSH-установки и их события.
@@ -227,6 +230,10 @@ type MTProtoSecretRepo interface {
 	// перестаёт приниматься сразу. seal получает id новой строки (контракт как у Create); при его ошибке
 	// ротация откатывается целиком. Возвращает новый секрет.
 	Rotate(ctx context.Context, id int64, seal SealFunc, prefix string, graceUntil time.Time) (MTProtoSecret, error)
+	// Delete окончательно удаляет отозванный секрет (ErrNotFound — нет такого; ErrConflict — секрет не отозван).
+	// Срок grace проверяет вызывающий. Журнал соединений не меняется (mtproto_sessions без FK; id не
+	// переиспользуются), у секретов с rotated_from=id ссылка обнуляется. Версия растёт.
+	Delete(ctx context.Context, id int64) error
 	Version(ctx context.Context) (int64, error)
 }
 

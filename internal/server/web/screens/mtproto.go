@@ -25,7 +25,8 @@ type mtScreen struct {
 
 // MountMTProto регистрирует экран «MTProto»: GET /mtproto, GET /mtproto/list, GET /mtproto/new,
 // POST /mtproto, GET|POST /mtproto/{id}/link (показ ссылки; при несвежем TOTP — запрос кода),
-// GET|POST /mtproto/{id}/rotate, GET|POST /mtproto/{id}/revoke. Все маршруты за Protect + RequireAuth;
+// GET|POST /mtproto/{id}/rotate, GET|POST /mtproto/{id}/revoke,
+// GET|POST /mtproto/{id}/purge (удаление отозванного секрета), GET|POST /mtproto/purge-revoked (массово). Все маршруты за Protect + RequireAuth;
 // изменяющие — только htmx (CSRF: http.CrossOriginProtection в Protect).
 func MountMTProto(rt AccessRouter, d MTProtoDeps) {
 	s := &mtScreen{rt: rt, d: d, log: d.Logger, now: d.Now}
@@ -48,6 +49,10 @@ func MountMTProto(rt AccessRouter, d MTProtoDeps) {
 	m("POST /mtproto/{id}/rotate", s.rotate)
 	m("GET /mtproto/{id}/revoke", s.revokeConfirm)
 	m("POST /mtproto/{id}/revoke", s.revoke)
+	m("GET /mtproto/{id}/purge", s.purgeConfirm)
+	m("POST /mtproto/{id}/purge", s.purge)
+	m("GET /mtproto/purge-revoked", s.purgeAllConfirm)
+	m("POST /mtproto/purge-revoked", s.purgeAll)
 }
 
 func (s *mtScreen) actor(r *http.Request) api.Actor {
@@ -368,6 +373,88 @@ func (s *mtScreen) revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	toast(w, "ok", "Секрет «"+m.Name+"» отозван")
+	s.refresh(w, r, MTModal(true)) //nolint:contextcheck // templ-компонент получает ctx в Render
+}
+
+func (s *mtScreen) purgeConfirm(w http.ResponseWriter, r *http.Request) {
+	if !htmxOnly(w, r) {
+		return
+	}
+	id, ok := s.secretID(w, r)
+	if !ok {
+		return
+	}
+	m, err := s.get(r, id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	vm := MTPurgeVM{ID: id, Name: m.Name}
+	if !api.MTProtoPurgeable(m, s.now()) {
+		vm.Err = mtPurgeActiveMsg
+	}
+	renderFragment(w, r, http.StatusOK, MTPurgeConfirm(vm)) //nolint:contextcheck // templ-компонент получает ctx в Render
+}
+
+const mtPurgeActiveMsg = "Секрет ещё действует: сначала отзовите его (и дождитесь конца grace)."
+
+func (s *mtScreen) purge(w http.ResponseWriter, r *http.Request) {
+	if !htmxOnly(w, r) {
+		return
+	}
+	id, ok := s.secretID(w, r)
+	if !ok {
+		return
+	}
+	m, err := s.d.Service.Purge(r.Context(), s.actor(r), id)
+	if errors.Is(err, api.ErrMTProtoActive) {
+		renderFragment(w, r, http.StatusConflict, MTPurgeConfirm(MTPurgeVM{ID: id, Err: mtPurgeActiveMsg})) //nolint:contextcheck // templ-компонент получает ctx в Render
+		return
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	toast(w, "ok", "Секрет «"+m.Name+"» удалён")
+	s.refresh(w, r, MTModal(true)) //nolint:contextcheck // templ-компонент получает ctx в Render
+}
+
+func (s *mtScreen) purgeableCount(r *http.Request) (int, error) {
+	all, err := s.d.Service.List(r.Context())
+	if err != nil {
+		return 0, err
+	}
+	now, n := s.now(), 0
+	for _, m := range all {
+		if api.MTProtoPurgeable(m, now) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s *mtScreen) purgeAllConfirm(w http.ResponseWriter, r *http.Request) {
+	if !htmxOnly(w, r) {
+		return
+	}
+	n, err := s.purgeableCount(r)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	renderFragment(w, r, http.StatusOK, MTPurgeAllConfirm(MTPurgeAllVM{Count: n})) //nolint:contextcheck // templ-компонент получает ctx в Render
+}
+
+func (s *mtScreen) purgeAll(w http.ResponseWriter, r *http.Request) {
+	if !htmxOnly(w, r) {
+		return
+	}
+	n, err := s.d.Service.PurgeRevoked(r.Context(), s.actor(r))
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	toast(w, "ok", "Удалено отозванных секретов: "+strconv.Itoa(n))
 	s.refresh(w, r, MTModal(true)) //nolint:contextcheck // templ-компонент получает ctx в Render
 }
 

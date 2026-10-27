@@ -44,6 +44,8 @@ func Run(t *testing.T, factory Factory) {
 		{"Bans", testBans},
 		{"MTProtoSecrets", testMTProtoSecrets},
 		{"MTProtoSealContract", testMTProtoSealContract},
+		{"MTProtoDelete", testMTProtoDelete},
+		{"ErrorEventsPurge", testErrorEventsPurge},
 		{"MTProtoSessions", testMTProtoSessions},
 		{"DeniedSamples", testDeniedSamples},
 		{"AccessDenials", testAccessDenials},
@@ -1502,5 +1504,92 @@ func testMTProtoSessions(t *testing.T, s store.Store) {
 	ok(t, err)
 	if len(left) != 2 {
 		t.Fatalf("left %d", len(left))
+	}
+}
+
+// testMTProtoDelete: удалять можно только отозванный секрет; журнал сессий цел; rotated_from обнуляется.
+func testMTProtoDelete(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	r := s.MTProtoSecrets()
+	is(t, r.Delete(ctx, 99), store.ErrNotFound)
+
+	a, err := r.Create(ctx, "alpha", sealOf([]byte{1}), "aabbccdd", nil, 0)
+	ok(t, err)
+	is(t, r.Delete(ctx, a.ID), store.ErrConflict) // активный
+	if _, err := r.Get(ctx, a.ID); err != nil {
+		t.Fatal("активный секрет не должен удаляться")
+	}
+
+	nw, err := r.Rotate(ctx, a.ID, sealOf([]byte{2}), "11223344", time.Time{})
+	ok(t, err)
+	if nw.RotatedFrom == nil || *nw.RotatedFrom != a.ID {
+		t.Fatalf("rotated_from %+v", nw.RotatedFrom)
+	}
+	ok(t, s.MTProtoSessions().InsertBatch(ctx, []store.MTProtoSession{
+		{StartedAt: time.Now().Add(-time.Minute), EndedAt: time.Now(), SecretID: a.ID, ClientIP: "1.1.1.1"},
+	}))
+
+	v0, err := r.Version(ctx)
+	ok(t, err)
+	ok(t, r.Delete(ctx, a.ID)) // старый (ротирован, grace нет)
+	if v1, _ := r.Version(ctx); v1 <= v0 {
+		t.Fatalf("версия не выросла: %d -> %d", v0, v1)
+	}
+	_, err = r.Get(ctx, a.ID)
+	is(t, err, store.ErrNotFound)
+	is(t, r.Delete(ctx, a.ID), store.ErrNotFound)
+
+	got, err := r.Get(ctx, nw.ID)
+	ok(t, err)
+	if got.RotatedFrom != nil {
+		t.Fatalf("rotated_from должен обнулиться: %v", *got.RotatedFrom)
+	}
+	sess, err := s.MTProtoSessions().List(ctx, store.MTProtoSessionQuery{SecretID: a.ID})
+	ok(t, err)
+	if len(sess) != 1 {
+		t.Fatalf("журнал сессий должен сохраниться: %d", len(sess))
+	}
+	all, _ := r.List(ctx)
+	if len(all) != 1 || all[0].ID != nw.ID {
+		t.Fatalf("список после удаления: %+v", all)
+	}
+
+	// имя освободилось: можно создать секрет с тем же именем, id не переиспользуется
+	b, err := r.Create(ctx, "alpha~"+strconv.FormatInt(a.ID, 10), sealOf([]byte{3}), "aabbccdd", nil, 0)
+	ok(t, err)
+	if b.ID <= nw.ID {
+		t.Fatalf("id переиспользован: %d", b.ID)
+	}
+	ok(t, r.Revoke(ctx, b.ID, time.Now()))
+	ok(t, r.Delete(ctx, b.ID)) // обычный отзыв
+}
+
+// testErrorEventsPurge: Purge удаляет at < before; нулевой before — всё.
+func testErrorEventsPurge(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	r := s.Errors()
+	if n, err := r.Purge(ctx, time.Time{}); err != nil || n != 0 {
+		t.Fatalf("пустой журнал: %d %v", n, err)
+	}
+	cut := time.Now().Truncate(time.Second)
+	for i, at := range []time.Time{cut.Add(-time.Second), cut, cut.Add(time.Second), cut.Add(-48 * time.Hour)} {
+		_, err := r.Append(ctx, store.ErrorEvent{At: at, RequestID: "r" + strconv.Itoa(i), Outcome: store.OutcomeRetried, Phase: "dial"})
+		ok(t, err)
+	}
+	n, err := r.Purge(ctx, cut)
+	ok(t, err)
+	if n != 2 { // строго старше cut; запись ровно на границе остаётся
+		t.Fatalf("purge before: %d", n)
+	}
+	left, _ := r.List(ctx, store.ErrorQuery{Limit: 100})
+	if len(left) != 2 {
+		t.Fatalf("осталось %d", len(left))
+	}
+	n, err = r.Purge(ctx, time.Time{})
+	if err != nil || n != 2 {
+		t.Fatalf("purge all: %d %v", n, err)
+	}
+	if left, _ = r.List(ctx, store.ErrorQuery{Limit: 100}); len(left) != 0 {
+		t.Fatalf("после purge all: %d", len(left))
 	}
 }

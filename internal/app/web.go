@@ -168,9 +168,12 @@ func (s *Server) wireWeb(cfg *config.ServerConfig) error {
 		Shell: rt, Stats: s.obs.hq, Agents: s.reg, Events: outboxEvents{s.st.Outbox()}, Live: liveInflight{s.obs.inflight},
 		MTProto: mtLive, ServerVersion: buildinfo.Version, Log: s.logger,
 	})))
-	rt.Mount("GET /errors", protected(screens.NewErrors(screens.ErrorsDeps{
-		Shell: rt, Source: s.obs.hq, Agents: s.reg, Geo: s.geo, Log: s.logger,
-	})))
+	errorsPurge := api.NewErrorsPurgeService(s.st.Errors(), s.st.Audit(), s.logger, nil)
+	errorsDeps := screens.ErrorsDeps{
+		Shell: rt, Source: s.obs.hq, Agents: s.reg, Geo: s.geo, Log: s.logger, Purge: errorsPurge, ClientIP: s.checker.ClientIP,
+	}
+	rt.Mount("GET /errors", protected(screens.NewErrors(errorsDeps)))
+	screens.MountErrorsPurge(rt, a, errorsDeps)
 	bansSvc := api.NewBansService(s.bans, s.st.Audit(), s.logger, nil)
 	screens.MountBans(rt, screens.BansDeps{
 		Auth: a, Service: bansSvc, Geo: s.geo, ClientIP: s.checker.ClientIP, Logger: s.logger,
@@ -186,7 +189,7 @@ func (s *Server) wireWeb(cfg *config.ServerConfig) error {
 	(&api.AccessAPI{Service: svc, ClientIP: s.checker.ClientIP, BaseURL: env.PublicBaseURL, Stats: env.RuleStats}).
 		Routes(muxMounter{apiMux}, wrapRefresh(protected, refresh))
 	(&api.StatsAPI{Stats: s.obs.hq, Agents: s.reg, Live: liveInflight{s.obs.inflight}, Log: s.logger}).Routes(apiMux, protected)
-	(&api.ErrorsAPI{Source: s.obs.hq, Log: s.logger}).Routes(apiMux, protected)
+	(&api.ErrorsAPI{Source: s.obs.hq, Log: s.logger, Purge: errorsPurge, ClientIP: s.checker.ClientIP}).Routes(apiMux, protected)
 	(&api.BansAPI{Service: bansSvc, ClientIP: s.checker.ClientIP, Country: s.geo.LookupString}).Routes(muxMounter{apiMux}, api.Wrap(protected))
 	mountMTProto(apiMux)
 	agentsAPI(apiMux, protected)

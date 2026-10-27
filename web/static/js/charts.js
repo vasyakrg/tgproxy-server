@@ -17,6 +17,9 @@
   var MIN_POLL = 2000;
   var MAX_POLL = 60000;
   var CHART_H = 240;
+  // Ключи серий в порядке data[1..]; индекс в uPlot = позиция + 1. Совпадают с data-series в легенде.
+  var SERIES_KEYS = ['ok', 'err', 'r429', 'denied', 'mt', 'mtbps'];
+  var HIDDEN_KEY = 'tgproxy.chart.hidden';
 
   var instances = new WeakMap();
   var reduceMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
@@ -66,6 +69,28 @@
     setHint(doc, 'mtproto', 'полоса ' + fmtBitrate(d[6][n - 1]));
   };
 
+  // Скрытые серии переживают перерисовку и смену периода (sessionStorage; недоступен — в памяти).
+  var memHidden = null;
+  function loadHidden() {
+    var raw = null;
+    try { raw = window.sessionStorage.getItem(HIDDEN_KEY); } catch (e) { return memHidden ? copyMap(memHidden) : {}; }
+    var out = {};
+    if (raw) {
+      try {
+        var arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          arr.forEach(function (k) { if (SERIES_KEYS.indexOf(k) >= 0) { out[k] = true; } });
+        }
+      } catch (e2) { out = {}; }
+    }
+    return out;
+  }
+  function saveHidden(map) {
+    memHidden = copyMap(map);
+    try { window.sessionStorage.setItem(HIDDEN_KEY, JSON.stringify(Object.keys(map))); } catch (e) { /* только память */ }
+  }
+  function copyMap(m) { var o = {}; Object.keys(m).forEach(function (k) { o[k] = true; }); return o; }
+
   function toNum(v) { var n = Number(v); return isFinite(n) ? n : 0; }
 
   // ---- график ----
@@ -90,6 +115,8 @@
     this.mt = el.getAttribute('data-mtproto') === '1'; // MTProto включён: ряды mtproto_conns / mtproto_bps
     this.data = [[], [], [], [], []]; // t, ok, err, r429, denied[, mt_conns, mt_bps]
     if (this.mt) { this.data.push([], []); }
+    this.hidden = loadHidden(); // {key: true} — скрытые легендой серии
+    this.legendEl = this.root.querySelector('.legend');
     this.denyBy = []; // разбивка отказов по причинам для тултипа, параллельно data[0]
     this.stepSec = 0;
     this.live = true;
@@ -106,6 +133,7 @@
 
     this.onToggle = this.toggle.bind(this);
     this.onVisibility = this.visibility.bind(this);
+    this.onLegend = this.legendClick.bind(this);
     this.start();
   }
 
@@ -116,6 +144,8 @@
       return;
     }
     if (this.liveBtn) { this.liveBtn.addEventListener('click', this.onToggle); }
+    if (this.legendEl) { this.legendEl.addEventListener('click', this.onLegend); }
+    this.renderLegend();
     document.addEventListener('visibilitychange', this.onVisibility);
     if (typeof ResizeObserver === 'function') {
       this.ro = new ResizeObserver(function () { self.resize(); });
@@ -135,6 +165,7 @@
     if (this.abort) { this.abort.abort(); }
     if (this.ro) { this.ro.disconnect(); }
     if (this.liveBtn) { this.liveBtn.removeEventListener('click', this.onToggle); }
+    if (this.legendEl) { this.legendEl.removeEventListener('click', this.onLegend); }
     document.removeEventListener('visibilitychange', this.onVisibility);
     if (this.u) { this.u.destroy(); this.u = null; }
     instances.delete(this.el);
@@ -226,6 +257,69 @@
     return { min: max - this.windowSec, max: max };
   };
 
+  // ---- легенда-фильтр ----
+  Chart.prototype.activeKeys = function () { return SERIES_KEYS.slice(0, this.mt ? 6 : 4); };
+
+  Chart.prototype.isVisible = function (key) { return !this.hidden[key]; };
+
+  // Клик: изоляция серии (повтор по единственной видимой — показать все).
+  // Ctrl/Cmd/Shift+клик: переключить только эту серию.
+  Chart.prototype.legendSelect = function (key, multi) {
+    var keys = this.activeKeys(), h = {}, self = this;
+    if (keys.indexOf(key) < 0) { return; }
+    if (multi) {
+      h = copyMap(this.hidden);
+      if (h[key]) { delete h[key]; } else { h[key] = true; }
+    } else {
+      var shown = keys.filter(function (k) { return self.isVisible(k); });
+      var isolated = shown.length === 1 && shown[0] === key;
+      if (!isolated) { keys.forEach(function (k) { if (k !== key) { h[k] = true; } }); }
+    }
+    this.hidden = h;
+    saveHidden(h);
+    this.renderLegend();
+    this.applyVisibility();
+  };
+
+  Chart.prototype.legendClick = function (e) {
+    var t = e.target, btn = t && t.closest ? t.closest('[data-series]') : null;
+    if (!btn || !this.legendEl.contains(btn)) { return; }
+    this.legendSelect(btn.getAttribute('data-series'), !!(e.ctrlKey || e.metaKey || e.shiftKey));
+  };
+
+  Chart.prototype.renderLegend = function () {
+    if (!this.legendEl) { return; }
+    var btns = this.legendEl.querySelectorAll('[data-series]');
+    for (var i = 0; i < btns.length; i++) {
+      var on = this.isVisible(btns[i].getAttribute('data-series'));
+      btns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+  };
+
+  // Ось показываем, только если видна хотя бы одна её серия (левая — rps, правая — MTProto-соединения).
+  Chart.prototype.axisShow = function () {
+    var self = this;
+    return {
+      y: ['ok', 'err', 'r429', 'denied'].some(function (k) { return self.isVisible(k); }),
+      mt: this.isVisible('mt')
+    };
+  };
+
+  // Без пересоздания графика: setSeries({show}) пересчитывает авто-диапазон Y по видимым данным.
+  Chart.prototype.applyVisibility = function () {
+    var u = this.u;
+    if (!u) { return; }
+    var keys = this.activeKeys(), i, changedAxis = false;
+    for (i = 0; i < keys.length; i++) {
+      var vis = this.isVisible(keys[i]);
+      if (u.series[i + 1].show !== vis) { u.setSeries(i + 1, { show: vis }); }
+    }
+    var ax = this.axisShow();
+    if (u.axes[1].show !== ax.y) { u.axes[1].show = ax.y; changedAxis = true; }
+    if (this.mt && u.axes[2] && u.axes[2].show !== ax.mt) { u.axes[2].show = ax.mt; changedAxis = true; }
+    if (changedAxis) { u.setSize({ width: u.width, height: u.height }); } // пересчёт полей под оси
+  };
+
   // ---- uPlot ----
   Chart.prototype.create = function () {
     var self = this;
@@ -237,12 +331,13 @@
     var cDenied = css('--err', '#F87171');
     var muted = css('--muted', '#9AA3B2'), border = css('--border', '#262B36');
     var font = '11px ' + css('--font-mono', 'ui-monospace, monospace');
-    function ser(label, color) {
-      return { label: label, stroke: color, width: 2, fill: rgba(color, 0.12), points: { show: false } };
+    var hid = this.hidden, axShow = this.axisShow();
+    function ser(label, color, key) {
+      return { label: label, stroke: color, width: 2, fill: rgba(color, 0.12), points: { show: false }, show: !hid[key] };
     }
-    var cMT = css('--warn', '#FBBF24'), cBps = css('--link', '#5EEAD4');
-    function dashed(label, color, scale) {
-      return { label: label, stroke: color, width: 1.5, dash: [5, 4], scale: scale, points: { show: false } };
+    var cMT = css('--warn', '#FBBF24'), cBps = css('--text', '#E6E8EE');
+    function dashed(label, color, scale, key) {
+      return { label: label, stroke: color, width: 1.5, dash: [5, 4], scale: scale, points: { show: false }, show: !hid[key] };
     }
     var opts = {
       width: Math.max(this.plotEl.clientWidth, 200),
@@ -267,23 +362,23 @@
           }
         },
         {
-          stroke: muted, font: font, size: 48, grid: { stroke: border, width: 1 }, ticks: { show: false },
+          show: axShow.y, stroke: muted, font: font, size: 48, grid: { stroke: border, width: 1 }, ticks: { show: false },
           values: function (u, vals) { return vals.map(function (v) { return v === Math.round(v) ? String(v) : num(v, 1); }); }
         }
       ],
       series: [
         {},
-        ser('успешные', cOK),
-        ser('ошибки прокси', cErr),
-        ser('429 Telegram', c429),
-        ser('отказы', cDenied)
+        ser('успешные', cOK, 'ok'),
+        ser('ошибки прокси', cErr, 'err'),
+        ser('429 Telegram', c429, 'r429'),
+        ser('отказы', cDenied, 'denied')
       ],
       hooks: { setCursor: [function (u) { self.onCursor(u); }] }
     };
     if (this.mt) {
-      opts.series.push(dashed('MTProto, соед.', cMT, 'mt'), dashed('MTProto, полоса', cBps, 'mtbps'));
+      opts.series.push(dashed('MTProto, соед.', cMT, 'mt', 'mt'), dashed('MTProto, полоса', cBps, 'mtbps', 'mtbps'));
       opts.axes.push({
-        scale: 'mt', side: 1, stroke: muted, font: font, size: 48, grid: { show: false }, ticks: { show: false },
+        show: axShow.mt, scale: 'mt', side: 1, stroke: muted, font: font, size: 48, grid: { show: false }, ticks: { show: false },
         values: function (u, vals) { return vals.map(function (v) { return v === Math.round(v) ? String(v) : ''; }); }
       });
     }

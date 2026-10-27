@@ -96,6 +96,10 @@ sudo runuser -u tgproxy -- tgproxy ban delete --ip 203.0.113.7 -c /etc/tgproxy/s
 
 Файл `geoip.file` (по умолчанию `/usr/share/tgproxy/geoip/dbip-country-lite.mmdb`) поставляется пакетом и обновляется вместе с ним; отдельного обновления и сетевых запросов нет. Нет файла или он битый — сервер стартует, в журнале `geoip database not found/unavailable`, флаги не показываются. Своя база: положите mmdb в любое место и укажите в `geoip.file` (формат MaxMind DB, записи `country.iso_code`). Лицензия DB-IP Lite — CC BY 4.0 (атрибуция «IP Geolocation by DB-IP» показана в UI).
 
+## Очистка журнала ошибок
+
+UI «Ошибки → Очистить журнал» (или `POST /api/v1/errors/purge` с `{"keep_days": 0|3|5|15|30}`, поле обязательно): `0` — удалить все записи, иначе удаляются записи старше N суток (запись ровно на границе остаётся). Чистится только журнал событий `error_events`; история запросов/rps, графики, баны и аудит не затрагиваются. Сводка за 24 часа пересчитывается по оставшимся записям. Действие необратимо; в аудит пишется `errors.purge` (`keep_days`, число удалённых). Автоматическая ротация журнала (retention) работает как раньше.
+
 ## Сертификаты
 
 - **Агент**: листовой сертификат 90 дней, агент сам продлевает его по mTLS на 2/3 срока (`/_agent/csr` → `/_agent/cert`), рестарт не нужен. Отпечаток CA: `tgproxy pki fingerprint -c /etc/tgproxy/server.yaml`.
@@ -213,11 +217,14 @@ ReadWritePaths=/data/tgproxy/agent
   sudo runuser -u tgproxy -- tgproxy mtproto secret link team-a -c /etc/tgproxy/server.yaml
   sudo runuser -u tgproxy -- tgproxy mtproto secret rotate team-a --grace 1h -c /etc/tgproxy/server.yaml
   sudo runuser -u tgproxy -- tgproxy mtproto secret delete team-a --yes -c /etc/tgproxy/server.yaml
+  sudo runuser -u tgproxy -- tgproxy mtproto secret purge team-a --yes -c /etc/tgproxy/server.yaml   # окончательно удалить отозванный
+  sudo runuser -u tgproxy -- tgproxy mtproto secret purge --all-revoked --yes -c /etc/tgproxy/server.yaml
   ```
   `--cidr` (повторяемый) ограничивает сети клиентов секрета, `--max-conns` — число одновременных соединений (0 — без лимита). `link` CLI TOTP не спрашивает (доступ к хосту, БД и KEK уже достаточен), но пишет `mtproto_secret.reveal` в аудит.
-- **API**: `GET|POST /api/v1/mtproto/secrets`, `PATCH|DELETE /api/v1/mtproto/secrets/{id}` (отзыв — `?confirm=yes`), `POST …/{id}/rotate` (`{"grace":"1h"}`), `GET …/{id}/link` (свежий TOTP, иначе `401 totp_required`). Те же права, что у остальных `/api/v1`.
+- **API**: `GET|POST /api/v1/mtproto/secrets`, `PATCH|DELETE /api/v1/mtproto/secrets/{id}` (отзыв — `?confirm=yes`), `POST …/{id}/rotate` (`{"grace":"1h"}`), `GET …/{id}/link` (свежий TOTP, иначе `401 totp_required`), `POST …/{id}/purge?confirm=yes` и `POST …/purge-revoked?confirm=yes` (окончательное удаление, см. ниже; активный секрет — `409 still_active`). Те же права, что у остальных `/api/v1`.
 - **Ротация.** Создаётся новый ключ с тем же именем, CIDR и `max_conns`; старый получает `grace_until` (`--grace`, до 720h; по умолчанию 0 — перестаёт работать сразу) и переименовывается в `<имя>~<id>`. Раздайте новую ссылку, дождитесь окончания grace — старые соединения рвутся сами.
 - **Отзыв** необратим: активные соединения секрета закрываются в течение ~2 с. Утёкшую ссылку отзывайте сразу.
+- **Удаление отозванных.** Отозванный секрет остаётся в списке (статус «отозван», имя занято). Удалить его окончательно можно, когда он отозван и grace истёк (в том числе старый `<имя>~<id>` после ротации): UI — иконка «Удалить окончательно» в строке и кнопка «Удалить отозванные (N)» над таблицей; CLI — `secret purge <id|name>` / `--all-revoked`. Активный секрет не удаляется — сначала отзыв. Необратимо; аудит `mtproto_secret.purge` (id, имя, префикс). Журнал соединений сохраняется (`mtproto_sessions` без FK, id не переиспользуются); у ротированного потомка ссылка `rotated_from` обнуляется.
 - Ключ не пишется ни в логи, ни в метрики, ни в аудит. Метка `secret` в метриках — имя секрета; не кладите в имя ничего чувствительного.
 
 ### Диагностика

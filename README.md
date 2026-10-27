@@ -56,6 +56,8 @@ sudo systemctl enable --now tgproxy-server tgproxy-update-server.path
 
 Каждый отказ доступа виден в логе (`client_ip`, `reason`, `country`), в метрике `tgp_denied_total{reason}`, на графике «Обзор» (серия «Отказы») и в «Ошибках» (фаза `access`). Причины: `no_rule`, `key_required`, `bad_key`, `rate_limited`, `banned`.
 
+Журнал ошибок можно очистить вручную: «Ошибки → Очистить журнал» (всё / оставить последние 30, 15, 5, 3 дня) или `POST /api/v1/errors/purge {"keep_days":N}`; необратимо, аудит `errors.purge` ([docs/operations.md](docs/operations.md)).
+
 Встроенный fail2ban (`ban:` в `server.yaml`, включён по умолчанию): 20 отказов `no_rule|key_required|bad_key` за 10 минут — бан на 1 ч, повторные — 24 ч, затем 7 д. Свои адреса (trusted_proxies, агенты, сети правил, приватные) не банятся. Ручное управление — экран «Баны», иконка бана в «Ошибках», `tgproxy ban add|list|delete -c /etc/tgproxy/server.yaml`, API `/api/v1/bans`. Алерт `ip_autoban` приходит админам одним сообщением на пачку.
 
 Флаги стран (`geoip.file`) — по локальной базе, deb кладёт её в `/usr/share/tgproxy/geoip/`; нет файла — флаги не показываются. Для локальной сборки пакета: `make geoip` (скачивает базу в `build/geoip/`).
@@ -119,7 +121,7 @@ mtproto:
   fronting_domain: tgproxy.example.com # домен из сертификата входа
 ```
 
-Секреты и ссылки — UI «MTProto» либо `tgproxy mtproto secret add|list|link|rotate|delete`; проверка — `tgproxy mtproto probe`. Ограничения beta: нет ad-tag/спонсорского канала, ServerHello FakeTLS отличается по отпечатку от `crypto/tls`. Подготовка хостов (NTP, sysctl, фаервол), диагностика, ротация, переход на dedicated IP — [docs/operations.md](docs/operations.md) («MTProto»); дизайн — [docs/mtproto.md](docs/mtproto.md).
+Секреты и ссылки — UI «MTProto» либо `tgproxy mtproto secret add|list|link|rotate|delete|purge` (`purge` — окончательное удаление отозванного секрета); проверка — `tgproxy mtproto probe`. Ограничения beta: нет ad-tag/спонсорского канала, ServerHello FakeTLS отличается по отпечатку от `crypto/tls`. Подготовка хостов (NTP, sysctl, фаервол), диагностика, ротация, переход на dedicated IP — [docs/operations.md](docs/operations.md) («MTProto»); дизайн — [docs/mtproto.md](docs/mtproto.md).
 
 ## Метрики
 

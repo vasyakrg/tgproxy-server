@@ -238,6 +238,29 @@ func (r mtprotoSecretRepo) Rotate(ctx context.Context, id int64, seal store.Seal
 	return m, nil
 }
 
+func (r mtprotoSecretRepo) Delete(ctx context.Context, id int64) error {
+	tx, err := r.s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return mapErr(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var revoked sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT revoked_at FROM mtproto_secrets WHERE id = ?`, id).Scan(&revoked); err != nil {
+		return mapErr(err)
+	}
+	if !revoked.Valid {
+		return fmt.Errorf("%w: mtproto secret %d is not revoked", store.ErrConflict, id)
+	}
+	// ротированный секрет ссылается на предка по FK: обрываем цепочку, сам новый секрет остаётся
+	if _, err := tx.ExecContext(ctx, `UPDATE mtproto_secrets SET rotated_from = NULL WHERE rotated_from = ?`, id); err != nil {
+		return mapErr(err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM mtproto_secrets WHERE id = ?`, id); err != nil {
+		return mapErr(err)
+	}
+	return mapErr(tx.Commit())
+}
+
 func (r mtprotoSecretRepo) Version(ctx context.Context) (int64, error) {
 	return r.s.version(ctx, "mtproto_secrets")
 }
