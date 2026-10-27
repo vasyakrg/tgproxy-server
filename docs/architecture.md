@@ -248,3 +248,16 @@ Go ≥1.25 (net/http h2, httputil.ReverseProxy, slog, embed, CrossOriginProtecti
 6. **Два режима связи server↔agent** (`dial` / `reverse`) за одним интерфейсом `AgentTransport`.
 4. **TOTP** добавлен к паролю — админка умеет SSH на произвольные хосты и выпуск сертификатов.
 5. **Правила доступа** по сети и/или скрытому ключу обязательны, учёта ботов нет — открытый прокси к Bot API = бан IP агентов.
+
+## 15. MTProto-прокси для клиентов Telegram
+
+Дизайн — `docs/mtproto.md`, план — `docs/plan-mtproto.md` (вехи M9…M13). По умолчанию выключено (`mtproto.enabled: false`).
+
+1. **Основа — `github.com/9seconds/mtg/v2` v2.2.8** (MIT), закреплённая версия за тонким адаптером `internal/mtproto` (скоуп S-mtproto) и контракт-тестами поведения mtg. Только FakeTLS-секреты (`ee`); ad-tag/middle-proxy нет.
+2. **Топология**: клиент → FakeTLS → server (mtg: FakeTLS + obfuscated2 к клиенту и к DC) → mTLS h2-стрим `POST /_agent/mtproto/dc/{dc}` → agent → TCP 443 → DC. Агент — чистый TCP-релей: получает только номер DC, IP берёт из вшитой таблицы (`internal/tgapi/dc.go`), dial-control как у `/_agent/egress`; секретов и ключей не знает.
+3. **Разводка на входе**: muxListener читает первую TLS-запись, сверяет SNI = `fronting_domain` и HMAC по всем секретам (constant-time); совпало → инстанс mtg этого секрета (по одному `mtglib.Proxy` на секрет, общий anti-replay), иначе — обычный TLS-обработчик с настоящим сертификатом. Невалидные соединения наружу не проксируются. Порт по умолчанию — общий с прокси Bot API (`listen: shared`, требует `tls.mode ≠ off`); рекомендованный прод — dedicated IP.
+4. **Транспорт отдельно от Bot API**: интерфейс `StreamTransport` рядом с `AgentTransport`; в `dial` — отдельный пул TCP на агента, в `reverse` — отдельный класс соединений с ALPN `tgproxy-mtproto/1`. Медиа не создаёт HOL для Bot API.
+5. **Балансировка по ключу (agent, dc)**: P2C, score = (стримы+1) × EWMA(connect к DC) / weight, breaker на ключ; EWMA засевается RTT пробы агента; DC down исключает агента только для этого DC. В пул входят только агенты с capability `mtproto/1` в `/_agent/status`.
+6. **Секреты** — таблица `mtproto_secrets`, ключ зашифрован KEK (`aad "mtproto/<id>"`), без KEK MTProto не включается; наружу — только префикс; ссылка `tg://proxy` — после свежего TOTP с аудитом `mtproto_secret.reveal`; отзыв рвёт активные соединения ≤2 с.
+7. **Защита и приватность**: бан до чтения, лимиты рукопожатий/соединений на IP/секрет, replay → причина `mtproto_replay` (учитывается автобаном); содержимое трафика не логируется; журнал соединений — только метаданные; метрики `tgp_mtproto_*` без IP и секретов.
+8. **Известное ограничение**: ServerHello FakeTLS у mtg отличается по отпечатку от `crypto/tls` (пассивный DPI различает, активный зонд — нет). Критерии перехода на собственную реализацию FakeTLS/obfuscated2 — `docs/mtproto.md` §15.
