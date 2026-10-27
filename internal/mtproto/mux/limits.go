@@ -16,13 +16,44 @@ type limits struct {
 	total      int
 	pending    int
 	perIP      map[netip.Addr]int
+	perSecret  map[int64]int
 }
 
 func newLimits(maxConns, maxPerIP, maxPending int) *limits {
 	return &limits{
 		maxConns: maxConns, maxPerIP: maxPerIP, maxPending: maxPending,
-		perIP: make(map[netip.Addr]int),
+		perIP: make(map[netip.Addr]int), perSecret: make(map[int64]int),
 	}
+}
+
+// set применяет новые потолки; уже занятые слоты не трогаются.
+func (l *limits) set(maxConns, maxPerIP, maxPending int) {
+	l.mu.Lock()
+	l.maxConns, l.maxPerIP, l.maxPending = maxConns, maxPerIP, maxPending
+	l.mu.Unlock()
+}
+
+// admitSecret занимает слот секрета id; max<=0 — без лимита (слот не считается).
+func (l *limits) admitSecret(id int64, limit int) bool {
+	if limit <= 0 {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.perSecret[id] >= limit {
+		return false
+	}
+	l.perSecret[id]++
+	return true
+}
+
+// releaseSecret освобождает слот, занятый admitSecret с max>0.
+func (l *limits) releaseSecret(id int64) {
+	l.mu.Lock()
+	if l.perSecret[id]--; l.perSecret[id] <= 0 {
+		delete(l.perSecret, id)
+	}
+	l.mu.Unlock()
 }
 
 // admit занимает слот (общий, IP, рукопожатие); false — лимит превышен.

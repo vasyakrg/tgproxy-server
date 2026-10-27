@@ -21,6 +21,12 @@ import (
 // h2/http/1.1. Агентская сторона импортирует эту константу.
 const ALPNReverse = "tgproxy-reverse/1"
 
+// ALPNMTProto — ALPN MTProto-класса соединений агента (docs/mtproto.md §6):
+// отдельные TCP от Bot API-канала (ALPNReverse), роли h2 те же — агент h2-сервер,
+// сервер h2-клиент. По такому соединению сервер шлёт только
+// POST MTProtoPath{dc} и PUT MTProtoPoolPath. Агентская сторона импортирует константу.
+const ALPNMTProto = "tgproxy-mtproto/1"
+
 // ErrNoReverseConn — у агента нет живых reverse-соединений.
 var ErrNoReverseConn = errors.New("transport: no reverse connection")
 

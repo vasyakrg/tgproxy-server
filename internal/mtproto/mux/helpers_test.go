@@ -61,6 +61,21 @@ type fakeRoute struct {
 	keys   [][16]byte
 	serve  func(idx int, c net.Conn)
 	called chan served
+	// limits[i] — ограничения секрета i; нет записи — без ограничений, id = i+1.
+	limits map[int]secretLim
+}
+
+type secretLim struct {
+	id    int64
+	cidrs []netip.Prefix
+	max   int
+}
+
+func (r *fakeRoute) Limits(i int) (int64, []netip.Prefix, int) {
+	if l, ok := r.limits[i]; ok {
+		return l.id, l.cidrs, l.max
+	}
+	return int64(i + 1), nil, 0
 }
 
 func (r *fakeRoute) Keys() [][16]byte    { return r.keys }

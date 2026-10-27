@@ -37,6 +37,8 @@ type Route interface {
 	Skew() time.Duration
 	// Serve блокируется до завершения соединения; conn.RemoteAddr() — *net.TCPAddr.
 	Serve(idx int, conn net.Conn)
+	// Limits — id секрета, его CIDR (пусто — любые клиенты) и max_conns (0 — без лимита).
+	Limits(idx int) (id int64, cidrs []netip.Prefix, maxConns int)
 }
 
 // Secrets — consumer-side срез store.MTProtoSecretRepo.
@@ -71,6 +73,8 @@ type instance struct {
 	id    int64
 	enc   []byte
 	key   [16]byte
+	cidrs []netip.Prefix
+	max   int
 	proxy *mtglib.Proxy
 }
 
@@ -221,6 +225,11 @@ func (m *Manager) Reload(ctx context.Context) error {
 				m.logger.Error("секрет пропущен", "secret_id", s.ID, "secret", s.Name, "error", err)
 				continue
 			}
+		} else if inst.max != s.MaxConns || !slices.Equal(inst.cidrs, s.CIDRs) {
+			// Ключ тот же, лимиты изменились: новый объект без рестарта mtg-инстанса.
+			cp := *inst
+			cp.cidrs, cp.max = slices.Clone(s.CIDRs), s.MaxConns
+			inst = &cp
 		}
 		next[s.ID] = inst
 		list = append(list, inst)
@@ -231,7 +240,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 
 	var removed []*instance
 	for id, inst := range m.insts {
-		if next[id] != inst {
+		if n := next[id]; n == nil || n.proxy != inst.proxy {
 			removed = append(removed, inst)
 		}
 	}
@@ -274,7 +283,10 @@ func (m *Manager) newInstance(s store.MTProtoSecret) (*instance, error) {
 	if len(raw) != mtglib.SecretKeyLength {
 		return nil, fmt.Errorf("ключ неверной длины: %d", len(raw))
 	}
-	inst := &instance{id: s.ID, enc: bytes.Clone(s.SecretEnc)}
+	inst := &instance{
+		id: s.ID, enc: bytes.Clone(s.SecretEnc),
+		cidrs: slices.Clone(s.CIDRs), max: s.MaxConns,
+	}
 	copy(inst.key[:], raw)
 	clear(raw)
 
@@ -326,6 +338,15 @@ func (m *Manager) Close() error {
 func (s *snapshot) Keys() [][16]byte    { return slices.Clone(s.keys) }
 func (s *snapshot) Domain() string      { return s.domain }
 func (s *snapshot) Skew() time.Duration { return s.skew }
+
+// Limits возвращает ограничения секрета idx; для неверного idx — «закрыто всё».
+func (s *snapshot) Limits(idx int) (int64, []netip.Prefix, int) {
+	if idx < 0 || idx >= len(s.insts) {
+		return 0, []netip.Prefix{{}}, 1
+	}
+	in := s.insts[idx]
+	return in.id, in.cidrs, in.max
+}
 
 // Serve отдаёт соединение инстансу idx. Блокируется до конца relay.
 // Некорректный индекс или RemoteAddr не *net.TCPAddr (mtg паникует на type

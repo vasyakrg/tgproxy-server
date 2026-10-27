@@ -37,13 +37,15 @@ func (l *lookup) Known(id string) (string, bool) {
 }
 
 type env struct {
-	ca     *pki.CA
-	pool   *x509.CertPool
-	rp     *transport.ReversePool
-	gw     *Gateway
-	addr   string
-	down   atomic.Int32
-	denied atomic.Value // *big.Int-строка серийника -> отказ
+	ca      *pki.CA
+	pool    *x509.CertPool
+	rp      *transport.ReversePool
+	mt      *transport.ReverseStream
+	gw      *Gateway
+	addr    string
+	signals chan int
+	down    atomic.Int32
+	denied  atomic.Value // *big.Int-строка серийника -> отказ
 }
 
 func issueAgent(t *testing.T, ca *pki.CA, id string) tls.Certificate {
@@ -77,9 +79,13 @@ func newEnv(t *testing.T, opts ...Option) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{ca: ca, pool: ca.Pool()}
+	e := &env{ca: ca, pool: ca.Pool(), signals: make(chan int, 16)}
 	e.rp = transport.NewReversePool(transport.WithOnDown(func(string) { e.down.Add(1) }))
 	t.Cleanup(func() { _ = e.rp.Close() })
+	e.mt = transport.NewReverseStream(transport.WithMTProtoMaxConns(2), transport.WithMTProtoStreamsPerConn(2),
+		transport.WithMTProtoSignalInterval(10*time.Millisecond),
+		transport.WithMTProtoOnSignal(func(_ string, n int) { e.signals <- n }))
+	t.Cleanup(func() { _ = e.mt.Close() })
 	deny := func(leaf *x509.Certificate) error {
 		if s, _ := e.denied.Load().(string); s != "" && s == leaf.SerialNumber.String() {
 			return errors.New("revoked")
@@ -88,7 +94,7 @@ func newEnv(t *testing.T, opts ...Option) *env {
 	}
 	opts = append([]Option{WithChecks(deny), WithLogger(slog.New(slog.DiscardHandler))}, opts...)
 	gw, err := New(Config{
-		Cert: srvCert, CA: e.pool, Pool: e.rp,
+		Cert: srvCert, CA: e.pool, Pool: e.rp, MTProtoPool: e.mt,
 		Lookup: &lookup{ids: map[string]string{"a1": "reverse", "a2": "reverse"}},
 	}, opts...)
 	if err != nil {

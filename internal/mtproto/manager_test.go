@@ -759,3 +759,26 @@ func TestEventSink_ReplayWithoutStartIsIgnored(t *testing.T) {
 func fixedSeal(b []byte) store.SealFunc {
 	return func(int64) ([]byte, error) { return slices.Clone(b), nil }
 }
+
+func TestRoute_LimitsExposeSecretCIDRAndMaxConns(t *testing.T) {
+	e, _ := newEnv(t)
+	var key [16]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		t.Fatal(err)
+	}
+	cidrs := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	s, err := e.repo.Create(context.Background(), "lim", fixedSeal(key[:]), hex.EncodeToString(key[:4]), cidrs, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := e.waitKeys(1)
+	id, got, mc := r.Limits(0)
+	if id != s.ID || mc != 5 || !slices.Equal(got, cidrs) {
+		t.Fatalf("Limits = %d %v %d", id, got, mc)
+	}
+	// неверный индекс — «закрыто всё»
+	_, bad, _ := r.Limits(9)
+	if len(bad) == 0 || bad[0].Contains(netip.MustParseAddr("1.2.3.4")) {
+		t.Fatalf("плохой idx должен запрещать любой IP: %v", bad)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 
 	"github.com/vasyakrg/tgproxy-server/internal/config"
@@ -37,6 +38,7 @@ type manager struct {
 	preset net.Listener // готовый листенер для первого запуска dial
 	lst    *dialListener
 	conn   *connRun
+	mconn  *connRun // MTProto-класс reverse-соединений (только при mtproto.enabled)
 	fatal  chan error
 	bg     sync.WaitGroup // фоновые остановки старых компонентов
 }
@@ -48,6 +50,20 @@ func newManager(a *Agent) *manager {
 func wantListener(m config.AgentMode) bool { return m != config.AgentModeReverse }
 func wantConnector(m config.AgentMode) bool {
 	return m == config.AgentModeReverse || m == config.AgentModeBoth
+}
+
+func (m *manager) wantMTConnector(mode config.AgentMode) bool {
+	return wantConnector(mode) && m.a.MTProtoEnabled()
+}
+
+// mtprotoConns — живые MTProto-соединения и целевой размер пула.
+func (m *manager) mtprotoConns() (conns, target int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mconn == nil {
+		return 0, 0
+	}
+	return m.mconn.c.Conns(), m.mconn.c.Target()
 }
 
 // snapshot — текущий режим и состояние reverse-канала.
@@ -85,6 +101,14 @@ func (m *manager) switchTo(mode config.AgentMode, serverURL string) (teardown fu
 		}
 		newConn = &connRun{c: c, url: serverURL}
 	}
+	var newMConn *connRun
+	if m.wantMTConnector(mode) && (m.mconn == nil || m.mconn.url != serverURL) {
+		c, cerr := m.a.NewMTProtoConnector(serverURL)
+		if cerr != nil {
+			return nil, cerr
+		}
+		newMConn = &connRun{c: c, url: serverURL}
+	}
 	var newLst *dialListener
 	if wantListener(mode) && m.lst == nil {
 		ln := m.preset
@@ -110,32 +134,44 @@ func (m *manager) switchTo(mode config.AgentMode, serverURL string) (teardown fu
 	} else if newLst != nil {
 		m.lst = newLst
 	}
+	var oldMConn *connRun
 	if !wantConnector(mode) {
 		oldConn, m.conn = m.conn, nil
 	} else if newConn != nil {
 		oldConn, m.conn = m.conn, newConn
-		cctx, cancel := context.WithCancel(m.ctx)
-		newConn.cancel, newConn.done = cancel, make(chan struct{})
-		go func() {
-			defer close(newConn.done)
-			newConn.c.Run(cctx)
-		}()
+		m.start(newConn)
+	}
+	if !m.wantMTConnector(mode) {
+		oldMConn, m.mconn = m.mconn, nil
+	} else if newMConn != nil {
+		oldMConn, m.mconn = m.mconn, newMConn
+		m.start(newMConn)
 	}
 	m.mode, m.url = mode, serverURL
 	m.a.logger.Info("agent mode applied", "mode", mode, "server_url", serverURL)
 
-	return func() { m.teardown(oldLst, oldConn) }, nil
+	return func() { m.teardown(oldLst, oldConn, oldMConn) }, nil
+}
+
+func (m *manager) start(r *connRun) {
+	cctx, cancel := context.WithCancel(m.ctx)
+	r.cancel, r.done = cancel, make(chan struct{})
+	go func() {
+		defer close(r.done)
+		r.c.Run(cctx)
+	}()
 }
 
 // teardown останавливает вытесненные компоненты (в фоне, под bg).
-func (m *manager) teardown(l *dialListener, r *connRun) {
-	if l == nil && r == nil {
+func (m *manager) teardown(l *dialListener, rs ...*connRun) {
+	rs = slices.DeleteFunc(rs, func(r *connRun) bool { return r == nil })
+	if l == nil && len(rs) == 0 {
 		return
 	}
 	m.bg.Add(1)
 	go func() {
 		defer m.bg.Done()
-		if r != nil {
+		for _, r := range rs {
 			m.bg.Add(1)
 			go func() {
 				defer m.bg.Done()
@@ -153,8 +189,8 @@ func (m *manager) teardown(l *dialListener, r *connRun) {
 // stopAll останавливает всё; возвращает первую ошибку остановки листенера.
 func (m *manager) stopAll() error {
 	m.mu.Lock()
-	l, r := m.lst, m.conn
-	m.lst, m.conn = nil, nil
+	l, r, mr := m.lst, m.conn, m.mconn
+	m.lst, m.conn, m.mconn = nil, nil, nil
 	if m.preset != nil {
 		_ = m.preset.Close()
 		m.preset = nil
@@ -162,6 +198,9 @@ func (m *manager) stopAll() error {
 	m.mu.Unlock()
 
 	var errs []error
+	if mr != nil {
+		mr.stop()
+	}
 	if r != nil {
 		r.stop()
 	}

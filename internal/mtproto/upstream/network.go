@@ -56,6 +56,26 @@ func (p KeyedPicker) Pick(ctx context.Context, dc int, exclude ...balancer.Agent
 	return l, nil
 }
 
+// Metrics — необязательный приёмник метрик стримов (реализуется *metrics.Server).
+// Вызывается из горячего пути: реализация обязана быть быстрой и потокобезопасной.
+type Metrics interface {
+	MTProtoStreams(agent string, dc, delta int)
+	MTProtoUpstreamError(agent string, dc int, phase string)
+	// MTProtoBytes: in — клиент → Telegram, out — Telegram → клиент.
+	MTProtoBytes(agent, direction string, n int)
+}
+
+// Фазы ошибок для Metrics.MTProtoUpstreamError.
+const (
+	phaseNoAgent   = "no_agent"
+	phaseUnknownDC = "unknown_dc"
+	phaseDial      = "dial"
+	phaseTimeout   = "timeout"
+)
+
+// noAgentLabel — метка agent, когда агента выбрать не удалось.
+const noAgentLabel = "none"
+
 // Options — зависимости и параметры Network.
 type Options struct {
 	Picker      Picker
@@ -66,6 +86,7 @@ type Options struct {
 	// стрима к DC (0 → 5 с).
 	RetryMemory time.Duration
 	Now         func() time.Time
+	Metrics     Metrics // nil — без метрик
 }
 
 // Network реализует mtglib.Network.
@@ -97,6 +118,9 @@ func New(o Options) (*Network, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	if o.Metrics == nil {
+		o.Metrics = noMetrics{}
+	}
 	return &Network{
 		o: o, addrs: addrMap(), native: nativeDialer(o.DialTimeout),
 		last: make(map[int]failure),
@@ -121,6 +145,7 @@ func (n *Network) DialContext(ctx context.Context, network, address string) (ess
 	}
 	dc, ok := n.addrs[ap]
 	if !ok {
+		n.o.Metrics.MTProtoUpstreamError(noAgentLabel, 0, phaseUnknownDC)
 		return nil, fmt.Errorf("%w: %s", ErrUnknownAddress, address)
 	}
 
@@ -129,14 +154,17 @@ func (n *Network) DialContext(ctx context.Context, network, address string) (ess
 
 	lease, err := n.pick(ctx, dc)
 	if err != nil {
+		n.o.Metrics.MTProtoUpstreamError(noAgentLabel, dc, phaseNoAgent)
 		return nil, err
 	}
 	agent := lease.Agent()
+	name := string(agent)
 	ref, ok := n.o.Resolve(agent)
 	if !ok {
 		lease.Report(balancer.Result{TransportError: true})
 		lease.Release()
 		n.remember(dc, agent)
+		n.o.Metrics.MTProtoUpstreamError(name, dc, phaseNoAgent)
 		return nil, fmt.Errorf("%w: %s", ErrNoAgent, agent)
 	}
 
@@ -150,11 +178,17 @@ func (n *Network) DialContext(ctx context.Context, network, address string) (ess
 		lease.Release()
 		if !errors.Is(err, context.Canceled) {
 			n.remember(dc, agent)
+			phase := phaseDial
+			if errors.Is(err, context.DeadlineExceeded) {
+				phase = phaseTimeout
+			}
+			n.o.Metrics.MTProtoUpstreamError(name, dc, phase)
 		}
 		return nil, err
 	}
 	lease.Report(balancer.Result{Latency: n.o.Now().Sub(start)})
-	return &leaseConn{Conn: conn, lease: lease}, nil
+	n.o.Metrics.MTProtoStreams(name, dc, 1)
+	return &leaseConn{Conn: conn, lease: lease, m: n.o.Metrics, agent: name, dc: dc}, nil
 }
 
 // pick выбирает агента, исключая недавно упавшего для этого DC. Mtg вызывает
@@ -190,3 +224,9 @@ func (n *Network) MakeHTTPClient(dial func(ctx context.Context, network, address
 
 // NativeDialer реализует mtglib.Network.
 func (n *Network) NativeDialer() *net.Dialer { return n.native }
+
+type noMetrics struct{}
+
+func (noMetrics) MTProtoStreams(string, int, int)          {}
+func (noMetrics) MTProtoUpstreamError(string, int, string) {}
+func (noMetrics) MTProtoBytes(string, string, int)         {}

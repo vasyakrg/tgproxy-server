@@ -124,6 +124,9 @@ func (r *mtprotoRelay) serve(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer r.release()
+	rec := r.a.mtprotoRec()
+	rec.MTProtoStreams(dc, 1)
+	defer rec.MTProtoStreams(dc, -1)
 
 	conn, ok := r.connect(w, req, dc, addrs)
 	if !ok {
@@ -145,10 +148,13 @@ func (r *mtprotoRelay) connect(w http.ResponseWriter, req *http.Request, dc int,
 		writeAgentError(w, http.StatusForbidden, "", "tgproxy: mtproto: dc not allowed")
 	case errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) || isTimeout(err):
 		r.a.rec.DialError(DialTimeout)
+		r.a.mtprotoRec().MTProtoDialError(dc, DialTimeout)
 		r.a.logger.Warn("mtproto dial timeout", "dc", dc)
 		writeAgentError(w, http.StatusBadGateway, tgapi.PhaseTimeout, "tgproxy: mtproto: dc dial timeout")
 	default:
-		r.a.rec.DialError(dialErrorKind(err, tgapi.PhaseDial))
+		kind := dialErrorKind(err, tgapi.PhaseDial)
+		r.a.rec.DialError(kind)
+		r.a.mtprotoRec().MTProtoDialError(dc, kind)
 		r.a.logger.Warn("mtproto dial failed", "dc", dc, "err", redact.String(err.Error()))
 		writeAgentError(w, http.StatusBadGateway, tgapi.PhaseDial, "tgproxy: mtproto: dc unavailable")
 	}
@@ -198,7 +204,9 @@ func (r *mtprotoRelay) upstream(body io.Reader, conn net.Conn, touch func()) {
 		n, rerr := body.Read(buf)
 		if n > 0 {
 			touch()
-			if _, werr := conn.Write(buf[:n]); werr != nil {
+			wn, werr := conn.Write(buf[:n])
+			r.a.mtprotoRec().MTProtoBytes("in", wn)
+			if werr != nil {
 				_ = conn.Close()
 				return
 			}
@@ -225,7 +233,9 @@ func (r *mtprotoRelay) downstream(w http.ResponseWriter, rc *http.ResponseContro
 		n, rerr := conn.Read(buf)
 		if n > 0 {
 			touch()
-			if _, werr := w.Write(buf[:n]); werr != nil {
+			wn, werr := w.Write(buf[:n])
+			r.a.mtprotoRec().MTProtoBytes("out", wn)
+			if werr != nil {
 				return
 			}
 			if ferr := rc.Flush(); ferr != nil {

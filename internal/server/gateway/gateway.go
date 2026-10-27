@@ -6,6 +6,8 @@
 // denylist; при отказе соединение закрывается до первого запроса. Дальше:
 //   - ALPN transport.ALPNReverse (обязателен клиентский сертификат) -> соединение
 //     передаётся ReversePool;
+//   - ALPN transport.ALPNMTProto (клиентский сертификат обязателен; только если задан
+//     Config.MTProtoPool) -> соединение передаётся отдельному MTProto-пулу агента;
 //   - иначе — обычный HTTP/1.1+h2 сервер: POST /enroll, GET /enroll/package/<deb>
 //     (оба без клиентского сертификата, по enrollment-токену) и /_agent_gw/packages/.
 package gateway
@@ -47,7 +49,10 @@ type Attacher interface {
 	Attach(agentID string, conn net.Conn) error
 }
 
-var _ Attacher = (*transport.ReversePool)(nil)
+var (
+	_ Attacher = (*transport.ReversePool)(nil)
+	_ Attacher = (*transport.ReverseStream)(nil)
+)
 
 // Config — параметры Gateway.
 type Config struct {
@@ -58,6 +63,9 @@ type Config struct {
 	CA             *x509.CertPool // CA проекта (проверка клиентских сертификатов)
 	Lookup         AgentLookup
 	Pool           Attacher
+	// MTProtoPool — пул соединений MTProto-класса (*transport.ReverseStream).
+	// nil — ALPN tgproxy-mtproto/1 не предлагается (MTProto reverse выключен).
+	MTProtoPool Attacher
 }
 
 type ctxKey struct{}
@@ -97,6 +105,7 @@ type Gateway struct {
 	tlsCfg    *tls.Config
 	lookup    AgentLookup
 	pool      Attacher
+	mtPool    Attacher
 	checks    []pki.Check
 	enroll    http.Handler
 	enrollPkg http.Handler
@@ -126,6 +135,7 @@ func New(cfg Config, opts ...Option) (*Gateway, error) {
 	g := &Gateway{
 		lookup:    cfg.Lookup,
 		pool:      cfg.Pool,
+		mtPool:    cfg.MTProtoPool,
 		hsTimeout: 10 * time.Second,
 		log:       slog.Default(),
 		pending:   make(map[net.Conn]struct{}),
@@ -141,6 +151,9 @@ func New(cfg Config, opts ...Option) (*Gateway, error) {
 		ClientCAs:    cfg.CA,
 		ClientAuth:   tls.VerifyClientCertIfGiven,
 		NextProtos:   []string{transport.ALPNReverse, "h2", "http/1.1"},
+	}
+	if g.mtPool != nil {
+		g.tlsCfg.NextProtos = []string{transport.ALPNReverse, transport.ALPNMTProto, "h2", "http/1.1"}
 	}
 	if cfg.GetCertificate != nil {
 		g.tlsCfg.Certificates = nil
@@ -283,7 +296,8 @@ func (g *Gateway) handle(c *tls.Conn) {
 		return
 	}
 	cs := c.ConnectionState()
-	reverse := cs.NegotiatedProtocol == transport.ALPNReverse
+	mtproto := g.mtPool != nil && cs.NegotiatedProtocol == transport.ALPNMTProto
+	reverse := cs.NegotiatedProtocol == transport.ALPNReverse || mtproto
 
 	var agentID string
 	if len(cs.PeerCertificates) > 0 {
@@ -304,12 +318,16 @@ func (g *Gateway) handle(c *tls.Conn) {
 
 	if reverse {
 		release()
-		if err := g.pool.Attach(agentID, c); err != nil {
-			g.log.Warn("gateway: attach failed", "remote", remote, "agent", agentID, "err", err)
+		pool, class := g.pool, "reverse"
+		if mtproto {
+			pool, class = g.mtPool, "mtproto"
+		}
+		if err := pool.Attach(agentID, c); err != nil {
+			g.log.Warn("gateway: attach failed", "remote", remote, "agent", agentID, "class", class, "err", err)
 			_ = c.Close()
 			return
 		}
-		g.log.Info("gateway: reverse channel attached", "remote", remote, "agent", agentID)
+		g.log.Info("gateway: reverse channel attached", "remote", remote, "agent", agentID, "class", class)
 		return
 	}
 

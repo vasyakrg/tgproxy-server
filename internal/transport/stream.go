@@ -12,7 +12,7 @@ import (
 )
 
 // ErrNotSupported — реализация StreamTransport для режима связи отсутствует
-// (reverse до M11-T1).
+// (reverse без ReverseStream).
 var ErrNotSupported = errors.New("transport: mtproto stream not supported")
 
 // MTProtoPath — эндпоинт агента: POST /_agent/mtproto/dc/{dc}.

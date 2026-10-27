@@ -47,7 +47,7 @@ func (l *Listener) frontingHandle(raw net.Conn) {
 	}
 	pc := proxyproto.NewConn(raw,
 		proxyproto.ValidateHeader(validateV2),
-		proxyproto.SetReadHeaderTimeout(l.opts.HandshakeTimeout),
+		proxyproto.SetReadHeaderTimeout(l.opts.Load().HandshakeTimeout),
 	)
 	pc.ProxyHeaderPolicy = proxyproto.REQUIRE
 	// Читаем заголовок сразу: сбой PROXY отсекается здесь, а не в TLS-обработчике.

@@ -108,6 +108,9 @@ func DefaultAgent() *AgentConfig {
 			IdleTimeout: 5 * time.Minute,
 			MaxDuration: 24 * time.Hour,
 
+			ReverseConnsMin: DefaultReverseConnsMin,
+			ReverseConnsMax: DefaultReverseConnsMax,
+
 			DCProbeInterval: 30 * time.Second,
 		},
 		Logging:        LoggingConfig{Level: "info", Format: "json"},

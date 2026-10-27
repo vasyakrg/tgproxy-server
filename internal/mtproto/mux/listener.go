@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -37,6 +38,9 @@ type Route interface {
 	Domain() string
 	Skew() time.Duration
 	Serve(idx int, conn net.Conn) // блокирует до конца MTProto-соединения
+	// Limits — ограничения секрета idx: стабильный id (счётчик соединений
+	// переживает смену снимка), CIDR клиентов (пусто — любые) и max_conns (0 — без лимита).
+	Limits(idx int) (id int64, cidrs []netip.Prefix, maxConns int)
 }
 
 // Hooks — точки наблюдения; любая может быть nil.
@@ -83,7 +87,7 @@ type Listener struct {
 	front  net.Listener
 	router Router
 	hooks  Hooks
-	opts   Options
+	opts   atomic.Pointer[Options]
 	lim    *limits
 
 	out    chan net.Conn
@@ -109,17 +113,26 @@ func New(inner net.Listener, router Router, hooks Hooks, opts Options) (*Listene
 		return nil, fmt.Errorf("mux: fronting-листенер: %w", err)
 	}
 	l := &Listener{
-		inner: inner, front: front, router: router, hooks: hooks, opts: opts,
+		inner: inner, front: front, router: router, hooks: hooks,
 		lim:    newLimits(opts.MaxConns, opts.MaxConnsPerIP, opts.MaxPendingHandshakes),
 		out:    make(chan net.Conn),
 		done:   make(chan struct{}),
 		failed: make(chan struct{}),
 		conns:  make(map[net.Conn]struct{}),
 	}
+	l.opts.Store(&opts)
 	l.wg.Add(2)
 	go l.acceptLoop()
 	go l.frontingLoop()
 	return l, nil
+}
+
+// SetOptions применяет новые лимиты и таймауты (SIGHUP) без разрыва живых
+// соединений: влияет только на новые. Нулевые значения заменяются дефолтами.
+func (l *Listener) SetOptions(opts Options) {
+	opts.setDefaults()
+	l.opts.Store(&opts)
+	l.lim.set(opts.MaxConns, opts.MaxConnsPerIP, opts.MaxPendingHandshakes)
 }
 
 // Accept возвращает следующее fallthrough-соединение.
@@ -217,7 +230,7 @@ func (l *Listener) acceptRetry(err error) bool {
 	var ne net.Error
 	if errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) ||
 		(errors.As(err, &ne) && ne.Timeout()) {
-		l.opts.Logger.Warn("mux: временная ошибка accept", "err", err)
+		l.opts.Load().Logger.Warn("mux: временная ошибка accept", "err", err)
 		select {
 		case <-time.After(50 * time.Millisecond):
 			return true
@@ -306,7 +319,8 @@ func (l *Listener) handle(raw net.Conn) {
 		}
 	}()
 
-	_ = raw.SetReadDeadline(time.Now().Add(l.opts.HandshakeTimeout))
+	opts := l.opts.Load()
+	_ = raw.SetReadDeadline(time.Now().Add(opts.HandshakeTimeout))
 	rec, err := faketls.ReadFirstRecord(raw, faketls.MaxRecord)
 	_ = raw.SetReadDeadline(time.Time{})
 	if err != nil && !isFormatErr(err) {
@@ -326,10 +340,21 @@ func (l *Listener) handle(raw net.Conn) {
 		route = l.router.Route()
 		if route != nil {
 			if h, perr := faketls.Parse(rec); perr == nil {
-				if i, matched := faketls.Match(h, route.Keys(), route.Domain(), l.opts.Now(), route.Skew()); matched {
+				if i, matched := faketls.Match(h, route.Keys(), route.Domain(), opts.Now(), route.Skew()); matched {
 					idx = i
 				}
 			}
+		}
+	}
+
+	// Секрет подошёл по HMAC, но клиент вне его CIDR → неотличимо от неверного секрета.
+	var secretID int64
+	var secretMax int
+	if idx >= 0 {
+		var cidrs []netip.Prefix
+		secretID, cidrs, secretMax = route.Limits(idx)
+		if !cidrAllowed(cidrs, ip) {
+			idx = -1
 		}
 	}
 
@@ -343,17 +368,38 @@ func (l *Listener) handle(raw net.Conn) {
 
 	l.lim.handshakeDone()
 	pending = false
+	if !l.lim.admitSecret(secretID, secretMax) {
+		l.reject(ip, ReasonConnLimit)
+		_ = raw.Close()
+		return
+	}
+	if secretMax > 0 {
+		defer l.lim.releaseSecret(secretID)
+	}
 	l.serve(route, idx, rc, ip)
 }
 
 func (l *Listener) serve(route Route, idx int, c *replayConn, ip netip.Addr) {
 	defer func() {
 		if r := recover(); r != nil {
-			l.opts.Logger.Error("mux: паника в MTProto-обработчике", "panic", fmt.Sprint(r), "ip", ip.String())
+			l.opts.Load().Logger.Error("mux: паника в MTProto-обработчике", "panic", fmt.Sprint(r), "ip", ip.String())
 		}
 		_ = c.Close()
 	}()
 	route.Serve(idx, c)
+}
+
+func cidrAllowed(cidrs []netip.Prefix, ip netip.Addr) bool {
+	if len(cidrs) == 0 {
+		return true
+	}
+	ip = ip.Unmap()
+	for _, p := range cidrs {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func isFormatErr(err error) bool {

@@ -114,9 +114,19 @@ type AgentMTProtoConfig struct {
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
 	MaxDuration time.Duration `yaml:"max_duration"`
 	IPv6        bool          `yaml:"ipv6"`
+	// ReverseConnsMin/Max — границы пула MTProto-соединений reverse/both
+	// (сервер просит размер через PUT /_agent/mtproto/pool, clamp в [min, max]).
+	ReverseConnsMin int `yaml:"reverse_conns_min"`
+	ReverseConnsMax int `yaml:"reverse_conns_max"`
 	// DCProbeInterval — период TCP-проб DC; сервер может менять его через PUT /_agent/config.
 	DCProbeInterval time.Duration `yaml:"dc_probe_interval"`
 }
+
+// Умолчания пула MTProto-соединений агента.
+const (
+	DefaultReverseConnsMin = 2
+	DefaultReverseConnsMax = 16
+)
 
 // Границы dc_probe_interval агента (YAML и PUT /_agent/config).
 const (
@@ -302,6 +312,12 @@ func (v *validator) agentMTProto(m AgentMTProtoConfig) {
 	v.positive("mtproto.max_duration", m.MaxDuration)
 	if m.DCProbeInterval < MinDCProbeInterval || m.DCProbeInterval > MaxDCProbeInterval {
 		v.add("mtproto.dc_probe_interval", "must be in %s..%s, got %s", MinDCProbeInterval, MaxDCProbeInterval, m.DCProbeInterval)
+	}
+	if m.ReverseConnsMin < 1 {
+		v.add("mtproto.reverse_conns_min", "must be >= 1, got %d", m.ReverseConnsMin)
+	}
+	if m.ReverseConnsMax < m.ReverseConnsMin {
+		v.add("mtproto.reverse_conns_max", "must be >= reverse_conns_min (%d), got %d", m.ReverseConnsMin, m.ReverseConnsMax)
 	}
 	if m.IdleTimeout > 0 && m.MaxDuration > 0 && m.IdleTimeout > m.MaxDuration {
 		v.add("mtproto.idle_timeout", "must not exceed mtproto.max_duration (%s), got %s", m.MaxDuration, m.IdleTimeout)

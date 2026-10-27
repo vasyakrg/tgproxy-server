@@ -75,7 +75,8 @@ func TestMTProtoServerDefaults(t *testing.T) {
 func TestMTProtoAgentDefaults(t *testing.T) {
 	d := DefaultAgent().MTProto
 	want := AgentMTProtoConfig{Enabled: true, MaxStreams: 10000, DialTimeout: 5 * time.Second,
-		IdleTimeout: 5 * time.Minute, MaxDuration: 24 * time.Hour, DCProbeInterval: 30 * time.Second}
+		IdleTimeout: 5 * time.Minute, MaxDuration: 24 * time.Hour, DCProbeInterval: 30 * time.Second,
+		ReverseConnsMin: 2, ReverseConnsMax: 16}
 	if d != want {
 		t.Fatalf("defaults = %+v, want %+v", d, want)
 	}
@@ -253,6 +254,9 @@ func TestMTProtoAgentValidation(t *testing.T) {
 		{"probe ok", "mtproto:\n  dc_probe_interval: 10s\n", ""},
 		{"unknown", "mtproto:\n  bogus: 1\n", "mtproto.bogus: unknown field"},
 		{"ipv6", "mtproto:\n  ipv6: true\n", ""},
+		{"reverse min zero", "mtproto:\n  reverse_conns_min: 0\n", "mtproto.reverse_conns_min"},
+		{"reverse max < min", "mtproto:\n  reverse_conns_min: 4\n  reverse_conns_max: 3\n", "mtproto.reverse_conns_max"},
+		{"reverse ok", "mtproto:\n  reverse_conns_min: 1\n  reverse_conns_max: 1\n", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -122,7 +121,7 @@ func (d *DialStream) OpenMTProto(ctx context.Context, agent AgentRef, dc int) (n
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, d.setupErr(ctx, err)
+		return nil, setupErr(ctx, err)
 	}
 	// Жизнь стрима не привязана к ctx вызова: ctx ограничивает только установку.
 	sctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -148,7 +147,7 @@ func (d *DialStream) OpenMTProto(ctx context.Context, agent AgentRef, dc int) (n
 	if err != nil {
 		stopWatch()
 		cancel()
-		return nil, d.setupErr(ctx, err)
+		return nil, setupErr(ctx, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
@@ -159,27 +158,13 @@ func (d *DialStream) OpenMTProto(ctx context.Context, agent AgentRef, dc int) (n
 	if !stopWatch() { // ctx отменён в момент ответа: стрим уже сброшен
 		_ = resp.Body.Close()
 		cancel()
-		return nil, d.setupErr(ctx, context.Cause(ctx))
+		return nil, setupErr(ctx, context.Cause(ctx))
 	}
 	l, r := local.Load(), remote.Load()
 	if l == nil || r == nil {
 		l, r = &net.TCPAddr{}, &net.TCPAddr{}
 	}
 	return newStreamConn(resp.Body, wp, cancel, l, r), nil
-}
-
-// setupErr приводит ошибку установки к принятому виду: отмена вызывающего —
-// как есть, истёкший дедлайн ctx — timeout, остальное — как вернул транспорт.
-func (*DialStream) setupErr(ctx context.Context, err error) error {
-	ce := ctx.Err()
-	switch {
-	case ce == nil:
-		return err
-	case errors.Is(ce, context.DeadlineExceeded):
-		return &PhaseError{Phase: tgapi.PhaseTimeout, Source: SourceServerAgent, Err: ce}
-	default:
-		return ce
-	}
 }
 
 // statusErr превращает не-200 агента в *PhaseError: фаза — из X-TGP-Error-Phase

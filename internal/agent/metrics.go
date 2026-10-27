@@ -45,6 +45,28 @@ type Recorder interface {
 	DialError(kind string)
 }
 
+// MTProtoRecorder — необязательное расширение Recorder для метрик MTProto-релея.
+// Если реализация Recorder его поддерживает, релей пишет streams/ошибки dial/байты.
+type MTProtoRecorder interface {
+	MTProtoStreams(dc, delta int)
+	MTProtoDialError(dc int, kind string)
+	MTProtoBytes(direction string, n int) // in: клиент → DC, out: DC → клиент
+}
+
+type noopMTProtoRecorder struct{}
+
+func (noopMTProtoRecorder) MTProtoStreams(int, int)      {}
+func (noopMTProtoRecorder) MTProtoDialError(int, string) {}
+func (noopMTProtoRecorder) MTProtoBytes(string, int)     {}
+
+// mtprotoRec возвращает MTProtoRecorder текущего Recorder или no-op.
+func (a *Agent) mtprotoRec() MTProtoRecorder {
+	if m, ok := a.rec.(MTProtoRecorder); ok {
+		return m
+	}
+	return noopMTProtoRecorder{}
+}
+
 type noopRecorder struct{}
 
 func (noopRecorder) Request(string, string)         {}

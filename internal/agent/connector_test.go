@@ -36,18 +36,24 @@ type gateway struct {
 }
 
 type gwConn struct {
+	alpn string
 	conn net.Conn
 	cc   *http2.ClientConn //nolint:staticcheck // deprecated-обёртка, но API x/net из задачи
 }
 
 func newGateway(t *testing.T, cert tls.Certificate, ca *x509.CertPool, alpn string) *gateway {
 	t.Helper()
+	return newGatewayALPN(t, cert, ca, alpn)
+}
+
+func newGatewayALPN(t *testing.T, cert tls.Certificate, ca *x509.CertPool, alpns ...string) *gateway {
+	t.Helper()
 	cfg := &tls.Config{
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{cert},
 		ClientCAs:    ca,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
-		NextProtos:   []string{alpn},
+		NextProtos:   alpns,
 	}
 	raw, err := listenLocal()
 	if err != nil {
@@ -75,7 +81,7 @@ func newGateway(t *testing.T, cert tls.Certificate, ca *x509.CertPool, alpn stri
 					return
 				}
 				g.handshakes.Add(1)
-				gc := &gwConn{conn: tc, cc: cc}
+				gc := &gwConn{conn: tc, cc: cc, alpn: tc.ConnectionState().NegotiatedProtocol}
 				g.mu.Lock()
 				g.all = append(g.all, gc)
 				g.mu.Unlock()
@@ -148,6 +154,7 @@ type revEnv struct {
 	err     error
 	cancel  context.CancelFunc
 	api     string
+	ro      revOpts
 }
 
 func tgOK() http.Handler {
@@ -159,6 +166,19 @@ func tgOK() http.Handler {
 
 func newRevEnv(t *testing.T, mode config.AgentMode, withURL bool) *revEnv {
 	t.Helper()
+	return newRevEnvWith(t, mode, withURL, revOpts{})
+}
+
+// revOpts — настройки revEnv для тестов MTProto-класса.
+type revOpts struct {
+	alpns  []string                  // ALPN gateway; по умолчанию только ALPNReverse
+	cfg    func(*config.AgentConfig) // правки конфига до старта агента
+	agent  []Option
+	logger *slog.Logger
+}
+
+func newRevEnvWith(t *testing.T, mode config.AgentMode, withURL bool, ro revOpts) *revEnv {
+	t.Helper()
 	e, upPool := newEnvNoAgent(t, tgOK())
 	srvPEM, err := pki.IssueServerClient(e.ca, time.Hour)
 	if err != nil {
@@ -168,7 +188,10 @@ func newRevEnv(t *testing.T, mode config.AgentMode, withURL bool) *revEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &revEnv{env: e, gw: newGateway(t, gwCert, e.pool, ALPNReverse)}
+	if ro.alpns == nil {
+		ro.alpns = []string{ALPNReverse}
+	}
+	r := &revEnv{env: e, gw: newGatewayALPN(t, gwCert, e.pool, ro.alpns...), ro: ro}
 	r.api = closedAddr(t)
 	e.cfg.Listen.API = r.api
 	e.cfg.Mode = mode
@@ -180,13 +203,20 @@ func newRevEnv(t *testing.T, mode config.AgentMode, withURL bool) *revEnv {
 		t.Fatal(err)
 	}
 	e.cfg.SetPath(r.cfgPath)
+	if ro.cfg != nil {
+		ro.cfg(e.cfg)
+	}
 	r.start(t, upPool)
 	return r
 }
 
 func (r *revEnv) start(t *testing.T, upPool *x509.CertPool) {
 	t.Helper()
-	a, err := New(r.cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), WithUpstreamRootCAs(upPool), fastBackoff)
+	lg := r.ro.logger
+	if lg == nil {
+		lg = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	a, err := New(r.cfg, lg, append([]Option{WithUpstreamRootCAs(upPool), fastBackoff}, r.ro.agent...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,13 +685,14 @@ func TestReverseGracefulStop(t *testing.T) {
 func TestServeCanceledBeforeRegister(t *testing.T) {
 	a := &Agent{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	c := &Connector{a: a, handler: http.NewServeMux()}
+	sl := &slot{retire: make(chan struct{})}
 	srvSide, cliSide := net.Pipe()
 	defer func() { _ = cliSide.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	done := make(chan struct{})
 	go func() {
-		c.serve(ctx, srvSide)
+		c.serve(ctx, srvSide, sl)
 		close(done)
 	}()
 	//nolint:staticcheck // deprecated-обёртка, но API x/net из задачи

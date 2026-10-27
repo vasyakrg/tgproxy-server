@@ -14,6 +14,7 @@ type Agent struct {
 	inflight prometheus.Gauge
 	bytes    *prometheus.CounterVec
 	dialErr  *prometheus.CounterVec
+	mtp      agentMTProto
 }
 
 // NewAgentRegistry создаёт отдельный реестр агента.
@@ -33,6 +34,7 @@ func NewAgentRegistry() (*prometheus.Registry, *Agent) {
 		dialErr: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "agent_dial_errors_total",
 			Help: "Upstream dial errors."}, []string{"kind"}),
 	}
+	a.mtp = newAgentMTProto(reg)
 	reg.MustRegister(a.requests, a.duration, a.inflight, a.bytes, a.dialErr)
 	return reg, a
 }

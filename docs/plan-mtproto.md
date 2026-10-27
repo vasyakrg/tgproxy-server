@@ -102,19 +102,19 @@
 
 ## M11 — Reverse-пул, защита, наблюдаемость · объём **L**
 
-- [ ] **M11-T1 · Reverse: сервер** (S-proxy + S-agent, разные файлы) · зависит от M9-T6
+- [x] **M11-T1 · Reverse: сервер** (S-proxy + S-agent, разные файлы) · зависит от M9-T6
   - Файлы: `internal/server/gateway/gateway.go` (ALPN `tgproxy-mtproto/1` в `NextProtos` (`:143`), ветка в разборе `NegotiatedProtocol` (`:286`), регистрация соединения в MTProto-пуле агента; отдельный лимит соединений на агента), `internal/transport/stream_reverse.go` (пул h2-клиентов по классу `mtproto`, выбор наименее загруженного conn, сигнал «нужно ещё соединение» при ≥`max_streams_per_conn`), `internal/transport/reverse.go` (константа `ALPNMTProto`).
   - Тесты первыми: соединение с ALPN `tgproxy-mtproto/1` без валидного клиентского сертификата → отказ; MTProto-стримы не идут по соединениям Bot API и наоборот; при 2×`max_streams_per_conn` стримах сервер просит у агента ещё соединение; разрыв MTProto-соединения рвёт его стримы, Bot API не затронут.
-- [ ] **M11-T2 · Reverse: агент** (S-agent) · параллельно с M11-T1
+- [x] **M11-T2 · Reverse: агент** (S-agent) · параллельно с M11-T1
   - Файлы: `internal/agent/connector.go` (второй класс соединений: ALPN `tgproxy-mtproto/1` рядом с `ALPNReverse` (`:23`), `reverse_conns` минимум, рост по сигналу сервера, backoff как у основного), `internal/agent/reverse_conns.go`.
   - Тесты первыми: агент держит `reverse_conns` MTProto-соединений; сервер без поддержки ALPN (старый) → агент работает только с Bot API-классом без ошибок в цикле; drain не закрывает живые стримы.
-- [ ] **M11-T3 · Лимиты и изоляция** (S-mtproto) · зависит от M10-T2, M10-T3
+- [x] **M11-T3 · Лимиты и изоляция** (S-mtproto) · зависит от M10-T2, M10-T3
   - Файлы: `internal/mtproto/mux/limits.go` (`max_conns` секрета, CIDR секрета), `internal/mtproto/budget.go` (проверка fd-бюджета против `RLIMIT_NOFILE` при старте), SIGHUP-перечитывание лимитов.
   - Тесты первыми: `max_conns` секрета → закрытие с `mtproto_conn_limit`; CIDR секрета: валидный HMAC из чужой сети → fallthrough (неотличимо от неверного секрета); новые лимиты по SIGHUP без разрыва живых; предупреждение при `max_conns×2 + 16384 > RLIMIT_NOFILE`.
 - [x] **M11-T4 · Причины отказа и fail2ban** (S-proxy) · параллельно с M11-T3
   - Файлы: `internal/server/access/static.go` (`ReasonMTProtoReplay` — `CountsForBan()=true`, `ReasonMTProtoConnLimit` — false, `ReasonMTProtoBadSecret` — false, резерв для dedicated-режима; список `Reasons`), `internal/server/ban/ban.go` (`Record` уже принимает `access.Reason`, `:142` — проверить, что защищённые адреса `protect.go` не банятся по новым причинам), записи `ErrorEvent{Phase: "mtproto"}`.
   - Тесты первыми: `threshold` replay с одного IP → автобан; conn_limit и bad_secret в счётчик не идут; защищённый адрес не банится; запись в «Ошибках» с фазой `mtproto`, IP и причиной, без секрета.
-- [ ] **M11-T5 · Метрики** (S-obs + инструментирование S-mtproto, S-agent — параллельно)
+- [x] **M11-T5 · Метрики** (S-obs + инструментирование S-mtproto, S-agent — параллельно)
   - Файлы: `internal/metrics/server.go`, `internal/metrics/agent.go` (метрики из `docs/mtproto.md` §13), `internal/mtproto/observer.go`, `internal/agent/metrics.go`.
   - Тесты первыми: `testutil.CollectAndCompare` на каждую метрику; `promlint` чист; в метках нет IP/ключей (сквозной regex по выдаче `/metrics`); `secret` — имя, не префикс.
 - [ ] **M11-T6 · Алерты** (S-obs) · зависит от M11-T5

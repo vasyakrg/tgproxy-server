@@ -28,6 +28,7 @@ type Server struct {
 	adminLogins      *prometheus.CounterVec
 	undeliverable    prometheus.Counter
 	ingressCertAfter prometheus.Gauge
+	mtp              mtprotoMetrics
 }
 
 // NewServerRegistry создаёт отдельный (не глобальный) реестр сервера.
@@ -68,6 +69,7 @@ func NewServerRegistry() (*prometheus.Registry, *Server) {
 		ingressCertAfter: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace, Name: "ingress_cert_not_after_seconds", Help: "Ingress certificate NotAfter, unix seconds."}),
 	}
+	s.mtp = newMTProtoMetrics(reg)
 	reg.MustRegister(s.requests, s.duration, s.upstream, s.retries, s.tg429, s.denied, s.agentUp,
 		s.agentInflight, s.agentReverse, s.enroll, s.noHealthy, s.buffered, s.longPoll,
 		s.webhookBlocked, s.installJobs, s.adminLogins, s.undeliverable, s.ingressCertAfter)
@@ -134,6 +136,7 @@ func (s *Server) ForgetAgent(agent string) {
 	s.agentUp.DeletePartialMatch(l)
 	s.agentInflight.DeletePartialMatch(l)
 	s.agentReverse.DeletePartialMatch(l)
+	s.ForgetMTProtoAgent(agent)
 }
 
 // NoHealthyAgents — запрос отклонён из-за отсутствия живых агентов.

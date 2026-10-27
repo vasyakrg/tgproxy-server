@@ -71,7 +71,7 @@ func (r *Registry) Status(ctx context.Context, a AgentRef) (*AgentStatus, error)
 	return t.Status(ctx, a)
 }
 
-// RegisterStream добавляет/заменяет StreamTransport режима (reverse — M11-T1).
+// RegisterStream добавляет/заменяет StreamTransport режима (reverse — ReverseStream).
 func (r *Registry) RegisterStream(mode config.AgentMode, t StreamTransport) {
 	r.mu.Lock()
 	r.streams[mode] = t
@@ -79,7 +79,7 @@ func (r *Registry) RegisterStream(mode config.AgentMode, t StreamTransport) {
 }
 
 // OpenMTProto делегирует StreamTransport режима агента. Для reverse без
-// зарегистрированной реализации — ErrNotSupported (до M11-T1), для остальных
+// зарегистрированной реализации (ReverseStream) — ErrNotSupported, для остальных
 // режимов — ErrModeUnsupported.
 func (r *Registry) OpenMTProto(ctx context.Context, a AgentRef, dc int) (net.Conn, error) {
 	r.mu.RLock()
