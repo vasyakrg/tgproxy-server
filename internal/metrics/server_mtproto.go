@@ -34,9 +34,9 @@ func newMTProtoMetrics(reg prometheus.Registerer) mtprotoMetrics {
 	m := mtprotoMetrics{
 		clientConns: g("mtproto_client_conns", "Active MTProto client connections (listener: shared|dedicated).", "listener"),
 		conns: c("mtproto_connections_total",
-			"MTProto connections by secret name and result (ok|replay|conn_limit|no_agents|upstream_error|closed).", "secret", "result"),
+			"MTProto connections by secret name and result (ok|replay|conn_limit|closed).", "secret", "result"),
 		hsFail: c("mtproto_handshake_failures_total",
-			"Failed FakeTLS handshakes (timeout|bad_record|replay|time_skew|conn_limit).", "reason"),
+			"Failed FakeTLS handshakes (timeout|bad_record|replay|conn_limit).", "reason"),
 		fallthroughTotal: prometheus.NewCounter(prometheus.CounterOpts{Namespace: namespace, Name: "mtproto_fallthrough_total",
 			Help: "Connections handed over to the TLS fronting site."}),
 		bytes:    c("mtproto_bytes_total", "MTProto bytes via agents (direction: in = client to Telegram, out = Telegram to client).", "direction", "agent"),
@@ -66,7 +66,7 @@ func (s *Server) MTProtoClientConns(listener string, delta int) {
 // MTProtoConnection — итог соединения секрета secret (имя). Неизвестный result → "closed".
 func (s *Server) MTProtoConnection(secret, result string) {
 	switch result {
-	case "ok", "replay", "conn_limit", "no_agents", "upstream_error", "closed":
+	case "ok", "replay", "conn_limit", "closed":
 	default:
 		result = "closed"
 	}
@@ -76,7 +76,7 @@ func (s *Server) MTProtoConnection(secret, result string) {
 // MTProtoHandshakeFailure — отказ рукопожатия. Неизвестная причина → "bad_record".
 func (s *Server) MTProtoHandshakeFailure(reason string) {
 	switch reason {
-	case "timeout", "bad_record", "replay", "time_skew", "conn_limit":
+	case "timeout", "bad_record", "replay", "conn_limit":
 	default:
 		reason = "bad_record"
 	}

@@ -34,7 +34,7 @@ tgp_mtproto_client_conns{listener="shared"} 1
 	s.MTProtoConnection("alice", "ok")
 	s.MTProtoConnection("alice", "bogus")
 	cmp(t, m.conns, `
-# HELP tgp_mtproto_connections_total MTProto connections by secret name and result (ok|replay|conn_limit|no_agents|upstream_error|closed).
+# HELP tgp_mtproto_connections_total MTProto connections by secret name and result (ok|replay|conn_limit|closed).
 # TYPE tgp_mtproto_connections_total counter
 tgp_mtproto_connections_total{result="closed",secret="alice"} 1
 tgp_mtproto_connections_total{result="ok",secret="alice"} 1
@@ -43,7 +43,7 @@ tgp_mtproto_connections_total{result="ok",secret="alice"} 1
 	s.MTProtoHandshakeFailure("timeout")
 	s.MTProtoHandshakeFailure("zzz")
 	cmp(t, m.hsFail, `
-# HELP tgp_mtproto_handshake_failures_total Failed FakeTLS handshakes (timeout|bad_record|replay|time_skew|conn_limit).
+# HELP tgp_mtproto_handshake_failures_total Failed FakeTLS handshakes (timeout|bad_record|replay|conn_limit).
 # TYPE tgp_mtproto_handshake_failures_total counter
 tgp_mtproto_handshake_failures_total{reason="bad_record"} 1
 tgp_mtproto_handshake_failures_total{reason="timeout"} 1

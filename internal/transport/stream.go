@@ -188,7 +188,13 @@ type readResult struct {
 	err error
 }
 
-const pumpBuf = 32 << 10
+const (
+	pumpBuf     = 32 << 10
+	pumpIdleBuf = 1 << 10
+)
+
+// pumpBufs — буферы pump-горутин: большой берётся, только пока идёт поток.
+var pumpBufs = sync.Pool{New: func() any { b := make([]byte, pumpBuf); return &b }}
 
 // streamConn — net.Conn поверх h2-стрима: запись -> тело запроса, чтение <-
 // тело ответа. Чтение идёт через pump-горутину: так работает дедлайн чтения
@@ -223,7 +229,7 @@ func newStreamConn(body io.ReadCloser, wp *bodyPipe, cancel context.CancelFunc, 
 		body: body, wp: wp, cancel: cancel, local: local, remote: remote,
 		chunks: make(chan readResult), ack: make(chan struct{}),
 		closed: make(chan struct{}), pumpDone: make(chan struct{}),
-		buf: make([]byte, pumpBuf), readDead: newDeadline(), rclosed: make(chan struct{}),
+		buf: make([]byte, pumpIdleBuf), readDead: newDeadline(), rclosed: make(chan struct{}),
 	}
 	go c.pump()
 	return c
@@ -233,8 +239,28 @@ func newStreamConn(body io.ReadCloser, wp *bodyPipe, cancel context.CancelFunc, 
 // байты, чтобы не сбросить стрим (RST закрыл бы и запись).
 func (c *streamConn) pump() {
 	defer close(c.pumpDone)
+	// Простаивающий поток держит только малый буфер; пока порции заполняют
+	// его целиком, берётся буфер pumpBuf из пула. c.buf меняется лишь здесь,
+	// до чтения очередной порции, т.е. после ack (Read буфер уже не трогает).
+	small := c.buf
+	var bp *[]byte
+	defer func() {
+		if bp != nil {
+			pumpBufs.Put(bp)
+		}
+	}()
+	last := 0
 	for {
+		switch {
+		case bp == nil && last == len(small):
+			bp = pumpBufs.Get().(*[]byte)
+			c.buf = *bp
+		case bp != nil && last < len(small):
+			pumpBufs.Put(bp)
+			bp, c.buf = nil, small
+		}
 		n, err := c.body.Read(c.buf)
+		last = n
 		if isClosedChan(c.rclosed) {
 			if err != nil {
 				return

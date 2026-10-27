@@ -19,6 +19,7 @@ import (
 
 	"github.com/vasyakrg/tgproxy-server/internal/config"
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
+	"github.com/vasyakrg/tgproxy-server/internal/transport"
 )
 
 // ALPNReverse — ALPN-протокол reverse-канала агент → server. Должна совпадать
@@ -396,6 +397,10 @@ func (c *Connector) serve(ctx context.Context, conn net.Conn, s *slot) {
 	base := &http.Server{Handler: handler, ErrorLog: slogErrorLog(c.a), ReadHeaderTimeout: readHeaderTimeout}
 	//nolint:staticcheck // reverse-канал требует http2.Server.ServeConn поверх готового соединения (§4.1)
 	h2s := &http2.Server{}
+	if c.class == classMTProto {
+		// Меньший размер фрейма уменьшает scratch-буфер каждого потока сервера (память на соединение).
+		h2s.MaxReadFrameSize = transport.StreamMaxFrameSize //nolint:staticcheck // SA1019: http.HTTP2Config не применяется к ServeConn поверх готового соединения
+	}
 	//nolint:staticcheck // нужен для graceful shutdown через base.Shutdown
 	if err := http2.ConfigureServer(base, h2s); err != nil {
 		c.a.logger.Error("reverse: configure h2", "err", err)

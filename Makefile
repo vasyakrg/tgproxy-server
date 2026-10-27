@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build generate test test-race lint vuln snapshot deb dev-certs dev-setup run-server run-agent run-agent2 redis-up dev-target-up dev-target-down dev-keys build-dev dev-packages vendor-verify deploy release-dry fuzz gosec bench geoip
+.PHONY: help build generate test test-race lint vuln snapshot deb dev-certs dev-setup run-server run-agent run-agent2 redis-up dev-target-up dev-target-down dev-keys build-dev dev-packages vendor-verify deploy release-dry fuzz gosec bench bench-mtproto geoip
 
 help: ## Список целей
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -26,6 +26,9 @@ test: ## go test ./...
 bench: ## Нагрузочный smoke (500 rps getMe, vegeta; пороги из M7-T2)
 	go run ./scripts/bench
 
+bench-mtproto: ## Нагрузочный smoke MTProto (M13-T5): N соединений, эхо-трафик, p95 getMe, утечки; N=5000 по умолчанию
+	go run ./scripts/bench/mtproto $(BENCH_MTPROTO_ARGS)
+
 test-race: ## go test -race ./...
 	go test -race ./...
 
@@ -36,7 +39,7 @@ FUZZTIME ?= 60s
 FUZZ_TARGETS := ./internal/tgapi:FuzzParsePath ./internal/tgapi:FuzzParseEnvelope \
 	./internal/redact:FuzzString ./internal/redact:FuzzKeys \
 	./internal/server/web/auth:FuzzParsePHC ./internal/server/router:FuzzExtractChatID \
-	./internal/selfupdate:FuzzParseRequest ./internal/deployhelper:FuzzArgs ./internal/mtproto/faketls:FuzzParseClientHello
+	./internal/selfupdate:FuzzParseRequest ./internal/deployhelper:FuzzArgs ./internal/mtproto/faketls:FuzzParseClientHello ./internal/mtproto/mux:FuzzFirstRecord
 
 fuzz: ## фаззеры (FUZZTIME=60s на каждый)
 	@set -e; for t in $(FUZZ_TARGETS); do \

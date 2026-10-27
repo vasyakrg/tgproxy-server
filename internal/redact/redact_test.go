@@ -53,6 +53,9 @@ func TestString(t *testing.T) {
 		{"faketls short kept", "ee" + fakeHex[:30], "ee" + fakeHex[:30]},
 		{"tg proxy url", "tg://proxy?server=1.2.3.4&port=443&secret=ee" + fakeHex + "&x=1", "tg://proxy?server=1.2.3.4&port=443&secret=***&x=1"},
 		{"t.me proxy url", "https://t.me/proxy?server=h&port=443&secret=" + fakeHex, "https://t.me/proxy?server=h&port=443&secret=***"},
+		{"t.me base64url", "https://t.me/proxy?server=h&port=443&secret=7hqQnT6wV2xYz0aBcD_eFgHiJkLmNoPqRs&x=1", "https://t.me/proxy?server=h&port=443&secret=***&x=1"},
+		{"t.me base64 padded", "https://t.me/proxy?server=h&port=443&secret=7hqQnT6w+V2x/Yz0aBcDeFgHiJkLmNoPq==", "https://t.me/proxy?server=h&port=443&secret=***"},
+		{"secret url-encoded", "https://x/share?url=https%3A%2F%2Ft.me%2Fproxy%3Fserver%3Dh%26secret%3D7hqQnT6w-V2xYz0aBcD_eFgHi%3D%3D%26port%3D443", "https://x/share?url=https%3A%2F%2Ft.me%2Fproxy%3Fserver%3Dh%26secret%3D***%26port%3D443"},
 		{"secret upper", "SECRET=" + fakeHex + " end", "secret=*** end"},
 		{"metric name untouched", "tgp_requests_total", "tgp_requests_total"},
 	}

@@ -94,14 +94,15 @@ type MTProtoConfig struct {
 	IdleTimeout          time.Duration `yaml:"idle_timeout"`
 	TimeSkew             time.Duration `yaml:"time_skew"`
 	ReplayCache          ByteSize      `yaml:"replay_cache"`
-	// DCProbeInterval пробрасывается агентам через /_agent/config.
-	DCProbeInterval time.Duration    `yaml:"dc_probe_interval"`
-	AgentPool       MTProtoAgentPool `yaml:"agent_pool"`
+	// Период проб DC и размер пула reverse-соединений — свойства агента
+	// (agent.yaml: mtproto.dc_probe_interval, reverse_conns_min/max); серверных
+	// ключей для них нет, старые dc_probe_interval и agent_pool.reverse_conns
+	// отвергаются как неизвестные поля (docs/mtproto.md §10).
+	AgentPool MTProtoAgentPool `yaml:"agent_pool"`
 }
 
 // MTProtoAgentPool — пул потоков сервер -> агент.
 type MTProtoAgentPool struct {
-	ReverseConns int `yaml:"reverse_conns"`
 	// MaxReverseConns — потолок MTProto-соединений reverse-агента на сервере
 	// (согласуйте с агентским mtproto.reverse_conns_max, по умолчанию 16).
 	MaxReverseConns   int           `yaml:"max_reverse_conns"`
@@ -121,7 +122,7 @@ type AgentMTProtoConfig struct {
 	// (сервер просит размер через PUT /_agent/mtproto/pool, clamp в [min, max]).
 	ReverseConnsMin int `yaml:"reverse_conns_min"`
 	ReverseConnsMax int `yaml:"reverse_conns_max"`
-	// DCProbeInterval — период TCP-проб DC; сервер может менять его через PUT /_agent/config.
+	// DCProbeInterval — период TCP-проб DC; меняется на лету PUT /_agent/config и SIGHUP.
 	DCProbeInterval time.Duration `yaml:"dc_probe_interval"`
 }
 
@@ -196,18 +197,13 @@ func (v *validator) mtproto(c *ServerConfig) {
 	positiveInt("mtproto.max_pending_handshakes", m.MaxPendingHandshakes)
 	v.positive("mtproto.handshake_timeout", m.HandshakeTimeout)
 	v.positive("mtproto.idle_timeout", m.IdleTimeout)
-	v.positive("mtproto.dc_probe_interval", m.DCProbeInterval)
 	if m.TimeSkew < minMTProtoSkew || m.TimeSkew > maxMTProtoSkew {
 		v.add("mtproto.time_skew", "must be in %s..%s, got %s", minMTProtoSkew, maxMTProtoSkew, m.TimeSkew)
 	}
 	if m.ReplayCache < minReplayCache || m.ReplayCache > maxReplayCache {
 		v.add("mtproto.replay_cache", "must be in %s..%s, got %s", ByteSize(minReplayCache), ByteSize(maxReplayCache), m.ReplayCache)
 	}
-	positiveInt("mtproto.agent_pool.reverse_conns", m.AgentPool.ReverseConns)
 	positiveInt("mtproto.agent_pool.max_reverse_conns", m.AgentPool.MaxReverseConns)
-	if m.AgentPool.MaxReverseConns > 0 && m.AgentPool.MaxReverseConns < m.AgentPool.ReverseConns {
-		v.add("mtproto.agent_pool.max_reverse_conns", "must be >= reverse_conns (%d), got %d", m.AgentPool.ReverseConns, m.AgentPool.MaxReverseConns)
-	}
 	positiveInt("mtproto.agent_pool.max_streams_per_conn", m.AgentPool.MaxStreamsPerConn)
 	v.positive("mtproto.agent_pool.dial_timeout", m.AgentPool.DialTimeout)
 	if m.PublicPort < 0 || m.PublicPort > 65535 {

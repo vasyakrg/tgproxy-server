@@ -23,7 +23,45 @@ const headerDC = "X-TGP-DC"
 
 const relayBufSize = 32 << 10
 
+// idleBufSize — буфер простаивающего направления: большой буфер из пула
+// берётся, только когда данные пошли (память на тысячи idle-соединений).
+const idleBufSize = 1 << 10
+
 var relayBufs = sync.Pool{New: func() any { b := make([]byte, relayBufSize); return &b }}
+
+// relayBuf — буфер одного направления релея: пока читаемые порции малы, это
+// небольшой собственный буфер; заполнившая его порция переключает на 32 КиБ из
+// пула, малая порция возвращает буфер в пул.
+type relayBuf struct {
+	small [idleBufSize]byte
+	bp    *[]byte
+}
+
+// bytes возвращает буфер для следующего Read.
+func (b *relayBuf) bytes() []byte {
+	if b.bp != nil {
+		return *b.bp
+	}
+	return b.small[:]
+}
+
+// used сообщает, сколько байт вернул Read, и подбирает размер буфера.
+func (b *relayBuf) used(n int) {
+	switch {
+	case b.bp == nil && n == len(b.small):
+		b.bp = relayBufs.Get().(*[]byte)
+	case b.bp != nil && n < len(b.small):
+		relayBufs.Put(b.bp)
+		b.bp = nil
+	}
+}
+
+func (b *relayBuf) release() {
+	if b.bp != nil {
+		relayBufs.Put(b.bp)
+		b.bp = nil
+	}
+}
 
 // mtprotoRelay — TCP-релей к дата-центрам Telegram для MTProto-стримов сервера
 // (POST /_agent/mtproto/dc/{dc}, docs/mtproto.md §5). Адрес берётся только из
@@ -179,9 +217,8 @@ func (r *mtprotoRelay) relay(w http.ResponseWriter, req *http.Request, dc int, c
 	last.Store(time.Now().UnixNano())
 	touch := func() { last.Store(time.Now().UnixNano()) }
 
-	done := make(chan struct{})
+	stopWatch := r.watch(req.Context(), conn, &last)
 	var wg sync.WaitGroup
-	wg.Go(func() { r.watch(req.Context(), conn, &last, done) })
 	wg.Go(func() { r.upstream(req.Body, conn, touch) })
 
 	r.downstream(w, rc, conn, touch)
@@ -189,7 +226,7 @@ func (r *mtprotoRelay) relay(w http.ResponseWriter, req *http.Request, dc int, c
 	// DC закрыл поток/ошибка: рвём оба направления и дожидаемся горутин.
 	_ = conn.Close()
 	_ = rc.SetReadDeadline(time.Unix(1, 0)) // разблокирует чтение r.Body
-	close(done)
+	stopWatch()
 	wg.Wait()
 	r.a.logger.Debug("mtproto stream closed", "dc", dc, "duration", r.a.now().Sub(start))
 }
@@ -197,11 +234,12 @@ func (r *mtprotoRelay) relay(w http.ResponseWriter, req *http.Request, dc int, c
 // upstream: тело запроса -> DC. EOF клиента — half-close (DC ещё может отвечать);
 // иная ошибка закрывает соединение целиком.
 func (r *mtprotoRelay) upstream(body io.Reader, conn net.Conn, touch func()) {
-	bp := relayBufs.Get().(*[]byte)
-	defer relayBufs.Put(bp)
-	buf := *bp
+	var rb relayBuf
+	defer rb.release()
 	for {
+		buf := rb.bytes()
 		n, rerr := body.Read(buf)
+		rb.used(n)
 		if n > 0 {
 			touch()
 			wn, werr := conn.Write(buf[:n])
@@ -226,11 +264,12 @@ func (r *mtprotoRelay) upstream(body io.Reader, conn net.Conn, touch func()) {
 
 // downstream: DC -> тело ответа, Flush после каждой записи.
 func (r *mtprotoRelay) downstream(w http.ResponseWriter, rc *http.ResponseController, conn net.Conn, touch func()) {
-	bp := relayBufs.Get().(*[]byte)
-	defer relayBufs.Put(bp)
-	buf := *bp
+	var rb relayBuf
+	defer rb.release()
 	for {
+		buf := rb.bytes()
 		n, rerr := conn.Read(buf)
+		rb.used(n)
 		if n > 0 {
 			touch()
 			wn, werr := w.Write(buf[:n])
@@ -249,26 +288,28 @@ func (r *mtprotoRelay) downstream(w http.ResponseWriter, rc *http.ResponseContro
 }
 
 // watch закрывает conn по idle_timeout, max_duration или отмене запроса.
-func (r *mtprotoRelay) watch(ctx context.Context, conn net.Conn, last *atomic.Int64, done <-chan struct{}) {
+// Без отдельной горутины: таймеры и context.AfterFunc; stop снимает все три.
+func (r *mtprotoRelay) watch(ctx context.Context, conn net.Conn, last *atomic.Int64) (stop func()) {
 	idle := r.cfg().IdleTimeout
-	maxT := time.NewTimer(r.cfg().MaxDuration)
-	defer maxT.Stop()
-	idleT := time.NewTimer(idle)
-	defer idleT.Stop()
-	for {
-		select {
-		case <-done:
-			return
-		case <-ctx.Done():
-		case <-maxT.C:
-		case <-idleT.C:
-			since := time.Since(time.Unix(0, last.Load()))
-			if since < idle {
-				idleT.Reset(idle - since)
-				continue
+	closeConn := func() { _ = conn.Close() }
+	maxT := time.AfterFunc(r.cfg().MaxDuration, closeConn)
+	var idleT atomic.Pointer[time.Timer]
+	idleT.Store(time.AfterFunc(idle, func() {
+		since := time.Since(time.Unix(0, last.Load()))
+		if since < idle {
+			if t := idleT.Load(); t != nil {
+				t.Reset(idle - since)
 			}
+			return
 		}
-		_ = conn.Close()
-		return
+		closeConn()
+	}))
+	stopCtx := context.AfterFunc(ctx, closeConn)
+	return func() {
+		stopCtx()
+		maxT.Stop()
+		if t := idleT.Load(); t != nil {
+			t.Stop()
+		}
 	}
 }

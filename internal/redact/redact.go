@@ -23,6 +23,10 @@ var fakeTLSRe = regexp.MustCompile(`ee[0-9a-fA-F]{32,}`)
 // secretParamRe — параметр secret=<...> в tg://proxy, t.me/proxy и произвольных строках.
 var secretParamRe = regexp.MustCompile(`(?i)secret=[^&\s"'<>]*`)
 
+// secretEncRe — тот же параметр, но URL-кодированный внутри другого параметра
+// (…%3Fsecret%3D<base64>%26…): значение кончается на %26 или границе строки.
+var secretEncRe = regexp.MustCompile(`(?i)secret%3d(?:[^&%\s"'<>]|%2[bf]|%3d)*`)
+
 func isSecretChar(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
 }
@@ -81,8 +85,9 @@ func String(s string) string {
 	if s == "" {
 		return s
 	}
-	if strings.Contains(strings.ToLower(s), "secret=") {
+	if low := strings.ToLower(s); strings.Contains(low, "secret=") || strings.Contains(low, "secret%3d") {
 		s = secretParamRe.ReplaceAllString(s, "secret=***")
+		s = secretEncRe.ReplaceAllString(s, "secret%3D***")
 	}
 	if spans := findTokens(s); len(spans) > 0 {
 		var b strings.Builder

@@ -206,7 +206,7 @@ type Observer interface { // события mtg → метрики и журна
 - NTP на сервере (chrony/systemd-timesyncd); при старте сервер пишет в лог предупреждение о необходимости синхронизации времени (окно `time_skew`, по умолчанию 2 мин). Проверки `timedatectl` и отдельной метрики нет.
 - Лимит соединений на секрет (`max_conns`) и опц. CIDR секрета для «своих» групп пользователей.
 - Ротация секрета с `grace_until` (дефолт 0 — старый перестаёт работать сразу; максимум 720h). Старый секрет переименовывается в `<имя>~<id>`, новый наследует имя, CIDR, `max_conns` и `enabled`.
-- Фаззинг парсера ClientHello в `make fuzz` и nightly.
+- Фаззинг в `make fuzz` и nightly: парсер ClientHello (`faketls.FuzzParseClientHello`) и путь первой записи mux (`mux.FuzzFirstRecord`: чтение записи → разбор → `Match`, воспроизведение префикса при fallthrough). Сквозная проверка «ключа нигде нет» — `internal/app/mtprotoleak_e2e_test.go` (логи сервера и агентов, `/metrics`, API, аудит, HTML экранов, дамп БД; `secret_enc` — только шифртекст). `gosec` и `govulncheck` — в CI и перед релизом.
 
 ## 9. Изоляция и лимиты
 
@@ -233,10 +233,8 @@ mtproto:
   idle_timeout: 5m
   time_skew: 2m                # 30s..10m
   replay_cache: 4MiB           # 1MiB..256MiB; суффиксы B|KiB|MiB|GiB|KB|MB|GB
-  dc_probe_interval: 30s       # валидируется; на агентов сервером пока не рассылается (период агента — agent.yaml / PUT /_agent/config)
   agent_pool:
-    reverse_conns: 2           # валидируется; рантаймом не используется (стартовый размер пула задаёт агент: reverse_conns_min)
-    max_reverse_conns: 16      # потолок MTProto-соединений агента на сервере; >= reverse_conns; согласуйте с agent reverse_conns_max
+    max_reverse_conns: 16      # потолок MTProto-соединений агента на сервере; согласуйте с agent reverse_conns_max
     max_streams_per_conn: 500  # порог загрузки соединения для роста пула reverse
     dial_timeout: 5s           # установка стрима к DC через агента
 ```
@@ -256,7 +254,7 @@ mtproto:
   reverse_conns_max: 16        # >= reverse_conns_min
 ```
 
-Правила: `enabled`/`listen`/`fronting_domain` — только рестарт (при SIGHUP предупреждение «require restart, not applied»). По SIGHUP сервер применяет лимиты входа mux: `max_conns`, `max_conns_per_ip`, `max_pending_handshakes`, `handshake_timeout` (живые соединения не рвутся) и перепроверяет fd-бюджет; `public_host`/`public_port` подхватываются при следующей выдаче ссылки. Остальное (`idle_timeout`, `time_skew`, `replay_cache`, `agent_pool.*`) читается при старте — нужен рестарт. Агент по SIGHUP применяет `max_streams`, `dial/idle/max_duration`, `ipv6`, `dc_probe_interval`. Таблицу DC через YAML не подменить; для тестов — неэкспортируемый оверрайд, как `OverrideTelegramAPIURL` (`internal/config/defaults.go:123`). Валидация — `internal/config/validate.go` (`ValidateServer`, `ValidateAgent`): `fronting_domain` — FQDN из ≥2 меток без порта, wildcard и IP; `listen=shared` требует `tls.mode ≠ off`; dedicated `listen` не совпадает (один порт и совпадающий или wildcard-хост) с `listen.proxy/admin/metrics/agent_gateway`; `time_skew` ∈ [30s, 10m]; `replay_cache` ∈ [1MiB, 256MiB]; `enabled: true` требует `fronting_domain` и `pki.kek_file`; `max_reverse_conns >= reverse_conns`; агент: `reverse_conns_max >= reverse_conns_min >= 1`, `idle_timeout <= max_duration`. Env-переменных/YAML для подмены таблицы DC нет.
+Правила: `enabled`/`listen`/`fronting_domain` — только рестарт (при SIGHUP предупреждение «require restart, not applied»). По SIGHUP сервер применяет лимиты входа mux: `max_conns`, `max_conns_per_ip`, `max_pending_handshakes`, `handshake_timeout` (живые соединения не рвутся) и перепроверяет fd-бюджет; `public_host`/`public_port` подхватываются при следующей выдаче ссылки. Остальное (`idle_timeout`, `time_skew`, `replay_cache`, `agent_pool.*`) читается при старте — нужен рестарт. Серверных ключей `dc_probe_interval` и `agent_pool.reverse_conns` нет (они были зарезервированы в дизайне, но ничего не делали): период проб и границы пула — свойства агента (`agent.yaml`), а размер пула растёт по запросу сервера в пределах `max_reverse_conns`. Конфиг со старыми ключами не запустится: `mtproto.dc_probe_interval: unknown field` — удалите ключ. Агент по SIGHUP применяет `max_streams`, `dial/idle/max_duration`, `ipv6`, `dc_probe_interval`. Таблицу DC через YAML не подменить; для тестов — неэкспортируемый оверрайд, как `OverrideTelegramAPIURL` (`internal/config/defaults.go:123`). Валидация — `internal/config/validate.go` (`ValidateServer`, `ValidateAgent`): `fronting_domain` — FQDN из ≥2 меток без порта, wildcard и IP; `listen=shared` требует `tls.mode ≠ off`; dedicated `listen` не совпадает (один порт и совпадающий или wildcard-хост) с `listen.proxy/admin/metrics/agent_gateway`; `time_skew` ∈ [30s, 10m]; `replay_cache` ∈ [1MiB, 256MiB]; `enabled: true` требует `fronting_domain` и `pki.kek_file`; агент: `reverse_conns_max >= reverse_conns_min >= 1`, `idle_timeout <= max_duration`. Env-переменных/YAML для подмены таблицы DC нет.
 
 ## 11. Хранилище
 
@@ -308,8 +306,8 @@ Server (`internal/metrics/server_mtproto.go`):
 | Метрика | Метки |
 |---|---|
 | `tgp_mtproto_client_conns` (gauge) | `listener` (shared\|dedicated) |
-| `tgp_mtproto_connections_total` | `secret` (имя; `unknown` — до выбора секрета), `result` (выставляются: `ok` — достигнут DC, `closed` — закрыто до DC, `replay`, `conn_limit`; `no_agents`, `upstream_error` разрешены, но не выставляются) |
-| `tgp_mtproto_handshake_failures_total` | `reason` (выставляются: `timeout`, `bad_record`, `replay`, `conn_limit`; `time_skew` разрешён, но не выставляется) |
+| `tgp_mtproto_connections_total` | `secret` (имя; `unknown` — до выбора секрета), `result` (`ok` — достигнут DC, `closed` — закрыто до DC, `replay`, `conn_limit`; причины отказа открытия стрима — в `upstream_errors_total{phase}`) |
+| `tgp_mtproto_handshake_failures_total` | `reason` (`timeout`, `bad_record`, `replay`, `conn_limit`; выход timestamp за окно `time_skew` намеренно неотличим от неверного HMAC — оба дают fallthrough без отдельного счётчика) |
 | `tgp_mtproto_fallthrough_total` | — |
 | `tgp_mtproto_bytes_total` | `direction` (`in` — клиент → Telegram, `out` — Telegram → клиент), `agent` |
 | `tgp_mtproto_streams` (gauge) | `agent`, `dc` |
@@ -365,7 +363,7 @@ Agent: `tgp_agent_mtproto_streams{dc}`, `tgp_agent_mtproto_dial_errors_total{dc,
 - **sysctl** (только документация, пакет не меняет): агент — `net.ipv4.ip_local_port_range = 10000 65000`, `net.ipv4.tcp_tw_reuse = 1`; сервер — `net.core.somaxconn = 4096`, `net.ipv4.tcp_keepalive_time = 60`.
 - **Фаервол**: сервер — входящий порт MTProto (shared — тот же, что прокси; dedicated — `mtproto.listen`); агент — исходящий TCP 443 к сетям Telegram (список — `tgapi.TelegramPrefixes` в `internal/tgapi/dc.go`, продублирован в `operations.md`).
 - **NTP** на сервере обязателен (окно `time_skew`).
-- **deploy**: опциональный шаг `scripts/deploy.sh` — если в `deploy/.env` задан `PROD_MTPROTO_LINK`, после health check выполняется `tgproxy mtproto probe` по этой ссылке (ненулевой код — провал деплоя). Значение — секрет, в вывод не печатается.
+- **deploy**: опциональный шаг `scripts/deploy.sh` (после `/healthz`/`/readyz` и до проверки агентов). Если в `deploy/.env` задан `PROD_MTPROTO_LINK` (служебный секрет `deploy-probe`, ОВ-P3), скрипт по SSH выполняет на сервере `tgproxy mtproto probe --link-stdin --timeout 20s`: ссылка идёт в stdin, не попадает ни в argv (`ps`), ни в лог; вывод probe не содержит ключа. Без переменной шаг пропускается (`DEPLOY_DRY_RUN=1` показывает план без значения). Неуспех probe релиз **не откатывает** (Bot API уже прошёл health check, а откат не лечит типичные причины: нет capable-агентов, DC недоступен с агентов, отозван секрет, неверный `fronting_domain`) — скрипт печатает подсказку и завершается ненулевым кодом в конце. Режим `tgproxy mtproto probe --handshake-only` проверяет только FakeTLS-рукопожатие (без obfuscated2 и запроса к DC): для ручной проверки входа, когда агентов или DC ещё нет; шаг деплоя его не использует, так как должен подтверждать полный путь через агента.
 
 ## 17. Открытые вопросы (с дефолтами)
 

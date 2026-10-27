@@ -19,12 +19,20 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/tgapi"
 )
 
+// StreamMaxFrameSize — максимальный размер h2-фрейма MTProto-класса на обеих
+// сторонах (SETTINGS_MAX_FRAME_SIZE агента и MaxReadFrameSize сервера). Go
+// держит на каждый исходящий h2-поток scratch-буфер размером min(peer
+// MAX_FRAME_SIZE, 512 КиБ) на всё время жизни потока, поэтому 1 МиБ давало
+// ~512 КиБ на простаивающее MTProto-соединение; MTProto-пакеты мелкие, а
+// фреймы 16 КиБ пропускную способность не снижают (scripts/bench/mtproto).
+const StreamMaxFrameSize = 16 << 10
+
 // Параметры h2 стримового пула (docs/mtproto.md §6).
 const (
 	// DefaultStreamWindow — начальные окна потока и соединения: медиа-стрим не
 	// упирается в 64 КБ по умолчанию.
 	DefaultStreamWindow = 4 << 20
-	streamMaxFrameSize  = 1 << 20
+	streamMaxFrameSize  = StreamMaxFrameSize
 	maxIdleStreamConns  = 4
 	// HeaderDC — заголовок с номером DC (со знаком), дублирует путь.
 	HeaderDC = "X-TGP-DC"

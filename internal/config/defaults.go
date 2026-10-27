@@ -75,9 +75,7 @@ func DefaultServer() *ServerConfig {
 			IdleTimeout:          5 * time.Minute,
 			TimeSkew:             2 * time.Minute,
 			ReplayCache:          4 << 20,
-			DCProbeInterval:      30 * time.Second,
 			AgentPool: MTProtoAgentPool{
-				ReverseConns:      2,
 				MaxReverseConns:   DefaultReverseConnsMax,
 				MaxStreamsPerConn: 500,
 				DialTimeout:       5 * time.Second,

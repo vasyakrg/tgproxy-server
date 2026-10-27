@@ -38,9 +38,7 @@ mtproto:
   idle_timeout: 5m
   time_skew: 2m
   replay_cache: 4MiB
-  dc_probe_interval: 30s
   agent_pool:
-    reverse_conns: 2
     max_reverse_conns: 16
     max_streams_per_conn: 500
     dial_timeout: 5s
@@ -61,8 +59,8 @@ func TestMTProtoServerDefaults(t *testing.T) {
 	want := MTProtoConfig{
 		Enabled: false, Listen: "shared", MaxConns: 20000, MaxConnsPerIP: 64, MaxPendingHandshakes: 1024,
 		HandshakeTimeout: 5 * time.Second, IdleTimeout: 5 * time.Minute, TimeSkew: 2 * time.Minute,
-		ReplayCache: 4 << 20, DCProbeInterval: 30 * time.Second,
-		AgentPool: MTProtoAgentPool{ReverseConns: 2, MaxReverseConns: 16, MaxStreamsPerConn: 500, DialTimeout: 5 * time.Second},
+		ReplayCache: 4 << 20,
+		AgentPool:   MTProtoAgentPool{MaxReverseConns: 16, MaxStreamsPerConn: 500, DialTimeout: 5 * time.Second},
 	}
 	if d != want {
 		t.Fatalf("defaults = %+v, want %+v", d, want)
@@ -149,14 +147,13 @@ func TestMTProtoServerValidation(t *testing.T) {
 		{"pending zero", on + "  max_pending_handshakes: 0\n", "mtproto.max_pending_handshakes"},
 		{"handshake zero", on + "  handshake_timeout: 0s\n", "mtproto.handshake_timeout"},
 		{"idle zero", on + "  idle_timeout: 0s\n", "mtproto.idle_timeout"},
-		{"probe zero", on + "  dc_probe_interval: 0s\n", "mtproto.dc_probe_interval"},
-		{"reverse_conns zero", on + "  agent_pool:\n    reverse_conns: 0\n", "mtproto.agent_pool.reverse_conns"},
-		{"max_reverse_conns below reverse_conns", on + "  agent_pool:\n    reverse_conns: 4\n    max_reverse_conns: 3\n", "mtproto.agent_pool.max_reverse_conns"},
 		{"max_reverse_conns zero", on + "  agent_pool:\n    max_reverse_conns: 0\n", "mtproto.agent_pool.max_reverse_conns"},
 		{"streams per conn zero", on + "  agent_pool:\n    max_streams_per_conn: 0\n", "mtproto.agent_pool.max_streams_per_conn"},
 		{"pool dial zero", on + "  agent_pool:\n    dial_timeout: 0s\n", "mtproto.agent_pool.dial_timeout"},
 		{"limits checked when disabled", "mtproto:\n  max_conns: 0\n", "mtproto.max_conns"},
 		{"unknown field", on + "  bogus: 1\n", "mtproto.bogus: unknown field"},
+		{"removed dc_probe_interval", on + "  dc_probe_interval: 30s\n", "mtproto.dc_probe_interval: unknown field"},
+		{"removed reverse_conns", on + "  agent_pool:\n    reverse_conns: 2\n", "mtproto.agent_pool.reverse_conns: unknown field"},
 		{"unknown pool field", on + "  agent_pool:\n    bogus: 1\n", "mtproto.agent_pool.bogus: unknown field"},
 	}
 	for _, tc := range tests {
@@ -205,11 +202,11 @@ func TestMTProtoSharedRequiresTLS(t *testing.T) {
 
 func TestMTProtoEnv(t *testing.T) {
 	c, err := mtServer(t, "", "TGPROXY_MTPROTO__REPLAY_CACHE=8MiB", "TGPROXY_MTPROTO__TIME_SKEW=1m",
-		"TGPROXY_MTPROTO__AGENT_POOL__REVERSE_CONNS=4", "TGPROXY_MTPROTO__ENABLED=false")
+		"TGPROXY_MTPROTO__AGENT_POOL__MAX_REVERSE_CONNS=4", "TGPROXY_MTPROTO__ENABLED=false")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.MTProto.ReplayCache != 8<<20 || c.MTProto.TimeSkew != time.Minute || c.MTProto.AgentPool.ReverseConns != 4 {
+	if c.MTProto.ReplayCache != 8<<20 || c.MTProto.TimeSkew != time.Minute || c.MTProto.AgentPool.MaxReverseConns != 4 {
 		t.Fatalf("%+v", c.MTProto)
 	}
 	_, err = mtServer(t, "", "TGPROXY_MTPROTO__REPLAY_CACHE=junk")
@@ -291,12 +288,11 @@ func TestMTProtoNeedsRestart(t *testing.T) {
 		}
 	}
 	live := map[string]func(*MTProtoConfig){
-		"max_conns":         func(m *MTProtoConfig) { m.MaxConns++ },
-		"idle":              func(m *MTProtoConfig) { m.IdleTimeout++ },
-		"time_skew":         func(m *MTProtoConfig) { m.TimeSkew++ },
-		"pool":              func(m *MTProtoConfig) { m.AgentPool.ReverseConns++ },
-		"public_host":       func(m *MTProtoConfig) { m.PublicHost = "x.example.com" },
-		"dc_probe_interval": func(m *MTProtoConfig) { m.DCProbeInterval++ },
+		"max_conns":   func(m *MTProtoConfig) { m.MaxConns++ },
+		"idle":        func(m *MTProtoConfig) { m.IdleTimeout++ },
+		"time_skew":   func(m *MTProtoConfig) { m.TimeSkew++ },
+		"pool":        func(m *MTProtoConfig) { m.AgentPool.MaxReverseConns++ },
+		"public_host": func(m *MTProtoConfig) { m.PublicHost = "x.example.com" },
 	}
 	for name, f := range live {
 		next := base

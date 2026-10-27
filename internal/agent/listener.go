@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/vasyakrg/tgproxy-server/internal/transport"
 )
 
 const (
@@ -34,6 +36,7 @@ func (a *Agent) startListener(ctx context.Context, ln net.Listener, fatal func(e
 			WriteTimeout:      0,
 			IdleTimeout:       idleTimeout,
 			ErrorLog:          slogErrorLog(a),
+			HTTP2:             &http.HTTP2Config{MaxReadFrameSize: transport.StreamMaxFrameSize},
 			BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 		},
 		done: make(chan struct{}),

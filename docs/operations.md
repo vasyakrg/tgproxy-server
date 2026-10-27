@@ -172,7 +172,7 @@ ReadWritePaths=/data/tgproxy/agent
      fronting_domain: tgproxy.example.com
      public_host: ""                # хост в ссылке; пусто — хост server.public_base_url
    ```
-5. `tgproxy config validate --mode server -c /etc/tgproxy/server.yaml`, затем `systemctl restart tgproxy-server`. `enabled`, `listen` и `fronting_domain` применяются только рестартом; `max_conns`, `max_conns_per_ip`, `max_pending_handshakes`, `handshake_timeout` — по `SIGHUP`/`systemctl reload`; остальное (`idle_timeout`, `time_skew`, `replay_cache`, `agent_pool.*`) — рестартом.
+5. `tgproxy config validate --mode server -c /etc/tgproxy/server.yaml`, затем `systemctl restart tgproxy-server`. `enabled`, `listen` и `fronting_domain` применяются только рестартом; `max_conns`, `max_conns_per_ip`, `max_pending_handshakes`, `handshake_timeout` — по `SIGHUP`/`systemctl reload`; остальное (`idle_timeout`, `time_skew`, `replay_cache`, `agent_pool.*`) — рестартом. Ключей `dc_probe_interval` и `agent_pool.reverse_conns` на сервере нет: период проб DC и границы пула задаются в `agent.yaml`; старый серверный конфиг с ними не стартует (`unknown field`) — удалите строки.
 6. Агенты: на `agent.yaml` `mtproto.enabled: true` (по умолчанию), версия с поддержкой MTProto. Сервер берёт в пул только агентов с capability `mtproto/1` (чип «MTProto» в UI «Агенты»); старые агенты продолжают обслуживать Bot API.
 
 **Shared или dedicated.** `listen: shared` — MTProto на том же порту, что прокси ботов (`listen.proxy`): мало настроек, но блокировка IP по признакам MTProto заденет и Bot API. Для прода рекомендуем `listen: "<отдельный IP>:443"` (`host:port` не должен совпадать с `listen.proxy/admin/metrics/agent_gateway`): на нём невалидные соединения получают 404 с тем же сертификатом, а блокировка этого IP не трогает ботов. Укажите `public_host`/`public_port`, если адрес в ссылке отличается от `public_base_url`.
@@ -226,7 +226,7 @@ ReadWritePaths=/data/tgproxy/agent
    ```sh
    printf %s 'tg://proxy?server=…&port=443&secret=ee…' | tgproxy mtproto probe --link-stdin --dc 2
    ```
-   Код возврата 0 — прокси работает целиком. `--handshake-only` проверяет только FakeTLS (DC и агенты не нужны). Передавайте ссылку через `--link-stdin`: ключ в аргументах виден в `ps`. Ссылка не попадает в сообщения об ошибках.
+   Код возврата 0 — прокси работает целиком. В `scripts/deploy.sh` тот же probe запускается автоматически после health check, если в `deploy/.env` задан `PROD_MTPROTO_LINK` (секрет `deploy-probe`); провал не откатывает релиз, но деплой завершается ошибкой. `--handshake-only` проверяет только FakeTLS (DC и агенты не нужны). Передавайте ссылку через `--link-stdin`: ключ в аргументах виден в `ps`. Ссылка не попадает в сообщения об ошибках.
 2. **Матрица агент × DC.** UI «MTProto» (или `GET /api/v1/mtproto/stats`): по каждому агенту — `up`, RTT и число стримов по DC 1…5 и 203. Агент в матрице без DC или с `capable: false` — MTProto на нём выключен или версия старая. DC `up=false` исключает агента только для этого DC.
 3. **Метрики** (`/metrics`, подробнее — [mtproto.md](mtproto.md) §13):
    - `tgp_mtproto_client_conns{listener}` — активные клиенты; `tgp_mtproto_connections_total{secret,result}` — итоги (`ok` — дошли до DC, `closed` — закрыто до DC, `replay`, `conn_limit`);
