@@ -40,8 +40,11 @@ func cloneMT(m store.MTProtoSecret) store.MTProtoSecret {
 	return m
 }
 
-func (r mtSecretRepo) Create(_ context.Context, name string, sealed []byte, prefix string, cidrs []netip.Prefix, maxConns int) (store.MTProtoSecret, error) {
-	m := store.MTProtoSecret{Name: name, SecretEnc: sealed, Prefix: prefix, CIDRs: cidrs, MaxConns: maxConns, Enabled: true}
+func (r mtSecretRepo) Create(_ context.Context, name string, seal store.SealFunc, prefix string, cidrs []netip.Prefix, maxConns int) (store.MTProtoSecret, error) {
+	if seal == nil {
+		return store.MTProtoSecret{}, fmt.Errorf("%w: mtproto create needs seal", store.ErrInvalid)
+	}
+	m := store.MTProtoSecret{Name: name, SecretEnc: []byte{0}, Prefix: prefix, CIDRs: cidrs, MaxConns: maxConns, Enabled: true}
 	if err := m.Validate(); err != nil {
 		return store.MTProtoSecret{}, err
 	}
@@ -50,8 +53,16 @@ func (r mtSecretRepo) Create(_ context.Context, name string, sealed []byte, pref
 	if r.nameTaken(name, 0) {
 		return store.MTProtoSecret{}, fmt.Errorf("%w: mtproto secret name %q", store.ErrConflict, name)
 	}
-	r.s.mtSecretID++
-	m.ID, m.CreatedAt = r.s.mtSecretID, nowMS()
+	id := r.s.mtSecretID + 1
+	sealed, err := seal(id)
+	if err != nil {
+		return store.MTProtoSecret{}, fmt.Errorf("memtest: seal mtproto secret %d: %w", id, err)
+	}
+	if len(sealed) == 0 {
+		return store.MTProtoSecret{}, fmt.Errorf("%w: seal returned empty secret", store.ErrInvalid)
+	}
+	r.s.mtSecretID = id
+	m.ID, m.CreatedAt, m.SecretEnc = id, nowMS(), sealed
 	m = cloneMT(m)
 	r.s.mtSecrets = append(r.s.mtSecrets, m)
 	r.s.mtSecretsVer++
@@ -122,8 +133,8 @@ func (r mtSecretRepo) Revoke(_ context.Context, id int64, at time.Time) error {
 	return nil
 }
 
-func (r mtSecretRepo) Rotate(_ context.Context, id int64, sealed []byte, prefix string, graceUntil time.Time) (store.MTProtoSecret, error) {
-	if len(sealed) == 0 || prefix == "" {
+func (r mtSecretRepo) Rotate(_ context.Context, id int64, seal store.SealFunc, prefix string, graceUntil time.Time) (store.MTProtoSecret, error) {
+	if seal == nil || prefix == "" {
 		return store.MTProtoSecret{}, fmt.Errorf("%w: mtproto rotate needs sealed key and prefix", store.ErrInvalid)
 	}
 	r.s.mu.Lock()
@@ -137,6 +148,14 @@ func (r mtSecretRepo) Rotate(_ context.Context, id int64, sealed []byte, prefix 
 		return store.MTProtoSecret{}, fmt.Errorf("%w: mtproto secret %d already revoked", store.ErrConflict, id)
 	}
 	now := nowMS()
+	nid := r.s.mtSecretID + 1
+	sealed, err := seal(nid)
+	if err != nil {
+		return store.MTProtoSecret{}, fmt.Errorf("memtest: seal mtproto secret %d: %w", nid, err)
+	}
+	if len(sealed) == 0 {
+		return store.MTProtoSecret{}, fmt.Errorf("%w: seal returned empty secret", store.ErrInvalid)
+	}
 	nm := cloneMT(*old)
 	nm.SecretEnc, nm.Prefix, nm.CreatedAt = slices.Clone(sealed), prefix, now
 	nm.RevokedAt, nm.GraceUntil = nil, nil
@@ -154,8 +173,8 @@ func (r mtSecretRepo) Rotate(_ context.Context, id int64, sealed []byte, prefix 
 	} else {
 		old.GraceUntil, old.Enabled = nil, false
 	}
-	r.s.mtSecretID++
-	nm.ID = r.s.mtSecretID
+	r.s.mtSecretID = nid
+	nm.ID = nid
 	r.s.mtSecrets = append(r.s.mtSecrets, nm)
 	r.s.mtSecretsVer += 2 // update + insert, как триггеры sqlite
 	return cloneMT(nm), nil

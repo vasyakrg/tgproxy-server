@@ -64,8 +64,25 @@ func scanMTSecret(r scanner) (store.MTProtoSecret, error) {
 	return m, nil
 }
 
-func (r mtprotoSecretRepo) Create(ctx context.Context, name string, sealed []byte, prefix string, cidrs []netip.Prefix, maxConns int) (store.MTProtoSecret, error) {
-	m := store.MTProtoSecret{Name: name, SecretEnc: sealed, Prefix: prefix, CIDRs: cidrs, MaxConns: maxConns}
+// sealInto вызывает seal для строки id и записывает результат в secret_enc в рамках tx.
+func sealInto(ctx context.Context, tx *sql.Tx, id int64, seal store.SealFunc) error {
+	sealed, err := seal(id)
+	if err != nil {
+		return fmt.Errorf("sqlite: seal mtproto secret %d: %w", id, err)
+	}
+	if len(sealed) == 0 {
+		return fmt.Errorf("%w: seal returned empty secret", store.ErrInvalid)
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE mtproto_secrets SET secret_enc = ? WHERE id = ?`, sealed, id)
+	return mapErr(err)
+}
+
+func (r mtprotoSecretRepo) Create(ctx context.Context, name string, seal store.SealFunc, prefix string, cidrs []netip.Prefix, maxConns int) (store.MTProtoSecret, error) {
+	if seal == nil {
+		return store.MTProtoSecret{}, fmt.Errorf("%w: mtproto create needs seal", store.ErrInvalid)
+	}
+	// SecretEnc-заглушка только для валидации остальных полей
+	m := store.MTProtoSecret{Name: name, SecretEnc: []byte{0}, Prefix: prefix, CIDRs: cidrs, MaxConns: maxConns}
 	if err := m.Validate(); err != nil {
 		return store.MTProtoSecret{}, err
 	}
@@ -73,9 +90,15 @@ func (r mtprotoSecretRepo) Create(ctx context.Context, name string, sealed []byt
 	if err != nil {
 		return store.MTProtoSecret{}, err
 	}
-	res, err := r.s.w.ExecContext(ctx,
-		`INSERT INTO mtproto_secrets (name, secret_enc, prefix, cidrs, max_conns, enabled, created_at) VALUES (?,?,?,?,?,1,?)`,
-		name, sealed, prefix, enc, maxConns, ms(time.Now()))
+	tx, err := r.s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return store.MTProtoSecret{}, mapErr(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// secret_enc пуст только внутри транзакции: читатели видят снимок после коммита
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO mtproto_secrets (name, secret_enc, prefix, cidrs, max_conns, enabled, created_at) VALUES (?,x'',?,?,?,1,?)`,
+		name, prefix, enc, maxConns, ms(time.Now()))
 	if err != nil {
 		return store.MTProtoSecret{}, mapErr(err)
 	}
@@ -83,8 +106,17 @@ func (r mtprotoSecretRepo) Create(ctx context.Context, name string, sealed []byt
 	if err != nil {
 		return store.MTProtoSecret{}, err
 	}
-	// читаем с writer: только что записанное должно быть видно сразу
-	return scanMTSecret(r.s.w.QueryRowContext(ctx, `SELECT `+mtSecretCols+` FROM mtproto_secrets WHERE id = ?`, id))
+	if err := sealInto(ctx, tx, id, seal); err != nil {
+		return store.MTProtoSecret{}, err
+	}
+	out, err := scanMTSecret(tx.QueryRowContext(ctx, `SELECT `+mtSecretCols+` FROM mtproto_secrets WHERE id = ?`, id))
+	if err != nil {
+		return store.MTProtoSecret{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return store.MTProtoSecret{}, mapErr(err)
+	}
+	return out, nil
 }
 
 func (r mtprotoSecretRepo) Get(ctx context.Context, id int64) (store.MTProtoSecret, error) {
@@ -152,8 +184,8 @@ func (r mtprotoSecretRepo) Revoke(ctx context.Context, id int64, at time.Time) e
 		`UPDATE mtproto_secrets SET revoked_at = ?, enabled = 0, grace_until = NULL WHERE id = ?`, ms(at), id)
 }
 
-func (r mtprotoSecretRepo) Rotate(ctx context.Context, id int64, sealed []byte, prefix string, graceUntil time.Time) (store.MTProtoSecret, error) {
-	if len(sealed) == 0 || prefix == "" {
+func (r mtprotoSecretRepo) Rotate(ctx context.Context, id int64, seal store.SealFunc, prefix string, graceUntil time.Time) (store.MTProtoSecret, error) {
+	if seal == nil || prefix == "" {
 		return store.MTProtoSecret{}, fmt.Errorf("%w: mtproto rotate needs sealed key and prefix", store.ErrInvalid)
 	}
 	tx, err := r.s.w.BeginTx(ctx, nil) // BEGIN IMMEDIATE: чтение старого и запись нового без гонки
@@ -184,13 +216,16 @@ func (r mtprotoSecretRepo) Rotate(ctx context.Context, id int64, sealed []byte, 
 		return store.MTProtoSecret{}, err
 	}
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO mtproto_secrets (name, secret_enc, prefix, cidrs, max_conns, enabled, created_at, rotated_from) VALUES (?,?,?,?,?,?,?,?)`,
-		old.Name, sealed, prefix, enc, old.MaxConns, old.Enabled, ms(now), id)
+		`INSERT INTO mtproto_secrets (name, secret_enc, prefix, cidrs, max_conns, enabled, created_at, rotated_from) VALUES (?,x'',?,?,?,?,?,?)`,
+		old.Name, prefix, enc, old.MaxConns, old.Enabled, ms(now), id)
 	if err != nil {
 		return store.MTProtoSecret{}, mapErr(err)
 	}
 	nid, err := res.LastInsertId()
 	if err != nil {
+		return store.MTProtoSecret{}, err
+	}
+	if err := sealInto(ctx, tx, nid, seal); err != nil {
 		return store.MTProtoSecret{}, err
 	}
 	m, err := scanMTSecret(tx.QueryRowContext(ctx, `SELECT `+mtSecretCols+` FROM mtproto_secrets WHERE id = ?`, nid))

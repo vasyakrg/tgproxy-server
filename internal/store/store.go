@@ -203,11 +203,16 @@ type BanRepo interface {
 	Version(ctx context.Context) (int64, error)
 }
 
+// SealFunc запечатывает секрет под id только что созданной строки (AAD зависит от id).
+type SealFunc func(id int64) ([]byte, error)
+
 // MTProtoSecretRepo — секреты MTProto-прокси. Version растёт на любой insert/update/revoke/rotate
 // (в том числе из другого процесса, например CLI) — для инвалидации кэша. Store не шифрует SecretEnc.
 type MTProtoSecretRepo interface {
-	// Create создаёт включённый секрет; имя уникально (ErrConflict).
-	Create(ctx context.Context, name string, sealed []byte, prefix string, cidrs []netip.Prefix, maxConns int) (MTProtoSecret, error)
+	// Create создаёт включённый секрет; имя уникально (ErrConflict). seal вызывается уже после выделения id
+	// новой строки (внутри той же транзакции) и возвращает запечатанный секрет с AAD "mtproto/<id>".
+	// Ошибка или пустой результат seal откатывают вставку: строка не остаётся, версия не меняется.
+	Create(ctx context.Context, name string, seal SealFunc, prefix string, cidrs []netip.Prefix, maxConns int) (MTProtoSecret, error)
 	Get(ctx context.Context, id int64) (MTProtoSecret, error)
 	// List — все секреты, включая отозванные, по id.
 	List(ctx context.Context) ([]MTProtoSecret, error)
@@ -219,8 +224,9 @@ type MTProtoSecretRepo interface {
 	Revoke(ctx context.Context, id int64, at time.Time) error
 	// Rotate атомарно создаёт новый секрет с тем же именем и настройками (rotated_from=id), а старый
 	// переименовывает в "<имя>~<id>" и помечает отозванным с grace_until. Нулевой graceUntil — старый
-	// перестаёт приниматься сразу. Возвращает новый секрет.
-	Rotate(ctx context.Context, id int64, sealed []byte, prefix string, graceUntil time.Time) (MTProtoSecret, error)
+	// перестаёт приниматься сразу. seal получает id новой строки (контракт как у Create); при его ошибке
+	// ротация откатывается целиком. Возвращает новый секрет.
+	Rotate(ctx context.Context, id int64, seal SealFunc, prefix string, graceUntil time.Time) (MTProtoSecret, error)
 	Version(ctx context.Context) (int64, error)
 }
 

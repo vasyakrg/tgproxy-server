@@ -47,6 +47,10 @@ func (s *Server) setIngressNotAfter(t time.Time) {
 // onIngressEvent передаёт состояние сертификата входа в Evaluator
 // (ingress_cert_invalid / ingress_cert_expiring, с авто-resolve).
 func (s *Server) onIngressEvent(ev tlsin.Event) {
+	if ev.Type == tlsin.EventReloaded && s.mt != nil {
+		// Событие приходит под мьютексом провайдера: Info() вызываем вне него.
+		go s.recheckFronting()
+	}
 	s.reportEvent(context.Background(), ev)
 }
 

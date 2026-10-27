@@ -124,6 +124,9 @@ func (s *Server) initTransport(ctx context.Context, cfg *config.ServerConfig) er
 		s.tr = transport.NewRegistry(map[config.AgentMode]transport.AgentTransport{
 			config.AgentModeDial: transport.NewDial(cert, pool),
 		})
+		if cfg.MTProto.Enabled {
+			s.tr.RegisterStream(config.AgentModeDial, transport.NewDialStream(cert, pool))
+		}
 		return nil
 	}
 	kek, err := pki.LoadKEK(cfg.PKI.KEKFile)
@@ -173,6 +176,17 @@ func (s *Server) initTransport(ctx context.Context, cfg *config.ServerConfig) er
 		config.AgentModeReverse: p.pool,
 		config.AgentModeBoth:    transport.Both{Dial: dial, Reverse: p.pool},
 	})
+	if cfg.MTProto.Enabled {
+		// dial-стримы MTProto идут отдельным пулом TCP; reverse — ErrNotSupported до M11.
+		ds := transport.NewDialStream(tls.Certificate{}, auth.Pool(),
+			transport.WithClientCertFunc(func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { //nolint:contextcheck // колбэк рукопожатия живёт вне запроса
+				return auth.ServerCert(context.Background())
+			}),
+			transport.WithPeerChecks(deny.Check),
+		)
+		s.tr.RegisterStream(config.AgentModeDial, ds)
+		s.tr.RegisterStream(config.AgentModeBoth, transport.Both{DialStream: ds})
+	}
 	return nil
 }
 

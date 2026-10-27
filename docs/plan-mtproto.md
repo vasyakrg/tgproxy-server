@@ -88,7 +88,7 @@
 - [x] **M10-T6 · Probe-клиент и fake-DC** (S-mtproto) · параллельно с M10-T1
   - Файлы: `internal/mtproto/link/link.go` (`Build(host, port, key, domain) (tg, https string)`, `Parse(link) (host, port, key, domain, error)`), `internal/mtproto/probe/client.go` (FakeTLS ClientHello с HMAC → ServerHello → obfuscated2 → `req_pq_multi` → `resPQ`), `internal/mtproto/probe/fakedc.go` (obfuscated2-сервер, отвечает `resPQ`).
   - Тесты первыми: `link.Parse(link.Build(…))` — круговой; ссылка содержит `ee` + 32 hex + hex домена; probe против fake-DC напрямую (без прокси) получает `resPQ` с нашим nonce; неверный секрет → ошибка рукопожатия, а не зависание.
-- [ ] **M10-T7 · Wiring сервера** (S-wire) · зависит от M10-T1…T6
+- [x] **M10-T7 · Wiring сервера** (S-wire) · зависит от M10-T1…T6
   - Файлы: `internal/app/server.go` (`Serve`, ~`:348`: в shared-режиме `proxyLn` оборачивается `mux.Listener` до `srv.ServeTLS`; dedicated — свой `net.Listen` + внутренний `http.Server` с `ingTLS` и заглушкой; fronting-листенер; `Manager` в `runObs`-подобном жизненном цикле; graceful shutdown: стоп Accept → `Manager.Close` с ожиданием до `shutdownTimeout`), `internal/app/mtproto.go` (сборка зависимостей), проверка `fronting_domain` против `tlsin.CertInfo` при старте и на событии перезагрузки сертификата; NTP-проверка (предупреждение + метрика).
   - Тесты первыми: `enabled: false` — листенер прокси ведёт себя байт-в-байт как раньше (регресс Bot API: весь существующий набор `internal/app` зелёный); `fronting_domain` не в SAN → ошибка старта; dedicated listen поднимается и отдаёт TLS-заглушку.
 - [ ] **M10-T8 · Integration in-process** (S-wire) · зависит от M10-T7

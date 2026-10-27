@@ -17,6 +17,12 @@ const (
 // A minimum body length keeps metric names such as tgp_requests_total intact.
 var keyRe = regexp.MustCompile(`(?:tgp|enr)_[A-Za-z0-9]{16,}`)
 
+// fakeTLSRe — FakeTLS/MTProto-секрет: префикс ee + hex-ключ (>=16 байт) + опциональный домен.
+var fakeTLSRe = regexp.MustCompile(`ee[0-9a-fA-F]{32,}`)
+
+// secretParamRe — параметр secret=<...> в tg://proxy, t.me/proxy и произвольных строках.
+var secretParamRe = regexp.MustCompile(`(?i)secret=[^&\s"'<>]*`)
+
 func isSecretChar(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
 }
@@ -75,6 +81,9 @@ func String(s string) string {
 	if s == "" {
 		return s
 	}
+	if strings.Contains(strings.ToLower(s), "secret=") {
+		s = secretParamRe.ReplaceAllString(s, "secret=***")
+	}
 	if spans := findTokens(s); len(spans) > 0 {
 		var b strings.Builder
 		last := 0
@@ -90,6 +99,11 @@ func String(s string) string {
 	if strings.Contains(s, "tgp_") || strings.Contains(s, "enr_") {
 		s = keyRe.ReplaceAllStringFunc(s, func(m string) string {
 			return m[:4+keyKeepLen] + "…"
+		})
+	}
+	if strings.Contains(s, "ee") {
+		s = fakeTLSRe.ReplaceAllStringFunc(s, func(m string) string {
+			return m[:2+keyKeepLen] + "…"
 		})
 	}
 	return s

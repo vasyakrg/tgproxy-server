@@ -56,6 +56,9 @@ type ServerOptions struct {
 	AdminListener net.Listener
 	// MetricsListener — готовый листенер /metrics вместо cfg.Listen.Metrics (тесты).
 	MetricsListener net.Listener
+	// MTProtoListener — готовый листенер dedicated MTProto вместо cfg.MTProto.Listen (тесты);
+	// используется только при mtproto.enabled и listen != shared.
+	MTProtoListener net.Listener
 	// SamplerTicks подменяет 10-секундный тикер сэмплера истории (тесты).
 	SamplerTicks <-chan time.Time
 	// NotifyPoll — период опроса outbox (тесты); 0 — по умолчанию.
@@ -103,6 +106,7 @@ type Server struct {
 	pki        *pkiState                             // nil — статические agent_tls (без reverse и enrollment)
 	rollout    *rollout.Manager                      // nil — раскатка агентов не настроена (rolloutwire.go)
 	rolloutUI  atomic.Pointer[screens.RolloutHandle] // для экрана «Агенты»; выставляется после создания Manager
+	mt         *mtprotoState                         // nil — mtproto.enabled=false (mtproto.go)
 	cur        atomic.Pointer[snapshot]
 	closed     sync.Once
 }
@@ -137,6 +141,10 @@ func NewServer(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logge
 		return nil, err
 	}
 	if err := s.wirePKI(cfg); err != nil {
+		s.Close()
+		return nil, err
+	}
+	if err := s.wireMTProto(cfg); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -349,6 +357,15 @@ func newHTTPServer(h http.Handler, tlsCfg *tls.Config, errLog *slog.Logger) *htt
 // Serve обслуживает листенеры proxy и admin до отмены ctx, затем завершает
 // работу: прекращает приём и ждёт inflight до 30s.
 func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error {
+	var mtrt *mtRuntime
+	if s.mt != nil {
+		var err error
+		if proxyLn, mtrt, err = s.startMTProto(s.cur.Load().cfg, proxyLn); err != nil { //nolint:contextcheck // mux/Manager живут до завершения Serve, не запроса
+			_ = proxyLn.Close()
+			_ = adminLn.Close()
+			return err
+		}
+	}
 	srvs := []*http.Server{
 		newHTTPServer(s.proxyHandler(), s.ingTLS, s.logger),
 		newHTTPServer(s.adminHandler(), s.ingTLS, s.logger),
@@ -357,6 +374,11 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 	if ml := s.opts.MetricsListener; ml != nil && s.obs.metricsHandler != nil {
 		srvs = append(srvs, newHTTPServer(s.obs.metricsHandler, s.ingTLS, s.logger))
 		lns = append(lns, ml)
+	}
+	metricsOn := len(lns) > 2
+	if mtrt != nil && mtrt.extra != nil {
+		srvs = append(srvs, mtrt.extra)
+		lns = append(lns, mtrt.mux)
 	}
 	errc := make(chan error, len(srvs)+1)
 	for i, srv := range srvs {
@@ -390,6 +412,11 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 	regDone := make(chan struct{})
 	events, unsub := s.reg.Subscribe()
 	go s.syncAgentMetrics(ctx, events)
+	var mtWG sync.WaitGroup
+	if mtrt != nil {
+		s.runMTProtoAgents(rctx, &mtWG)
+		mtWG.Go(func() { _ = mtrt.mgr.Run(rctx) })
+	}
 	obsWait := s.runObs(rctx)
 	webWait := s.runWeb(rctx)
 	ingWait := s.runIngress(rctx)
@@ -401,7 +428,7 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 		}
 	}()
 	s.logger.Info("server started", "proxy", proxyLn.Addr().String(), "admin", adminLn.Addr().String(),
-		"metrics", len(lns) > 2, "tls", s.ingTLS != nil, "gateway", gw != nil)
+		"metrics", metricsOn, "mtproto", mtrt != nil, "tls", s.ingTLS != nil, "gateway", gw != nil)
 
 	var first error
 	select {
@@ -414,6 +441,9 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 	s.logger.Info("shutting down", "timeout", shutdownTimeout)
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
+	if mtrt != nil {
+		mtrt.stop(sctx, s.logger)
+	}
 	for _, srv := range srvs {
 		if err := srv.Shutdown(sctx); err != nil {
 			s.logger.Warn("graceful shutdown incomplete, closing", "error", err)
@@ -426,6 +456,7 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 		}
 	}
 	rcancel()
+	mtWG.Wait()
 	<-regDone
 	pkiWait()
 	obsWait()
@@ -476,6 +507,21 @@ func RunServer(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logge
 			return fmt.Errorf("app: listen agent_gateway: %w", lerr)
 		}
 		s.opts.GatewayListener = ln
+	}
+	if cfg.MTProto.Enabled && !cfg.MTProto.Shared() && s.opts.MTProtoListener == nil {
+		ln, lerr := lc.Listen(ctx, "tcp", cfg.MTProto.Listen)
+		if lerr != nil {
+			_ = proxyLn.Close()
+			_ = adminLn.Close()
+			if s.opts.MetricsListener != nil {
+				_ = s.opts.MetricsListener.Close()
+			}
+			if s.opts.GatewayListener != nil {
+				_ = s.opts.GatewayListener.Close()
+			}
+			return fmt.Errorf("app: listen mtproto: %w", lerr)
+		}
+		s.opts.MTProtoListener = ln
 	}
 	return s.Serve(ctx, proxyLn, adminLn)
 }

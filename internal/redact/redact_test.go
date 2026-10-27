@@ -9,6 +9,9 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
 )
 
+// fakeHex — 32 hex-символа фиктивного ключа.
+const fakeHex = "ab12cd34ef56ab12cd34ef56ab12cd34"
+
 const (
 	body  = "AAHdq" + "TcvCH1vGWJxfSeofSAs0K5PALDsaw" // склеено: литерал не должен совпадать с шаблоном токена (secret scanning)
 	tok   = "123456789:" + body
@@ -46,6 +49,11 @@ func TestString(t *testing.T) {
 		{"short digits kept", "1234:" + body, "1234:" + body},
 		{"client key", "/k/tgp_abcdEFGH12345678ijkl/bot", "/k/tgp_abcd…/bot"},
 		{"enroll", "token enr_Zz9Yy8Xx7Ww6Vv5Uu4Tt", "token enr_Zz9Y…"},
+		{"faketls", "secret ee" + fakeHex + "676f6f676c652e636f6d", "secret eeab12…"},
+		{"faketls short kept", "ee" + fakeHex[:30], "ee" + fakeHex[:30]},
+		{"tg proxy url", "tg://proxy?server=1.2.3.4&port=443&secret=ee" + fakeHex + "&x=1", "tg://proxy?server=1.2.3.4&port=443&secret=***&x=1"},
+		{"t.me proxy url", "https://t.me/proxy?server=h&port=443&secret=" + fakeHex, "https://t.me/proxy?server=h&port=443&secret=***"},
+		{"secret upper", "SECRET=" + fakeHex + " end", "secret=*** end"},
 		{"metric name untouched", "tgp_requests_total", "tgp_requests_total"},
 	}
 	for _, tt := range tests {

@@ -67,6 +67,35 @@ func FuzzKeys(f *testing.F) {
 	})
 }
 
+func FuzzMTProtoSecret(f *testing.F) {
+	f.Add("tg://proxy?server=h&port=443&secret=", "ab12cd34ef56ab12cd34ef56ab12cd34", "&x=1")
+	f.Add("key ee", "00112233445566778899aabbccddeeff", "676f6f676c65")
+	f.Fuzz(func(t *testing.T, prefix, hexPart, suffix string) {
+		var b strings.Builder
+		for i := 0; i < len(hexPart); i++ {
+			if c := hexPart[i]; c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' {
+				b.WriteByte(c)
+			}
+		}
+		sec := b.String()
+		if len(sec) < 32 {
+			sec += strings.Repeat("a", 32)
+		}
+		if strings.Contains(prefix, sec) || strings.Contains(suffix, sec) {
+			return
+		}
+		for _, in := range []string{prefix + "ee" + sec + suffix, prefix + "secret=" + sec + suffix} {
+			out := String(in)
+			if strings.Contains(out, sec[:32]) && !strings.Contains(prefix+suffix, sec[:32]) {
+				t.Fatalf("mtproto secret leaked: in=%q out=%q", in, out)
+			}
+			if again := String(out); again != out {
+				t.Fatalf("not idempotent: %q -> %q", out, again)
+			}
+		}
+	})
+}
+
 func itoa(n uint32) string {
 	if n == 0 {
 		return "0"

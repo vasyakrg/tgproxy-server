@@ -43,6 +43,7 @@ func Run(t *testing.T, factory Factory) {
 		{"Rollouts", testRollouts},
 		{"Bans", testBans},
 		{"MTProtoSecrets", testMTProtoSecrets},
+		{"MTProtoSealContract", testMTProtoSealContract},
 		{"MTProtoSessions", testMTProtoSessions},
 		{"DeniedSamples", testDeniedSamples},
 		{"AccessDenials", testAccessDenials},
@@ -1187,6 +1188,74 @@ func testAccessDenials(t *testing.T, s store.Store) {
 	}
 }
 
+func sealOf(b []byte) store.SealFunc {
+	return func(int64) ([]byte, error) { return bytes.Clone(b), nil }
+}
+
+// testMTProtoSealContract: seal получает фактический id; ошибка seal не оставляет строку и не двигает версию.
+func testMTProtoSealContract(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	r := s.MTProtoSecrets()
+	var gotID int64
+	m, err := r.Create(ctx, "sealed", func(id int64) ([]byte, error) {
+		gotID = id
+		return []byte(fmt.Sprintf("aad-mtproto/%d", id)), nil
+	}, "aabbccdd", nil, 0)
+	ok(t, err)
+	if gotID == 0 || gotID != m.ID || string(m.SecretEnc) != fmt.Sprintf("aad-mtproto/%d", m.ID) {
+		t.Fatalf("seal id=%d, row=%+v", gotID, m)
+	}
+
+	boom := errors.New("boom")
+	failing := func(int64) ([]byte, error) { return nil, boom }
+	before, err := r.List(ctx)
+	ok(t, err)
+	vb, _ := r.Version(ctx)
+	if _, err = r.Create(ctx, "bad", failing, "aabbccdd", nil, 0); !errors.Is(err, boom) {
+		t.Fatalf("create err = %v", err)
+	}
+	_, err = r.Create(ctx, "empty", sealOf(nil), "aabbccdd", nil, 0)
+	is(t, err, store.ErrInvalid)
+
+	var rotID int64
+	_, err = r.Rotate(ctx, m.ID, func(id int64) ([]byte, error) { rotID = id; return nil, boom }, "11223344", time.Time{})
+	if !errors.Is(err, boom) || rotID == 0 || rotID == m.ID {
+		t.Fatalf("rotate err = %v, id %d", err, rotID)
+	}
+	after, err := r.List(ctx)
+	ok(t, err)
+	if len(after) != len(before) {
+		t.Fatalf("rows left after failed seal: %d -> %d", len(before), len(after))
+	}
+	if v, _ := r.Version(ctx); v != vb {
+		t.Fatalf("version moved on failed seal: %d -> %d", vb, v)
+	}
+	old, err := r.Get(ctx, m.ID)
+	ok(t, err)
+	if old.RevokedAt != nil || old.Name != "sealed" {
+		t.Fatalf("old changed by failed rotate: %+v", old)
+	}
+	act, _, err := r.ListActive(ctx, time.Now())
+	ok(t, err)
+	for _, a := range act {
+		if len(a.SecretEnc) == 0 {
+			t.Fatalf("active secret with empty secret_enc: %+v", a)
+		}
+	}
+	// id после неудачной попытки не обязан переиспользоваться, но успешная вставка работает
+	if _, err = r.Create(ctx, "bad", sealOf([]byte{1}), "aabbccdd", nil, 0); err != nil {
+		t.Fatalf("create after failed seal: %v", err)
+	}
+
+	// Rotate: seal получает id новой строки
+	var nid int64
+	n, err := r.Rotate(ctx, m.ID, func(id int64) ([]byte, error) { nid = id; return []byte{7}, nil }, "11223344", time.Time{})
+	ok(t, err)
+	if n.ID != nid {
+		t.Fatalf("rotate seal id %d, new row %d", nid, n.ID)
+	}
+}
+
 func testMTProtoSecrets(t *testing.T, s store.Store) {
 	ctx := context.Background()
 	r := s.MTProtoSecrets()
@@ -1197,17 +1266,17 @@ func testMTProtoSecrets(t *testing.T, s store.Store) {
 	is(t, err, store.ErrNotFound)
 	is(t, r.Revoke(ctx, 1, now), store.ErrNotFound)
 
-	_, err = r.Create(ctx, " ", []byte{1}, "aabbccdd", nil, 0)
+	_, err = r.Create(ctx, " ", sealOf([]byte{1}), "aabbccdd", nil, 0)
 	is(t, err, store.ErrInvalid)
-	_, err = r.Create(ctx, "n", nil, "aabbccdd", nil, 0)
+	_, err = r.Create(ctx, "n", sealOf(nil), "aabbccdd", nil, 0)
 	is(t, err, store.ErrInvalid)
-	_, err = r.Create(ctx, "n", []byte{1}, "aabbccdd", nil, -1)
+	_, err = r.Create(ctx, "n", sealOf([]byte{1}), "aabbccdd", nil, -1)
 	is(t, err, store.ErrInvalid)
 
 	// secret_enc хранится как есть, в том числе нулевые байты
 	blob := []byte{0, 1, 2, 0xff, 0, 7}
 	cidr := netip.MustParsePrefix("10.0.0.0/8")
-	a, err := r.Create(ctx, "alpha", blob, "aabbccdd", []netip.Prefix{cidr}, 5)
+	a, err := r.Create(ctx, "alpha", sealOf(blob), "aabbccdd", []netip.Prefix{cidr}, 5)
 	ok(t, err)
 	if a.ID == 0 || !bytes.Equal(a.SecretEnc, blob) || a.Prefix != "aabbccdd" || len(a.CIDRs) != 1 || a.CIDRs[0] != cidr ||
 		a.MaxConns != 5 || !a.Enabled || a.CreatedAt.IsZero() || a.RevokedAt != nil || a.GraceUntil != nil || a.RotatedFrom != nil {
@@ -1225,10 +1294,10 @@ func testMTProtoSecrets(t *testing.T, s store.Store) {
 	}
 
 	// уникальность имени
-	_, err = r.Create(ctx, "alpha", []byte{2}, "11223344", nil, 0)
+	_, err = r.Create(ctx, "alpha", sealOf([]byte{2}), "11223344", nil, 0)
 	is(t, err, store.ErrConflict)
 
-	b, err := r.Create(ctx, "beta", []byte{3}, "55667788", nil, 0)
+	b, err := r.Create(ctx, "beta", sealOf([]byte{3}), "55667788", nil, 0)
 	ok(t, err)
 	if len(b.CIDRs) != 0 {
 		t.Fatalf("beta cidrs = %v", b.CIDRs)
@@ -1300,7 +1369,7 @@ func testMTProtoSecrets(t *testing.T, s store.Store) {
 	// Rotate с grace: старый ещё активен до grace_until, потом нет; новый наследует имя и настройки
 	vrot, _ := r.Version(ctx)
 	grace := now.Add(time.Hour)
-	n, err := r.Rotate(ctx, a.ID, []byte{9, 9}, "99887766", grace)
+	n, err := r.Rotate(ctx, a.ID, sealOf([]byte{9, 9}), "99887766", grace)
 	ok(t, err)
 	if n.Name != "alpha2" || n.RotatedFrom == nil || *n.RotatedFrom != a.ID || n.MaxConns != 9 || !n.Enabled ||
 		!bytes.Equal(n.SecretEnc, []byte{9, 9}) || n.Prefix != "99887766" || n.RevokedAt != nil {
@@ -1325,13 +1394,13 @@ func testMTProtoSecrets(t *testing.T, s store.Store) {
 		t.Fatalf("active after grace = %+v", act)
 	}
 	// повторная ротация отозванного секрета — конфликт
-	_, err = r.Rotate(ctx, a.ID, []byte{1}, "p", time.Time{})
+	_, err = r.Rotate(ctx, a.ID, sealOf([]byte{1}), "p", time.Time{})
 	is(t, err, store.ErrConflict)
-	_, err = r.Rotate(ctx, 999, []byte{1}, "p", time.Time{})
+	_, err = r.Rotate(ctx, 999, sealOf([]byte{1}), "p", time.Time{})
 	is(t, err, store.ErrNotFound)
 
 	// Rotate без grace: старый сразу неактивен
-	n2, err := r.Rotate(ctx, n.ID, []byte{8}, "44332211", time.Time{})
+	n2, err := r.Rotate(ctx, n.ID, sealOf([]byte{8}), "44332211", time.Time{})
 	ok(t, err)
 	act, _, err = r.ListActive(ctx, now)
 	ok(t, err)

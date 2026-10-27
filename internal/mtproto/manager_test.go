@@ -259,7 +259,7 @@ func (e *env) addSecret(name string) (store.MTProtoSecret, [16]byte) {
 	if _, err := rand.Read(key[:]); err != nil {
 		e.t.Fatal(err)
 	}
-	s, err := e.repo.Create(context.Background(), name, key[:], hex.EncodeToString(key[:4]), nil, 0)
+	s, err := e.repo.Create(context.Background(), name, fixedSeal(key[:]), hex.EncodeToString(key[:4]), nil, 0)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestManager_GraceUntilKeepsOldSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	grace := e.clk.Now().Add(time.Minute)
-	if _, err := e.repo.Rotate(context.Background(), old.ID, newKey[:], "aabbccdd", grace); err != nil {
+	if _, err := e.repo.Rotate(context.Background(), old.ID, fixedSeal(newKey[:]), "aabbccdd", grace); err != nil {
 		t.Fatal(err)
 	}
 	r := e.waitKeys(2)
@@ -612,7 +612,7 @@ func TestManager_ObserverGetsSecretID(t *testing.T) {
 
 func TestManager_OpenFailureSkipsOnlyThatSecret(t *testing.T) {
 	e, buf := newEnv(t)
-	if _, err := e.repo.Create(context.Background(), "broken", []byte{1, 2, 3}, "01020304", nil, 0); err != nil {
+	if _, err := e.repo.Create(context.Background(), "broken", fixedSeal([]byte{1, 2, 3}), "01020304", nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	_, good := e.addSecret("good")
@@ -754,4 +754,8 @@ func TestEventSink_ReplayWithoutStartIsIgnored(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("OnReplay вызван %d раз, ждали 1", calls.Load())
 	}
+}
+
+func fixedSeal(b []byte) store.SealFunc {
+	return func(int64) ([]byte, error) { return slices.Clone(b), nil }
 }
