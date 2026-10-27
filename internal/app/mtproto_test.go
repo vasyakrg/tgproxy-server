@@ -8,11 +8,14 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/config"
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
+	"github.com/vasyakrg/tgproxy-server/internal/server/notify"
 )
 
 func TestSanMatches(t *testing.T) {
@@ -157,4 +160,54 @@ func TestMTProtoDedicatedServesTLSStub(t *testing.T) {
 	if cn, _ := tlsGet(t, proxy); cn != "ing.test" {
 		t.Fatalf("proxy cn = %q", cn)
 	}
+}
+
+type fakeAlerter struct {
+	mu    sync.Mutex
+	fired []notify.Alert
+}
+
+func (f *fakeAlerter) Fire(_ context.Context, a notify.Alert) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fired = append(f.fired, a)
+	return nil
+}
+func (f *fakeAlerter) Resolve(context.Context, string) error { return nil }
+func (f *fakeAlerter) Flush(context.Context) error           { return nil }
+
+func (f *fakeAlerter) types() []notify.AlertType {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]notify.AlertType, 0, len(f.fired))
+	for _, a := range f.fired {
+		out = append(out, a.Type)
+	}
+	return out
+}
+
+// MTProto включён, capable-агентов нет → observeMTProto поднимает mtproto_no_capable_agents.
+func TestObserveMTProtoNoCapableAgents(t *testing.T) {
+	cfg := mtprotoServerConfig(t, "ing.test", config.MTProtoListenShared)
+	s, err := NewServer(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	al := &fakeAlerter{}
+	s.obs.eval = notify.NewEvaluator(notify.EvalOptions{Registry: s.reg, Alerter: al})
+	s.observeMTProto(context.Background())
+	if got := al.types(); !slices.Equal(got, []notify.AlertType{notify.MTProtoNoCapableAgents}) {
+		t.Fatalf("alerts = %v", got)
+	}
+}
+
+func TestObserveMTProtoWithoutNotifyIsNoop(t *testing.T) {
+	cfg := mtprotoServerConfig(t, "ing.test", config.MTProtoListenShared)
+	s, err := NewServer(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.observeMTProto(context.Background()) // eval == nil: не паникует
 }

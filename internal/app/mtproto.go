@@ -23,6 +23,7 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/server/access"
 	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
 	"github.com/vasyakrg/tgproxy-server/internal/server/balancer"
+	"github.com/vasyakrg/tgproxy-server/internal/server/notify"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
 
@@ -218,6 +219,36 @@ func (s *Server) syncMTProtoAgents() {
 	s.syncMTProtoDCMetrics(list)
 }
 
+// mtprotoSnapshot собирает снимок для алертов: только capable-агенты (up и с capability).
+func mtprotoSnapshot(list []agents.State, active int64, maxConns int) notify.MTProtoSnapshot {
+	snap := notify.MTProtoSnapshot{Enabled: true, ActiveConns: int(active), MaxConns: maxConns}
+	for _, st := range list {
+		capable, dc := st.MTProtoView()
+		if !capable || !st.Up {
+			continue
+		}
+		a := notify.MTProtoAgent{ID: st.Agent.ID, DCUp: make(map[int]bool, len(dc))}
+		for n, d := range dc {
+			a.DCUp[n] = d.Up
+		}
+		snap.Agents = append(snap.Agents, a)
+	}
+	return snap
+}
+
+// observeMTProto передаёт состояние MTProto правилам алертов (dc_unreachable,
+// no_capable_agents, overload). Без уведомлений (eval == nil) — no-op.
+func (s *Server) observeMTProto(ctx context.Context) {
+	if s.mt == nil || s.obs == nil || s.obs.eval == nil {
+		return
+	}
+	var maxConns int
+	if snap := s.cur.Load(); snap != nil {
+		maxConns = snap.cfg.MTProto.MaxConns
+	}
+	s.obs.eval.ObserveMTProto(ctx, mtprotoSnapshot(s.reg.List(), s.mt.journal.ActiveConns(), maxConns))
+}
+
 // syncMTProtoDCMetrics зеркалит состояние DC из статусов агентов в dc_up / dc_rtt_seconds.
 func (s *Server) syncMTProtoDCMetrics(list []agents.State) {
 	for _, st := range list {
@@ -309,6 +340,7 @@ func (s *Server) runMTProtoAgents(ctx context.Context, wg *sync.WaitGroup) {
 				}
 			case <-t.C:
 				s.syncMTProtoAgents()
+				s.observeMTProto(ctx)
 			}
 		}
 	})

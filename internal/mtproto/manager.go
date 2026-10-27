@@ -76,6 +76,69 @@ type instance struct {
 	cidrs []netip.Prefix
 	max   int
 	proxy *mtglib.Proxy
+	// conns разделяется копиями инстанса (смена лимитов без рестарта mtg).
+	conns *connSet
+}
+
+// drainTimeout — сколько retire ждёт выхода обработчиков после закрытия соединений.
+const drainTimeout = 5 * time.Second
+
+// connSet учитывает активные соединения инстанса. mtg.Proxy.Shutdown отменяет
+// контекст всех потоков, и это гоняется с ServeConn (запись streamContext.clientConn
+// при рукопожатии против чтения в Close из context.AfterFunc), поэтому на Shutdown
+// не полагаемся: перед ним соединения закрываются нами, а Shutdown вызывается
+// лишь когда ни одного ServeConn не осталось.
+type connSet struct {
+	mu      sync.Mutex
+	retired bool
+	conns   map[net.Conn]struct{}
+	wg      sync.WaitGroup
+}
+
+func newConnSet() *connSet { return &connSet{conns: make(map[net.Conn]struct{})} }
+
+// enter регистрирует соединение; false — инстанс уже выводится из работы.
+func (c *connSet) enter(conn net.Conn) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.retired {
+		return false
+	}
+	c.conns[conn] = struct{}{}
+	c.wg.Add(1)
+	return true
+}
+
+func (c *connSet) leave(conn net.Conn) {
+	c.mu.Lock()
+	delete(c.conns, conn)
+	c.mu.Unlock()
+	c.wg.Done()
+}
+
+// drain запрещает новые соединения, закрывает активные и ждёт выхода Serve не дольше timeout.
+// Возвращает false, если не дождались.
+func (c *connSet) drain(timeout time.Duration) bool {
+	c.mu.Lock()
+	c.retired = true
+	open := make([]net.Conn, 0, len(c.conns))
+	for conn := range c.conns {
+		open = append(open, conn)
+	}
+	c.mu.Unlock()
+	for _, conn := range open {
+		_ = conn.Close()
+	}
+	done := make(chan struct{})
+	go func() { c.wg.Wait(); close(done) }()
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
 }
 
 type snapshot struct {
@@ -265,11 +328,15 @@ func (m *Manager) Reload(ctx context.Context) error {
 	return nil
 }
 
-// retire останавливает инстанс асинхронно: Shutdown ждёт выхода всех ServeConn.
+// retire останавливает инстанс асинхронно: сначала закрывает его соединения и
+// ждёт выхода обработчиков, затем Shutdown (см. connSet).
 func (m *Manager) retire(inst *instance) {
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
+		if !inst.conns.drain(drainTimeout) {
+			m.logger.Warn("обработчики MTProto не завершились вовремя", "secret_id", inst.id)
+		}
 		inst.proxy.Shutdown()
 		m.logger.Info("секрет MTProto остановлен", "secret_id", inst.id)
 	}()
@@ -285,7 +352,7 @@ func (m *Manager) newInstance(s store.MTProtoSecret) (*instance, error) {
 	}
 	inst := &instance{
 		id: s.ID, enc: bytes.Clone(s.SecretEnc),
-		cidrs: slices.Clone(s.CIDRs), max: s.MaxConns,
+		cidrs: slices.Clone(s.CIDRs), max: s.MaxConns, conns: newConnSet(),
 	}
 	copy(inst.key[:], raw)
 	clear(raw)
@@ -370,5 +437,11 @@ func (s *snapshot) Serve(idx int, conn net.Conn) {
 	if !ok {
 		ec = essentials.WrapNetConn(conn)
 	}
-	s.insts[idx].proxy.ServeConn(ec)
+	in := s.insts[idx]
+	if !in.conns.enter(conn) {
+		_ = conn.Close() // секрет отозван между выбором снимка и Serve
+		return
+	}
+	defer in.conns.leave(conn)
+	in.proxy.ServeConn(ec)
 }

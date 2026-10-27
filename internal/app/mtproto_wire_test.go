@@ -209,11 +209,7 @@ func checkConnLimit(t *testing.T, m *mtEnv, key [16]byte) {
 		_ = c.Close()
 		return false
 	})
-	defer func() {
-		_ = hold.Close()
-		// mtg гонится при Shutdown во время рукопожатия: дожидаемся завершения всех сессий.
-		m.waitFor(10*time.Second, "сессии MTProto завершены", func() bool { return m.srv.mt.journal.ActiveConns() == 0 })
-	}()
+	defer func() { _ = hold.Close() }()
 	m.waitFor(10*time.Second, "conn_limit в метриках", func() bool {
 		c, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(context.Background(), "tcp", m.mtAddr)
 		if err == nil {
