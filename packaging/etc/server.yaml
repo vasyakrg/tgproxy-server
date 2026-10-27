@@ -95,6 +95,32 @@ ban:
 geoip:
   file: /usr/share/tgproxy/geoip/dbip-country-lite.mmdb
 
+# MTProto-прокси для клиентов Telegram (FakeTLS, beta; docs/mtproto.md). По умолчанию выключен.
+# Включение: раскомментируйте блок, задайте fronting_domain и перезапустите сервер
+# (enabled, listen и fronting_domain применяются только при старте; остальное — по SIGHUP).
+# Требует pki.kek_file (секреты шифруются KEK) и tls.mode files|acme при listen: shared.
+# На время работы нужны точные часы (NTP/chrony): расхождение больше time_skew ломает рукопожатие.
+# Рекомендуется отдельный IP/порт (listen: host:port) — MTProto на общем :443 с Bot API заметнее для DPI.
+# mtproto:
+#   enabled: false
+#   listen: shared                # shared — листенер listen.proxy | host:port — выделенный
+#   # public_host: tg.example.com # хост в ссылке; пусто — хост server.public_base_url
+#   # public_port: 0              # порт в ссылке; 0 — порт листенера
+#   fronting_domain: ""           # обязателен при enabled: домен ВХОДНОГО сертификата (tls.*)
+#   max_conns: 20000
+#   max_conns_per_ip: 64
+#   max_pending_handshakes: 1024
+#   handshake_timeout: 5s
+#   idle_timeout: 5m
+#   time_skew: 2m                 # допустимое расхождение часов клиента (30s..10m)
+#   replay_cache: 4MiB            # анти-replay (1MiB..256MiB)
+#   dc_probe_interval: 30s        # период TCP-проб DC на агентах (передаётся агентам)
+#   agent_pool:
+#     reverse_conns: 2            # желаемый размер пула MTProto-соединений reverse-агента
+#     max_reverse_conns: 16       # потолок; согласуйте с agent.mtproto.reverse_conns_max
+#     max_streams_per_conn: 500
+#     dial_timeout: 5s
+
 # Алерты в Telegram (опционально): файл с токеном бота-уведомителя, 0640 root:tgproxy.
 # notify:
 #   bot_token_file: /etc/tgproxy/notify-token

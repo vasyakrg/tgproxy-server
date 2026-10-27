@@ -157,7 +157,7 @@
 
 ## M13 — Поставка, документация, Validation · объём **M**
 
-- [ ] **M13-T1 · Пакет** (S-pkg)
+- [x] **M13-T1 · Пакет** (S-pkg)
   - Файлы: `packaging/systemd/tgproxy-server.service:17` (`LimitNOFILE=1048576`), `tgproxy-agent.service:17` (`262144`), `packaging/etc/server.yaml`/`agent.yaml` (закомментированный блок `mtproto:`), `NOTICE` в пакете.
   - Приёмка: `systemd-analyze security` не хуже 2.0; deb-smoke зелёный.
 - [ ] **M13-T2 · Smoke и деплой** (S-pkg)

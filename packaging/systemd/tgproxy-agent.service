@@ -14,7 +14,7 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=40s
-LimitNOFILE=65536
+LimitNOFILE=262144
 
 # Каталоги: /var/lib/tgproxy (tgproxy:tgproxy 0750), /etc/tgproxy — read-only.
 StateDirectory=tgproxy

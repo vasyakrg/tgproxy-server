@@ -101,6 +101,10 @@ nfpms:
       - src: build/geoip/dbip-country-lite.mmdb
         dst: /usr/share/tgproxy/geoip/dbip-country-lite.mmdb
         file_info: {mode: 0644}
+      # Лицензии сторонних компонентов (mtg и др.)
+      - src: NOTICE
+        dst: /usr/share/doc/tgproxy/NOTICE
+        file_info: {mode: 0644}
       # Данные
       - dst: /var/lib/tgproxy
         type: dir

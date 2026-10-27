@@ -20,6 +20,19 @@ allowed_client_san: tgproxy-server
 
 data_dir: /var/lib/tgproxy/agent
 
+# Релей MTProto: агент пробрасывает клиентские потоки к DC Telegram (исходящий TCP 443 к сетям Telegram
+# должен быть открыт). Адреса DC зашиты в бинарь. Сервер управляет пулом и dc_probe_interval сам.
+mtproto:
+  enabled: true
+  max_streams: 10000
+  dial_timeout: 5s
+  idle_timeout: 5m
+  max_duration: 24h
+  ipv6: false
+  reverse_conns_min: 2            # границы пула соединений для mode=reverse|both
+  reverse_conns_max: 16
+  dc_probe_interval: 30s
+
 logging:
   level: info
   format: json
