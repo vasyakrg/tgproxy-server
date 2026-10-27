@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
@@ -275,5 +276,84 @@ func TestMigration0007AgentSSHTarget(t *testing.T) {
 		if h.String != w.host || int(pt.Int64) != w.port {
 			t.Errorf("%s: ssh target = %q:%d, want %q:%d", id, h.String, pt.Int64, w.host, w.port)
 		}
+	}
+}
+
+// Миграция 0009: up поверх прод-схемы 0008 сохраняет данные, down возвращает схему.
+func TestMigration0009MTProto(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db := rawDB(t, path)
+	ctx := context.Background()
+	p, err := goose.NewProvider(goose.DialectSQLite3, db, os.DirFS("migrations"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.UpTo(ctx, 8); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO agents (id,name,url,mode,created_at,updated_at) VALUES ('a1','a1','https://x','dial',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `SELECT 1 FROM mtproto_secrets`); err == nil {
+		t.Fatal("mtproto_secrets exists before 0009")
+	}
+	if _, err := p.UpTo(ctx, 9); err != nil {
+		t.Fatal(err)
+	}
+	var v int64
+	if err := db.QueryRowContext(ctx, `SELECT v FROM versions WHERE name='mtproto_secrets'`).Scan(&v); err != nil || v != 1 {
+		t.Fatalf("initial version = %d, %v", v, err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO mtproto_secrets (name,secret_enc,prefix,created_at) VALUES ('s',x'00ff','aabbccdd',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE mtproto_secrets SET max_conns = 3`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT v FROM versions WHERE name='mtproto_secrets'`).Scan(&v); err != nil || v != 3 {
+		t.Fatalf("version after insert+update = %d, %v", v, err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO mtproto_secrets (name,secret_enc,prefix,created_at) VALUES ('s',x'00','p',1)`); err == nil {
+		t.Fatal("duplicate name accepted")
+	}
+	if _, err := p.DownTo(ctx, 8); err != nil {
+		t.Fatal(err)
+	}
+	for _, tbl := range []string{"mtproto_secrets", "mtproto_sessions"} {
+		if _, err := db.ExecContext(ctx, `SELECT 1 FROM `+tbl); err == nil {
+			t.Errorf("%s survived down", tbl)
+		}
+	}
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM versions WHERE name='mtproto_secrets'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("version row after down: %d %v", n, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agents`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("agents lost: %d %v", n, err)
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatalf("re-up: %v", err)
+	}
+}
+
+// Пачка из 10k сессий пишется одной транзакцией быстрее 200 мс.
+func TestMTProtoSessionsBatch10k(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "tgproxy.db"))
+	ctx := context.Background()
+	now := time.Now()
+	batch := make([]store.MTProtoSession, 10000)
+	for i := range batch {
+		batch[i] = store.MTProtoSession{StartedAt: now, EndedAt: now, ClientIP: "203.0.113.1", SecretID: 1, DC: 2, AgentID: "a1", BytesIn: 1, BytesOut: 2, CloseReason: "eof"}
+	}
+	start := time.Now()
+	if err := s.MTProtoSessions().InsertBatch(ctx, batch); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 200*time.Millisecond*raceSlowdown {
+		t.Fatalf("batch 10k took %v, want < 200ms (x%d under -race)", d, raceSlowdown)
+	}
+	got, err := s.MTProtoSessions().List(ctx, store.MTProtoSessionQuery{Limit: 20000})
+	if err != nil || len(got) != 10000 {
+		t.Fatalf("stored %d, err %v", len(got), err)
 	}
 }

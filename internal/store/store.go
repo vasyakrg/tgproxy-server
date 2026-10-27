@@ -27,6 +27,8 @@ type Store interface {
 	Settings() SettingsRepo
 	Rollouts() RolloutRepo
 	Bans() BanRepo
+	MTProtoSecrets() MTProtoSecretRepo
+	MTProtoSessions() MTProtoSessionRepo
 	Close() error
 }
 
@@ -199,4 +201,35 @@ type BanRepo interface {
 	// Prune удаляет истёкшие баны, по которым не было активности с before.
 	Prune(ctx context.Context, before time.Time) (int, error)
 	Version(ctx context.Context) (int64, error)
+}
+
+// MTProtoSecretRepo — секреты MTProto-прокси. Version растёт на любой insert/update/revoke/rotate
+// (в том числе из другого процесса, например CLI) — для инвалидации кэша. Store не шифрует SecretEnc.
+type MTProtoSecretRepo interface {
+	// Create создаёт включённый секрет; имя уникально (ErrConflict).
+	Create(ctx context.Context, name string, sealed []byte, prefix string, cidrs []netip.Prefix, maxConns int) (MTProtoSecret, error)
+	Get(ctx context.Context, id int64) (MTProtoSecret, error)
+	// List — все секреты, включая отозванные, по id.
+	List(ctx context.Context) ([]MTProtoSecret, error)
+	// ListActive — секреты, принимаемые на now (см. MTProtoSecret.Active), и версию, согласованную со снимком.
+	ListActive(ctx context.Context, now time.Time) ([]MTProtoSecret, int64, error)
+	// Update меняет Name, CIDRs, MaxConns и Enabled; ключ и жизненный цикл не трогает.
+	Update(ctx context.Context, s MTProtoSecret) (MTProtoSecret, error)
+	// Revoke отзывает секрет немедленно: revoked_at=at, enabled=false, grace_until сбрасывается.
+	Revoke(ctx context.Context, id int64, at time.Time) error
+	// Rotate атомарно создаёт новый секрет с тем же именем и настройками (rotated_from=id), а старый
+	// переименовывает в "<имя>~<id>" и помечает отозванным с grace_until. Нулевой graceUntil — старый
+	// перестаёт приниматься сразу. Возвращает новый секрет.
+	Rotate(ctx context.Context, id int64, sealed []byte, prefix string, graceUntil time.Time) (MTProtoSecret, error)
+	Version(ctx context.Context) (int64, error)
+}
+
+// MTProtoSessionRepo — журнал соединений MTProto. Пишется батчами (горячий путь в БД не пишет).
+type MTProtoSessionRepo interface {
+	// InsertBatch записывает пачку атомарно.
+	InsertBatch(ctx context.Context, batch []MTProtoSession) error
+	// List — записи от новых к старым с фильтрами.
+	List(ctx context.Context, q MTProtoSessionQuery) ([]MTProtoSession, error)
+	// Prune удаляет записи, завершённые раньше before; возвращает число удалённых.
+	Prune(ctx context.Context, before time.Time) (int, error)
 }

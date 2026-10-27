@@ -88,6 +88,7 @@ type ServerConfig struct {
 	Notify        NotifyConfig    `yaml:"notify"`
 	Ban           BanConfig       `yaml:"ban"`
 	GeoIP         GeoIPConfig     `yaml:"geoip"`
+	MTProto       MTProtoConfig   `yaml:"mtproto"`
 	Metrics       MetricsConfig   `yaml:"metrics"`
 	Logging       LoggingConfig   `yaml:"logging"`
 }
@@ -293,17 +294,20 @@ type LoggingConfig struct {
 // неэкспортируемое. Подмена возможна только через OverrideTelegramAPIURL
 // (тесты и скрытый флаг wiring-слоя).
 type AgentConfig struct {
-	Listen           AgentListen   `yaml:"listen"`
-	Mode             AgentMode     `yaml:"mode"`
-	ServerURL        string        `yaml:"server_url"` // https://host:8444, для mode=reverse
-	TLS              TLSFiles      `yaml:"tls"`
-	AllowedClientSAN string        `yaml:"allowed_client_san"`
-	DataDir          string        `yaml:"data_dir"`
-	Metrics          MetricsConfig `yaml:"metrics"`
-	Logging          LoggingConfig `yaml:"logging"`
+	Listen           AgentListen        `yaml:"listen"`
+	Mode             AgentMode          `yaml:"mode"`
+	ServerURL        string             `yaml:"server_url"` // https://host:8444, для mode=reverse
+	TLS              TLSFiles           `yaml:"tls"`
+	AllowedClientSAN string             `yaml:"allowed_client_san"`
+	DataDir          string             `yaml:"data_dir"`
+	MTProto          AgentMTProtoConfig `yaml:"mtproto"`
+	Metrics          MetricsConfig      `yaml:"metrics"`
+	Logging          LoggingConfig      `yaml:"logging"`
 
 	telegramAPIURL string
-	path           string // файл, из которого загружен конфиг (пусто — не из файла)
+	// mtprotoDCs — тест-оверрайд таблицы DC (OverrideMTProtoDCs); в YAML/env не задаётся.
+	mtprotoDCs map[int][]netip.AddrPort
+	path       string // файл, из которого загружен конфиг (пусто — не из файла)
 }
 
 // AgentListen — адреса листенеров агента.

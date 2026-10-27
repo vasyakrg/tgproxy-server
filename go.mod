@@ -6,12 +6,14 @@ toolchain go1.27.3
 
 require (
 	aead.dev/minisign v0.3.0
+	github.com/9seconds/mtg/v2 v2.2.8
 	github.com/a-h/templ v0.3.1100
 	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/maxmind/mmdbwriter v1.2.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/oschwald/maxminddb-golang/v2 v2.8.0
+	github.com/pires/go-proxyproto v0.11.0
 	github.com/pkg/sftp v1.13.9
 	github.com/pquerna/otp v1.5.0
 	github.com/pressly/goose/v3 v3.29.0
@@ -29,6 +31,7 @@ require (
 )
 
 require (
+	github.com/OneOfOne/xxhash v1.2.8 // indirect
 	github.com/a-h/parse v0.0.0-20250122154542-74294addb73e // indirect
 	github.com/andybalholm/brotli v1.2.7 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -50,6 +53,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/natefinch/atomic v1.0.1 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
+	github.com/panjf2000/ants/v2 v2.12.0 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect
 	github.com/prometheus/common v0.72.0 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
@@ -57,6 +61,8 @@ require (
 	github.com/rs/dnscache v0.0.0-20230804202142-fc85eb664529 // indirect
 	github.com/sethvargo/go-retry v0.5.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/tylertreat/BoomFilters v0.0.0-20251117164519-53813c36cc1b // indirect
+	github.com/yl2chen/cidranger v1.0.2 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect

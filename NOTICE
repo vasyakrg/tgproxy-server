@@ -1,0 +1,33 @@
+tgproxy-server — уведомления о стороннем ПО (MTProto-прокси, docs/mtproto.md)
+
+Компоненты ниже входят в бинарь сервера. Полные тексты лицензий лежат в
+исходниках модулей (файл LICENSE) и должны сопровождать распространяемые копии.
+
+1. github.com/9seconds/mtg/v2 v2.2.8 — MIT License
+   Copyright (c) 2018 Sergey Arkhipov
+   https://github.com/9seconds/mtg
+   Используются пакеты mtglib, antireplay, ipblocklist, events, essentials.
+   Если логика FakeTLS/obfuscated2 будет перенесена в собственный код
+   (docs/mtproto.md §15), эта атрибуция сохраняется.
+
+2. github.com/panjf2000/ants/v2 v2.12.0 — MIT License
+   Copyright (c) 2018 Andy Pan
+   https://github.com/panjf2000/ants
+
+3. github.com/yl2chen/cidranger v1.0.2 — MIT License
+   Copyright (c) 2017 Yulin
+   https://github.com/yl2chen/cidranger
+
+4. github.com/pires/go-proxyproto v0.11.0 — Apache License 2.0
+   Copyright 2016 Paulo Pires
+   https://github.com/pires/go-proxyproto
+
+5. github.com/OneOfOne/xxhash v1.2.8 — Apache License 2.0
+   https://github.com/OneOfOne/xxhash
+
+6. github.com/tylertreat/BoomFilters (v0.0.0-20251117164519-53813c36cc1b) — Apache License 2.0
+   https://github.com/tylertreat/BoomFilters
+
+Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0
+MIT License: https://opensource.org/license/mit
+Файлов NOTICE у Apache-компонентов (пп. 4-6) в исходниках нет.

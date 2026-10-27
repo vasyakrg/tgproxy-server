@@ -280,3 +280,55 @@ type Ban struct {
 
 // Active сообщает, что бан действует в момент now.
 func (b Ban) Active(now time.Time) bool { return b.ExpiresAt == nil || b.ExpiresAt.After(now) }
+
+// MTProtoSecret — клиентский секрет MTProto-прокси. SecretEnc — непрозрачные байты: store их
+// не шифрует и не интерпретирует (шифрует сервисный слой, KEK с aad "mtproto/<id>").
+type MTProtoSecret struct {
+	ID          int64
+	Name        string
+	SecretEnc   []byte
+	Prefix      string // первые 4 байта ключа в hex — для UI/логов
+	CIDRs       []netip.Prefix
+	MaxConns    int // 0 — без лимита
+	Enabled     bool
+	CreatedAt   time.Time
+	RevokedAt   *time.Time
+	GraceUntil  *time.Time // до этого момента ротированный/отозванный секрет ещё принимается
+	RotatedFrom *int64     // id секрета, который этот заменил
+}
+
+// Active сообщает, что секрет принимается в момент now: включён, не отозван (либо отозван,
+// но grace_until ещё не истёк) и grace_until не истёк.
+func (s MTProtoSecret) Active(now time.Time) bool {
+	if !s.Enabled {
+		return false
+	}
+	if s.GraceUntil != nil && !s.GraceUntil.After(now) {
+		return false
+	}
+	return s.RevokedAt == nil || s.GraceUntil != nil
+}
+
+// MTProtoSession — запись журнала соединения MTProto.
+type MTProtoSession struct {
+	ID          int64
+	StartedAt   time.Time
+	EndedAt     time.Time
+	ClientIP    string
+	SecretID    int64
+	DC          int
+	AgentID     string
+	BytesIn     int64
+	BytesOut    int64
+	CloseReason string
+}
+
+// MTProtoSessionQuery — фильтры журнала; выдача от новых к старым, курсор BeforeID.
+type MTProtoSessionQuery struct {
+	BeforeID int64
+	SecretID int64
+	AgentID  string
+	ClientIP string
+	DC       int
+	Limit    int // 0 — 100
+}

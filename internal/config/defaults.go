@@ -65,7 +65,23 @@ func DefaultServer() *ServerConfig {
 			ResetAfter: 30 * 24 * time.Hour,
 			MaxTracked: 10000,
 		},
-		GeoIP:   GeoIPConfig{File: "/usr/share/tgproxy/geoip/dbip-country-lite.mmdb"},
+		GeoIP: GeoIPConfig{File: "/usr/share/tgproxy/geoip/dbip-country-lite.mmdb"},
+		MTProto: MTProtoConfig{
+			Listen:               MTProtoListenShared,
+			MaxConns:             20000,
+			MaxConnsPerIP:        64,
+			MaxPendingHandshakes: 1024,
+			HandshakeTimeout:     5 * time.Second,
+			IdleTimeout:          5 * time.Minute,
+			TimeSkew:             2 * time.Minute,
+			ReplayCache:          4 << 20,
+			DCProbeInterval:      30 * time.Second,
+			AgentPool: MTProtoAgentPool{
+				ReverseConns:      2,
+				MaxStreamsPerConn: 500,
+				DialTimeout:       5 * time.Second,
+			},
+		},
 		Logging: LoggingConfig{Level: "info", Format: "json"},
 	}
 }
@@ -85,8 +101,15 @@ func DefaultAgent() *AgentConfig {
 		Mode:             AgentModeDial,
 		AllowedClientSAN: "tgproxy-server",
 		DataDir:          "/var/lib/tgproxy",
-		Logging:          LoggingConfig{Level: "info", Format: "json"},
-		telegramAPIURL:   DefaultTelegramAPIURL,
+		MTProto: AgentMTProtoConfig{
+			Enabled:     true,
+			MaxStreams:  10000,
+			DialTimeout: 5 * time.Second,
+			IdleTimeout: 5 * time.Minute,
+			MaxDuration: 24 * time.Hour,
+		},
+		Logging:        LoggingConfig{Level: "info", Format: "json"},
+		telegramAPIURL: DefaultTelegramAPIURL,
 	}
 }
 

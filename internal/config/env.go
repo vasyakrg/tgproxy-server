@@ -81,6 +81,12 @@ func setScalar(v reflect.Value, raw string) error {
 			return err
 		}
 		v.SetInt(int64(d))
+	case t == byteSizeType:
+		b, err := ParseByteSize(raw)
+		if err != nil {
+			return err
+		}
+		v.SetInt(int64(b))
 	case t == prefixType:
 		p, err := netip.ParsePrefix(raw)
 		if err != nil {

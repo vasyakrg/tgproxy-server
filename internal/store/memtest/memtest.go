@@ -59,6 +59,12 @@ type Store struct {
 	bans    []store.Ban
 	banID   int64
 	bansVer int64
+
+	mtSecrets    []store.MTProtoSecret
+	mtSecretID   int64
+	mtSecretsVer int64
+	mtSessions   []store.MTProtoSession
+	mtSessionID  int64
 }
 
 var _ store.Store = (*Store)(nil)
@@ -66,13 +72,14 @@ var _ store.Store = (*Store)(nil)
 // New создаёт пустое хранилище.
 func New() *Store {
 	return &Store{
-		agents:    map[string]store.Agent{},
-		agentsVer: 1,
-		rulesVer:  1,
-		bansVer:   1,
-		rules:     map[int64]store.AccessRule{},
-		sessions:  map[string]store.Session{},
-		rates:     map[string]store.RateWindow{},
+		agents:       map[string]store.Agent{},
+		agentsVer:    1,
+		rulesVer:     1,
+		bansVer:      1,
+		mtSecretsVer: 1,
+		rules:        map[int64]store.AccessRule{},
+		sessions:     map[string]store.Session{},
+		rates:        map[string]store.RateWindow{},
 		samples: map[store.Resolution]map[[2]string]store.Sample{
 			store.Res10s: {}, store.Res5m: {},
 		},
@@ -129,6 +136,12 @@ func (s *Store) Rollouts() store.RolloutRepo { return rolloutRepo{s} }
 
 // Bans — доступ к репозиторию/ресурсу хранилища (store.Store).
 func (s *Store) Bans() store.BanRepo { return banRepo{s} }
+
+// MTProtoSecrets — доступ к репозиторию/ресурсу хранилища (store.Store).
+func (s *Store) MTProtoSecrets() store.MTProtoSecretRepo { return mtSecretRepo{s} }
+
+// MTProtoSessions — доступ к репозиторию/ресурсу хранилища (store.Store).
+func (s *Store) MTProtoSessions() store.MTProtoSessionRepo { return mtSessionRepo{s} }
 
 // Errors — доступ к репозиторию/ресурсу хранилища (store.Store).
 func (s *Store) Errors() store.ErrorEventRepo { return errRepo{s} }

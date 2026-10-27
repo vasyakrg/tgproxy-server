@@ -51,6 +51,8 @@ type Store struct {
 	settings    settingsRepo
 	rollouts    rolloutRepo
 	bans        banRepo
+	mtSecrets   mtprotoSecretRepo
+	mtSessions  mtprotoSessionRepo
 }
 
 var _ store.Store = (*Store)(nil)
@@ -148,6 +150,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	s.settings = settingsRepo{s}
 	s.rollouts = rolloutRepo{s}
 	s.bans = banRepo{s}
+	s.mtSecrets = mtprotoSecretRepo{s}
+	s.mtSessions = mtprotoSessionRepo{s}
 	return s, nil
 }
 
@@ -215,6 +219,12 @@ func (s *Store) Rollouts() store.RolloutRepo { return s.rollouts }
 
 // Bans — доступ к репозиторию/ресурсу хранилища (store.Store).
 func (s *Store) Bans() store.BanRepo { return s.bans }
+
+// MTProtoSecrets — доступ к репозиторию/ресурсу хранилища (store.Store).
+func (s *Store) MTProtoSecrets() store.MTProtoSecretRepo { return s.mtSecrets }
+
+// MTProtoSessions — доступ к репозиторию/ресурсу хранилища (store.Store).
+func (s *Store) MTProtoSessions() store.MTProtoSessionRepo { return s.mtSessions }
 
 // mapErr переводит ошибки драйвера в sentinel-ошибки store.
 func mapErr(err error) error {

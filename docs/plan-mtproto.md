@@ -33,18 +33,18 @@
 
 Цель: агент умеет отдать h2-стрим, соединённый с DC; сервер умеет его открыть; секреты хранятся зашифрованными. MTProto-листенера ещё нет.
 
-- [ ] **M9-T0 · Спайк и контракт-тесты mtg v2.2.8** (S-mtproto)
+- [x] **M9-T0 · Спайк и контракт-тесты mtg v2.2.8** (S-mtproto)
   - Файлы: `go.mod`/`go.sum` (`go get github.com/9seconds/mtg/v2@v2.2.8`), `internal/mtproto/mtgcontract_test.go`, `internal/mtproto/doc.go`, `NOTICE` (атрибуция MIT).
   - Тесты первыми (фиксируют поведение mtg, на которое опирается дизайн): `ServeConn` с conn, у которого `RemoteAddr` не `*net.TCPAddr`, паникует (наша обёртка обязана его давать); адреса в `Network.Dial` ∈ `essentials.TelegramCoreAddresses` и отображение addr→DC однозначно; `PreferIP: "only-ipv4"` → только `tcp4`; поведение на отрицательных DC и `AllowFallbackOnUnknownDC`; `AntiReplayCache.SeenBefore` вызывается ровно один раз на ClientHello; `Shutdown()` рвёт активный relay (если нет — пометить в `docs/mtproto.md` §4.3 «свой реестр conn»); `DomainFronting{ProxyProtocol:true}` шлёт PROXY v2 с исходным IP; события `EventStart/ConnectedToDC/Traffic/Finish/ReplayAttack/DomainFronting` приходят с ожидаемыми полями.
   - Приёмка: контракт-тесты зелёные; лицензии зависимостей в `NOTICE`; `govulncheck` чист; найденные расхождения внесены в `docs/mtproto.md` до старта M10.
-- [ ] **M9-T1 · Конфиг `mtproto:`** (S-core)
+- [x] **M9-T1 · Конфиг `mtproto:`** (S-core)
   - Файлы: `internal/config/config.go` (`MTProtoConfig`, `MTProtoAgentPool`, `AgentMTProtoConfig`; поле `MTProto` в `ServerConfig`/`AgentConfig`), `defaults.go`, `validate.go` (`ValidateServer`/`ValidateAgent`), неэкспортируемый тест-оверрайд таблицы DC по образцу `OverrideTelegramAPIURL` (`internal/config/defaults.go:123`), `packaging/etc/*.yaml` не трогать (M13).
   - Тесты первыми: дефолты из `docs/mtproto.md` §10; `enabled: true` без `pki.kek_file` → ошибка; `listen: shared` + `tls.mode: off` → ошибка; dedicated `listen` совпал с `listen.proxy|admin|metrics|agent_gateway` → ошибка; `fronting_domain` пустой/с портом/не FQDN → ошибка; `time_skew` ∉ [30s,10m], `replay_cache` ∉ [1MiB,256MiB], неположительные лимиты → ошибка; неизвестное поле → ошибка с путём; признак «требует рестарта» для `enabled|listen|fronting_domain` при reload.
   - Приёмка: `tgproxy config validate` на `dev/*.yaml` с `mtproto:`; покрытие ≥ 85%.
-- [ ] **M9-T2 · Таблица DC и сети Telegram** (S-core)
+- [x] **M9-T2 · Таблица DC и сети Telegram** (S-core)
   - Файлы: `internal/tgapi/dc.go` (`DCAddrs(dc int, v6 bool) []netip.AddrPort`, `KnownDC(dc int) bool`, `TelegramPrefixes() []netip.Prefix`), `dc_test.go`.
   - Тесты первыми: все DC `1…5` и media (знак) имеют ≥1 IPv4; все адреса ∈ `TelegramPrefixes`; неизвестный DC → пусто; порт 443; совпадение IPv4-набора с `essentials.TelegramCoreAddresses` проверяется в `internal/mtproto` (M10-T4), чтобы `tgapi` не импортировал mtg.
-- [ ] **M9-T3 · Хранилище секретов и журнала** (S-core)
+- [x] **M9-T3 · Хранилище секретов и журнала** (S-core)
   - Файлы: `internal/store/sqlite/migrations/0009_mtproto.sql` (`mtproto_secrets`, `mtproto_sessions`, триггеры `versions('mtproto_secrets')` по образцу `0001_init.sql:95`), `internal/store/models.go` (`MTProtoSecret`, `MTProtoSession`), `internal/store/store.go` (`MTProtoSecrets() MTProtoSecretRepo`, `MTProtoSessions() MTProtoSessionRepo`), `internal/store/sqlite/mtproto.go`, `internal/store/memtest/`, `internal/store/storetest/` (contract).
   - Repo: `Create(ctx, name, sealed, prefix, cidrs, maxConns)`, `List`, `ListActive(ctx) ([]MTProtoSecret, version, error)`, `Update`, `Revoke(id, at)`, `Rotate(id, sealed, prefix, graceUntil)`, `Version`; сессии — `InsertBatch`, `List(cursor, filters)`, `Prune(before)`.
   - Тесты первыми: миграция up/down на копии прод-схемы; `secret_enc` хранится как есть (store не шифрует — шифрует сервисный слой KEK с `aad "mtproto/<id>"`); версия растёт на insert/update/revoke; `ListActive` не возвращает отозванные и с истёкшим `grace_until`; уникальность имени; batch 10k сессий < 200 мс.

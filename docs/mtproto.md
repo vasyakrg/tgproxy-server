@@ -57,18 +57,18 @@ mtg зафиксирован на `v2.2.8` и закрыт тонким адап
 ## 3. Поток соединения пошагово
 
 1. **Accept.** `muxListener.Accept` получает TCP и сразу отдаёт его в отдельную горутину (Accept никогда не блокируется чтением клиента). На каждое соединение — `recover`: паника MTProto-кода закрывает только это соединение.
-2. **Бан.** `ban.Banned(ip)` до чтения первого байта → закрыть (без ответа, как дешёвый 403 Bot API). IP — из `RemoteAddr`; `trusted_proxies`/PROXY-protocol снаружи для MTProto не поддерживаются (см. §15 п. 5).
+2. **Бан.** `ban.Banned(ip)` до чтения первого байта → закрыть (без ответа, как дешёвый 403 Bot API). IP — из `RemoteAddr`; `trusted_proxies`/PROXY-protocol снаружи для MTProto не поддерживаются (см. §15 п. 7).
 3. **Лимиты до рукопожатия.** Глобальный семафор незавершённых рукопожатий `max_pending_handshakes` и счётчик `max_conns_per_ip` (активные + незавершённые). Превышение → закрыть, причина `mtproto_conn_limit`.
 4. **Первая TLS-запись.** Чтение заголовка записи (5 байт) + тела ≤16 КБ с дедлайном `handshake_timeout`. Не `Handshake` (22) / не ClientHello / превышение размера → **fallthrough** (шаг 7) с уже прочитанными байтами.
 5. **Разводка по секрету.** Разбор ClientHello (`internal/mtproto/faketls`): SNI должен быть равен `fronting_domain`; для каждого активного секрета считается HMAC-SHA256(key, ClientHello с обнулённым `random`) и сравнивается через `subtle.ConstantTimeCompare` со всеми 32 байтами `random`, кроме последних 4, XOR которых даёт timestamp; timestamp в окне `±time_skew`. Перебор идёт по **всем** секретам без раннего выхода (время ответа не зависит от номера секрета). CIDR секрета (если задан) проверяется после совпадения HMAC. Нет совпадения → fallthrough, метрика `tgp_mtproto_fallthrough_total` (без IP; это не отказ).
 6. **MTProto.** Совпал секрет `i` → есть capable-агенты (иначе fallthrough, §9) → лимиты секрета (`max_conns`) → `inst[i].ServeConn(replayConn)`: `replayConn` сначала отдаёт прочитанные байты, затем читает сокет; `RemoteAddr()` гарантированно `*net.TCPAddr` (mtglib/stream_context.go:52 делает type assertion — иначе panic). Далее внутри mtg:
-   1. повторная проверка ClientHello (дёшево) → `AntiReplayCache.SeenBefore(digest)` — **единственное** место проверки повтора (общий кэш на все инстансы; muxListener в кэш не пишет, иначе mtg увидел бы свой же digest как повтор). Повтор → `EventReplayAttack` → domain fronting (см. п. 7б) и причина `mtproto_replay`;
-   2. FakeTLS ServerHello + ChangeCipherSpec, obfuscated2 `ReadHandshake` клиента → номер DC;
-   3. для каждого адреса `telegram.GetAddresses(dc)`: `Network.Dial("tcp4", "149.154.167.51:443")` (без ctx и без номера DC) → наш адаптер (§4.3); ошибка → mtg пробует следующий адрес → естественный повтор на другом агенте;
+   1. повторная проверка ClientHello (дёшево) → `AntiReplayCache.SeenBefore(sessionID)` — **единственное** место проверки повтора (mtg передаёт **SessionID** ClientHello — 32 байта, а не HMAC-digest; вызывается ровно один раз и только для ClientHello с верными SNI/HMAC/timestamp; общий кэш на все инстансы; muxListener в кэш не пишет, иначе mtg увидел бы свой же SessionID как повтор; подтверждено контракт-тестом M9-T0). Повтор → `EventReplayAttack` → domain fronting (см. п. 7б) и причина `mtproto_replay`;
+   2. FakeTLS ServerHello + ChangeCipherSpec, obfuscated2 `ReadHandshake` клиента → номер DC. **Знак DC mtg отбрасывает** (`abs`): media-DC (`-2`) неотличим от `2`, к Telegram всегда уходит положительный номер; `0` → DC 2; DC вне таблицы (не `1…5`, `203`) → при `AllowFallbackOnUnknownDC` DC 2, иначе соединение закрывается без единого `Dial`;
+   3. для каждого адреса `telegram.GetAddresses(dc)`: `Network.Dial("tcp4", "149.154.167.51:443")` (только `Dial`: `DialContext` mtg для DC не вызывает; номера DC в вызове нет; при `PreferIP=only-ipv4` — только IPv4, адреса DC перебираются в случайном порядке) → наш адаптер (§4.3); ошибка → mtg пробует следующий адрес → естественный повтор на другом агенте;
    4. `SendHandshake(conn, dc)` — obfuscated2 к DC делает mtg; затем двунаправленный relay до закрытия/`IdleTimeout`.
 7. **Fallthrough.** Соединение (с повтором прочитанных байтов) уходит в обычный TLS-обработчик: тот же `http.Server` прокси Bot API с `tlsin` (shared) или, в dedicated-режиме, внутренний `http.Server`, отдающий 404/«заглушку» с тем же сертификатом. Невалидные соединения **никогда** не проксируются наружу (никакого open relay).
-   - 7б. **Domain fronting mtg** (replay, ошибки FakeTLS внутри mtg) направлен на внутренний листенер `127.0.0.1:<random>` (`DomainFronting{IP:127.0.0.1, Port, ProxyProtocol:true}`), принимающий только PROXY v2 с loopback и отдающий соединение в тот же TLS-обработчик с исходным IP клиента. Внутренний листенер не проходит через muxListener (нет цикла) и не слушает внешние интерфейсы.
-8. **Завершение.** `EventFinish` → запись в журнал соединений (время, IP, secret id/имя, DC, агент, байты in/out, длительность, причина закрытия), метрики, освобождение слотов лимитов и `release` балансировщика.
+   - 7б. **Domain fronting mtg** (replay, ошибки FakeTLS внутри mtg) направлен на внутренний листенер `127.0.0.1:<random>` (`ProxyOpts.DomainFrontingIP=127.0.0.1`, `DomainFrontingPort`, `DomainFrontingProxyProtocol=true` — плоские поля, структуры `DomainFronting` в mtg нет), принимающий только PROXY v2 с loopback и отдающий соединение в тот же TLS-обработчик с исходным IP клиента. Подтверждено: mtg ходит на fronting через `Network.NativeDialer()` (не через `Dial`), PROXY v2-заголовок (src = `RemoteAddr` переданного conn, dst = fronting-адрес) пишется **лениво, перед первым записанным байтом**, затем идут байты клиента без изменений (включая не-TLS мусор); ответ сайта проксируется клиенту. Внутренний листенер не проходит через muxListener (нет цикла) и не слушает внешние интерфейсы.
+8. **Завершение.** `EventFinish` (**без причины закрытия и без ошибки** — mtg её не сообщает; причину и итог — `mtproto_conn_limit`/`replay`/`dc_error`/`idle`/`revoked` — определяет наш слой по состоянию обёрнутых conn и ctx) → запись в журнал соединений (время, IP, secret id/имя, DC, агент, байты in/out, длительность), метрики, освобождение слотов лимитов и `release` балансировщика.
 
 ## 4. Компоненты и интерфейсы
 
@@ -121,9 +121,9 @@ type Observer interface { // журнал соединений + метрики
 
 ### 4.3 Мульти-секреты
 
-`mtglib.ProxyOpts.Secret` — один секрет на инстанс, поэтому `Manager` держит N инстансов `mtglib.Proxy` (по одному на активный секрет) с общими: `Network` (адаптер), `AntiReplayCache` (`antireplay.NewStableBloomFilter(replay_cache, …)`), `IPBlocklist`/`IPAllowlist` (`ipblocklist.NewNoop` — бан и CIDR проверяем сами до mtg), `EventStream` (наш, с маршрутизацией по secret id), `Logger` (адаптер к slog через `redact`). Параметры: `Concurrency` не применяется в `ServeConn` → лимиты свои (§9); `IdleTimeout = idle_timeout`; `HandshakeTimeout = handshake_timeout`; `TolerateTimeSkewness = time_skew`; `PreferIP = "only-ipv4"` (v4/v6 к DC выбирает агент); `AllowFallbackOnUnknownDC = true` (неизвестный DC клиента → DC по умолчанию mtg); `DomainFronting` → внутренний loopback-листенер (§3 п. 7б). `DCOverrides`/`UseTestDCs` объявлены в mtg, но не используются — не трогаем.
+`mtglib.ProxyOpts.Secret` — один секрет на инстанс, поэтому `Manager` держит N инстансов `mtglib.Proxy` (по одному на активный секрет) с общими: `Network` (адаптер), `AntiReplayCache` (`antireplay.NewStableBloomFilter(replay_cache, antireplay.DefaultStableBloomFilterErrorRate)` — `errorRate` передавать явно: `0` mtg не заменяет дефолтом), `IPBlocklist`/`IPAllowlist` (`ipblocklist.NewNoop` — бан и CIDR проверяем сами до mtg), `EventStream` (свой экземпляр-обёртка на каждый инстанс с зашитым secret id: события mtg секрет не несут; поля — `EventStart.RemoteIP` из `RemoteAddr`, `EventConnectedToDC{RemoteIP, DC}` (DC уже после fallback), `EventTraffic{Traffic, IsRead}` (считается на стороне Telegram/fronting, `IsRead`=байты от Telegram клиенту; 64-байтный handshake к DC не входит), `EventDomainFronting`, `EventReplayAttack`; у всех `StreamID` и `Timestamp`), `Logger` (адаптер к slog через `redact`). Параметры: `Concurrency` не применяется в `ServeConn` → лимиты свои (§9); `IdleTimeout = idle_timeout`; `HandshakeTimeout = handshake_timeout`; `TolerateTimeSkewness = time_skew`; `PreferIP = "only-ipv4"` (v4/v6 к DC выбирает агент; обязательно: дефолт mtg `prefer-ipv6` начинает с `tcp6`); `AutoUpdate = false` и пустой `DoppelGangerURLs` (иначе mtg сам ходит в HTTP через `Network.MakeHTTPClient`, который при этом обязан возвращать не-nil клиент); `AllowFallbackOnUnknownDC = true` (неизвестный DC клиента → DC по умолчанию mtg); `DomainFronting` → внутренний loopback-листенер (§3 п. 7б). `DCOverrides`/`UseTestDCs` объявлены в mtg, но не используются — не трогаем.
 
-Снимок секретов перечитывается по версии таблицы (как `access_rules`, ≤2 с): новый секрет → новый инстанс; отзыв/выключение → инстанс убирается из разводки и `Shutdown()`; активные соединения рвутся (свой реестр conn с отменой — если контракт-тест M9-T0 покажет, что `Shutdown` не рвёт relay).
+Снимок секретов перечитывается по версии таблицы (как `access_rules`, ≤2 с): новый секрет → новый инстанс; отзыв/выключение → инстанс убирается из разводки и `Shutdown()`; активные соединения рвутся самим `Shutdown()`: он отменяет ctx инстанса, закрывает клиентский и DC-conn активных relay и возвращается после выхода всех `ServeConn` (подтверждено контракт-тестом M9-T0 — свой реестр conn **не нужен**). Инстанс после `Shutdown` одноразовый: соединение, пришедшее после него, закрывается без `Dial`, повторное использование недопустимо.
 
 ## 5. Контракт агента
 
@@ -131,7 +131,7 @@ type Observer interface { // журнал соединений + метрики
 |---|---|
 | Запрос | `POST /_agent/mtproto/dc/{dc}` по уже существующему mTLS-каналу (dial: отдельный пул; reverse: класс соединений `tgproxy-mtproto/1`), HTTP/2, full-duplex: тело запроса — байты к DC, тело ответа — байты от DC |
 | Заголовки | `X-Request-ID` (ULID), `X-TGP-DC` (дублирует путь, со знаком; расхождение → 400) |
-| `{dc}` | целое со знаком: `1…5` и отрицательные (media); других значений нет |
+| `{dc}` | целое: `1…5`, `203` (CDN-DC, есть в таблице mtg); отрицательные (media) от сервера **не приходят** — mtg отбрасывает знак (§3 п. 6.2); агент отрицательные принимает и отображает на тот же DC (защита от будущей смены mtg) |
 | Адрес | **только** из вшитой в бинарь таблицы `internal/tgapi/dc.go` (IPv4; IPv6 при `mtproto.ipv6: true` и доступности), порт 443; без DNS; сервер адрес не передаёт. Обновление таблицы — только релизом с подписью |
 | Dial-control | по образцу `egressDialControl` (`internal/agent/egress.go:73`) + allowlist префиксов Telegram (`internal/tgapi`): запрет loopback/private/link-local/multicast/unspecified |
 | Успех | `200` + `Flush` сразу после TCP-connect к DC; далее копирование в обе стороны до EOF/ошибки/`idle_timeout`/`max_duration` |
@@ -321,8 +321,10 @@ Agent: `tgp_agent_mtproto_streams{dc}`, `tgp_agent_mtproto_dial_errors_total{dc,
 2. Нет ad-tag / middle-proxy.
 3. API mtg v2 нестабилен → pin `v2.2.8` + адаптер + контракт-тесты; обновление mtg — отдельной задачей.
 4. Один инстанс `mtglib.Proxy` на секрет: память/горутины растут линейно с числом секретов.
-5. Клиентский IP только из `RemoteAddr` — за L4-балансировщиком без PROXY protocol бан и лимиты по IP бессмысленны.
-6. Anti-replay только в памяти одного процесса; после рестарта окно повторов открыто на `time_skew`.
+5. Doppelganger mtg (имитация таймингов/размеров TLS-записей) включён всегда и не отключается: на инстанс — фоновая горутина, на соединение — горутина-писатель, перегруппирующая и задерживающая трафик **Telegram → клиент** на случайную задержку (Weibull, порядка миллисекунд). Влияет на латентность и число горутин; задержка и ёмкость замеряются в M10-T8.
+6. Событие `EventFinish` не несёт причины закрытия (§3 п. 8), события — секрета.
+7. Клиентский IP только из `RemoteAddr` — за L4-балансировщиком без PROXY protocol бан и лимиты по IP бессмысленны.
+8. Anti-replay только в памяти одного процесса; после рестарта окно повторов открыто на `time_skew`.
 
 Переход на свою реализацию FakeTLS + obfuscated2 (~1000 строк; логика mtg под MIT с атрибуцией в `NOTICE`) — при любом из условий:
 - отпечаток ServerHello становится подтверждённой причиной блокировок;
@@ -347,7 +349,7 @@ Agent: `tgp_agent_mtproto_streams{dc}`, `tgp_agent_mtproto_dial_errors_total{dc,
 | ОВ-M2 | `fronting_domain` = основной домен прокси или отдельный поддомен с тем же сертификатом | основной домен `public_base_url` |
 | ОВ-M3 | Учитывать ли полосу (байт/с) в score балансировщика | нет в v1; решение после 2 недель метрик `bytes_total{agent}` |
 | ОВ-M4 | Квоты полосы/трафика на секрет | нет в v1, только `max_conns` |
-| ОВ-M5 | Обработка отрицательных (media) DC и `AllowFallbackOnUnknownDC` в mtg v2.2.8 | проверяется контракт-тестом M9-T0; дефолт — `AllowFallbackOnUnknownDC: true` |
+| ОВ-M5 | Обработка отрицательных (media) DC и `AllowFallbackOnUnknownDC` в mtg v2.2.8 | закрыт контракт-тестом M9-T0: знак DC отбрасывается (`-2`→`2`), неизвестный DC → DC 2 при `AllowFallbackOnUnknownDC: true`, иначе закрытие без `Dial`; дефолт — `true` |
 | ОВ-M6 | Retention журнала соединений | как `error_events` |
 | ОВ-M7 | IPv6 от агента к DC | выключен (`ipv6: false`) |
 | ОВ-M8 | Поддержка PROXY protocol на внешнем MTProto-листенере (за L4-балансировщиком) | нет |

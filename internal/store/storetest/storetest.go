@@ -42,6 +42,8 @@ func Run(t *testing.T, factory Factory) {
 		{"Settings", testSettings},
 		{"Rollouts", testRollouts},
 		{"Bans", testBans},
+		{"MTProtoSecrets", testMTProtoSecrets},
+		{"MTProtoSessions", testMTProtoSessions},
 		{"DeniedSamples", testDeniedSamples},
 		{"AccessDenials", testAccessDenials},
 	}
@@ -1182,5 +1184,233 @@ func testAccessDenials(t *testing.T, s store.Store) {
 	ok(t, err)
 	if len(got) != 2 {
 		t.Fatalf("ip filter %+v", got)
+	}
+}
+
+func testMTProtoSecrets(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	r := s.MTProtoSecrets()
+	now := time.Now()
+	v0, err := r.Version(ctx)
+	ok(t, err)
+	_, err = r.Get(ctx, 1)
+	is(t, err, store.ErrNotFound)
+	is(t, r.Revoke(ctx, 1, now), store.ErrNotFound)
+
+	_, err = r.Create(ctx, " ", []byte{1}, "aabbccdd", nil, 0)
+	is(t, err, store.ErrInvalid)
+	_, err = r.Create(ctx, "n", nil, "aabbccdd", nil, 0)
+	is(t, err, store.ErrInvalid)
+	_, err = r.Create(ctx, "n", []byte{1}, "aabbccdd", nil, -1)
+	is(t, err, store.ErrInvalid)
+
+	// secret_enc хранится как есть, в том числе нулевые байты
+	blob := []byte{0, 1, 2, 0xff, 0, 7}
+	cidr := netip.MustParsePrefix("10.0.0.0/8")
+	a, err := r.Create(ctx, "alpha", blob, "aabbccdd", []netip.Prefix{cidr}, 5)
+	ok(t, err)
+	if a.ID == 0 || !bytes.Equal(a.SecretEnc, blob) || a.Prefix != "aabbccdd" || len(a.CIDRs) != 1 || a.CIDRs[0] != cidr ||
+		a.MaxConns != 5 || !a.Enabled || a.CreatedAt.IsZero() || a.RevokedAt != nil || a.GraceUntil != nil || a.RotatedFrom != nil {
+		t.Fatalf("created = %+v", a)
+	}
+	got, err := r.Get(ctx, a.ID)
+	ok(t, err)
+	if !bytes.Equal(got.SecretEnc, blob) || got.Name != "alpha" || len(got.CIDRs) != 1 {
+		t.Fatalf("get = %+v", got)
+	}
+	v1, err := r.Version(ctx)
+	ok(t, err)
+	if v1 <= v0 {
+		t.Fatalf("version after create: %d -> %d", v0, v1)
+	}
+
+	// уникальность имени
+	_, err = r.Create(ctx, "alpha", []byte{2}, "11223344", nil, 0)
+	is(t, err, store.ErrConflict)
+
+	b, err := r.Create(ctx, "beta", []byte{3}, "55667788", nil, 0)
+	ok(t, err)
+	if len(b.CIDRs) != 0 {
+		t.Fatalf("beta cidrs = %v", b.CIDRs)
+	}
+
+	// Update: рост версии, конфликт имён, ключ не меняется
+	vb, err := r.Version(ctx)
+	ok(t, err)
+	a.Name, a.MaxConns, a.CIDRs = "alpha2", 9, nil
+	u, err := r.Update(ctx, a)
+	ok(t, err)
+	if u.Name != "alpha2" || u.MaxConns != 9 || len(u.CIDRs) != 0 || !bytes.Equal(u.SecretEnc, blob) || u.Prefix != "aabbccdd" {
+		t.Fatalf("updated = %+v", u)
+	}
+	if v, _ := r.Version(ctx); v <= vb {
+		t.Fatalf("version after update: %d -> %d", vb, v)
+	}
+	b.Name = "alpha2"
+	_, err = r.Update(ctx, b)
+	is(t, err, store.ErrConflict)
+	_, err = r.Update(ctx, store.MTProtoSecret{ID: 999, Name: "x", SecretEnc: []byte{1}, Prefix: "p"})
+	is(t, err, store.ErrNotFound)
+
+	list, err := r.List(ctx)
+	ok(t, err)
+	if len(list) != 2 || list[0].ID != a.ID || list[1].ID != b.ID {
+		t.Fatalf("list = %+v", list)
+	}
+
+	// ListActive: выключенный и отозванный не возвращаются
+	act, ver, err := r.ListActive(ctx, now)
+	ok(t, err)
+	curV, _ := r.Version(ctx)
+	if len(act) != 2 || ver != curV {
+		t.Fatalf("active = %d, ver %d (want %d)", len(act), ver, curV)
+	}
+	b.Name = "beta"
+	b.Enabled = false
+	_, err = r.Update(ctx, b)
+	ok(t, err)
+	act, _, err = r.ListActive(ctx, now)
+	ok(t, err)
+	if len(act) != 1 || act[0].ID != a.ID {
+		t.Fatalf("active after disable = %+v", act)
+	}
+	b.Enabled = true
+	_, err = r.Update(ctx, b)
+	ok(t, err)
+
+	vr, _ := r.Version(ctx)
+	ok(t, r.Revoke(ctx, b.ID, now))
+	if v, _ := r.Version(ctx); v <= vr {
+		t.Fatalf("version after revoke: %d -> %d", vr, v)
+	}
+	rb, err := r.Get(ctx, b.ID)
+	ok(t, err)
+	if rb.RevokedAt == nil || rb.Enabled {
+		t.Fatalf("revoked = %+v", rb)
+	}
+	act, _, err = r.ListActive(ctx, now)
+	ok(t, err)
+	if len(act) != 1 || act[0].ID != a.ID {
+		t.Fatalf("active after revoke = %+v", act)
+	}
+	if list, _ = r.List(ctx); len(list) != 2 {
+		t.Fatalf("list must keep revoked: %d", len(list))
+	}
+
+	// Rotate с grace: старый ещё активен до grace_until, потом нет; новый наследует имя и настройки
+	vrot, _ := r.Version(ctx)
+	grace := now.Add(time.Hour)
+	n, err := r.Rotate(ctx, a.ID, []byte{9, 9}, "99887766", grace)
+	ok(t, err)
+	if n.Name != "alpha2" || n.RotatedFrom == nil || *n.RotatedFrom != a.ID || n.MaxConns != 9 || !n.Enabled ||
+		!bytes.Equal(n.SecretEnc, []byte{9, 9}) || n.Prefix != "99887766" || n.RevokedAt != nil {
+		t.Fatalf("rotated = %+v", n)
+	}
+	if v, _ := r.Version(ctx); v <= vrot {
+		t.Fatalf("version after rotate: %d -> %d", vrot, v)
+	}
+	old, err := r.Get(ctx, a.ID)
+	ok(t, err)
+	if old.RevokedAt == nil || old.GraceUntil == nil || !old.Enabled || old.Name == "alpha2" {
+		t.Fatalf("old after rotate = %+v", old)
+	}
+	act, _, err = r.ListActive(ctx, now)
+	ok(t, err)
+	if len(act) != 2 {
+		t.Fatalf("active during grace = %+v", act)
+	}
+	act, _, err = r.ListActive(ctx, grace.Add(time.Second))
+	ok(t, err)
+	if len(act) != 1 || act[0].ID != n.ID {
+		t.Fatalf("active after grace = %+v", act)
+	}
+	// повторная ротация отозванного секрета — конфликт
+	_, err = r.Rotate(ctx, a.ID, []byte{1}, "p", time.Time{})
+	is(t, err, store.ErrConflict)
+	_, err = r.Rotate(ctx, 999, []byte{1}, "p", time.Time{})
+	is(t, err, store.ErrNotFound)
+
+	// Rotate без grace: старый сразу неактивен
+	n2, err := r.Rotate(ctx, n.ID, []byte{8}, "44332211", time.Time{})
+	ok(t, err)
+	act, _, err = r.ListActive(ctx, now)
+	ok(t, err)
+	found := false
+	for _, m := range act {
+		if m.ID == n.ID {
+			t.Fatalf("rotated without grace is still active: %+v", m)
+		}
+		found = found || m.ID == n2.ID
+	}
+	if !found || n2.Name != "alpha2" {
+		t.Fatalf("n2 = %+v active=%+v", n2, act)
+	}
+}
+
+func testMTProtoSessions(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	r := s.MTProtoSessions()
+	base := time.Now().Add(-time.Hour)
+	_, err := r.List(ctx, store.MTProtoSessionQuery{})
+	ok(t, err)
+	ok(t, r.InsertBatch(ctx, nil))
+	is(t, r.InsertBatch(ctx, []store.MTProtoSession{{SecretID: 0}}), store.ErrInvalid)
+	is(t, r.InsertBatch(ctx, []store.MTProtoSession{{SecretID: 1, StartedAt: base, EndedAt: base.Add(-time.Second)}}), store.ErrInvalid)
+
+	batch := []store.MTProtoSession{
+		{StartedAt: base, EndedAt: base.Add(time.Minute), ClientIP: "1.1.1.1", SecretID: 1, DC: 2, AgentID: "a1", BytesIn: 10, BytesOut: 20, CloseReason: "eof"},
+		{StartedAt: base.Add(time.Minute), EndedAt: base.Add(2 * time.Minute), ClientIP: "2.2.2.2", SecretID: 2, DC: 4, AgentID: "a2", BytesIn: 1, BytesOut: 2, CloseReason: "timeout"},
+		{StartedAt: base.Add(2 * time.Minute), EndedAt: base.Add(30 * time.Minute), ClientIP: "1.1.1.1", SecretID: 1, DC: 4, AgentID: "a1", CloseReason: "eof"},
+	}
+	ok(t, r.InsertBatch(ctx, batch))
+	all, err := r.List(ctx, store.MTProtoSessionQuery{})
+	ok(t, err)
+	if len(all) != 3 || all[0].ID <= all[1].ID || all[1].ID <= all[2].ID {
+		t.Fatalf("order/len: %+v", all)
+	}
+	last := all[2]
+	if last.ClientIP != "1.1.1.1" || last.SecretID != 1 || last.DC != 2 || last.AgentID != "a1" || last.BytesIn != 10 ||
+		last.BytesOut != 20 || last.CloseReason != "eof" || last.EndedAt.Sub(last.StartedAt) != time.Minute {
+		t.Fatalf("stored = %+v", last)
+	}
+	// курсор и лимит
+	page, err := r.List(ctx, store.MTProtoSessionQuery{Limit: 2})
+	ok(t, err)
+	if len(page) != 2 {
+		t.Fatalf("limit: %d", len(page))
+	}
+	rest, err := r.List(ctx, store.MTProtoSessionQuery{BeforeID: page[1].ID})
+	ok(t, err)
+	if len(rest) != 1 || rest[0].ID != last.ID {
+		t.Fatalf("cursor: %+v", rest)
+	}
+	// фильтры
+	for _, c := range []struct {
+		q    store.MTProtoSessionQuery
+		want int
+	}{
+		{store.MTProtoSessionQuery{SecretID: 1}, 2},
+		{store.MTProtoSessionQuery{AgentID: "a2"}, 1},
+		{store.MTProtoSessionQuery{ClientIP: "1.1.1.1"}, 2},
+		{store.MTProtoSessionQuery{DC: 4}, 2},
+		{store.MTProtoSessionQuery{SecretID: 1, DC: 4}, 1},
+		{store.MTProtoSessionQuery{SecretID: 9}, 0},
+	} {
+		got, err := r.List(ctx, c.q)
+		ok(t, err)
+		if len(got) != c.want {
+			t.Errorf("%+v: %d, want %d", c.q, len(got), c.want)
+		}
+	}
+	// Prune по ended_at
+	n, err := r.Prune(ctx, base.Add(90*time.Second))
+	ok(t, err)
+	if n != 1 {
+		t.Fatalf("pruned %d, want 1", n)
+	}
+	left, err := r.List(ctx, store.MTProtoSessionQuery{})
+	ok(t, err)
+	if len(left) != 2 {
+		t.Fatalf("left %d", len(left))
 	}
 }

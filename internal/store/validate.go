@@ -140,3 +140,33 @@ func (b Ban) Validate() error {
 	}
 	return nil
 }
+
+// Validate проверяет секрет MTProto.
+func (s MTProtoSecret) Validate() error {
+	if strings.TrimSpace(s.Name) == "" {
+		return fmt.Errorf("%w: mtproto secret name is required", ErrInvalid)
+	}
+	if len(s.SecretEnc) == 0 || s.Prefix == "" {
+		return fmt.Errorf("%w: mtproto secret needs sealed key and prefix", ErrInvalid)
+	}
+	if s.MaxConns < 0 {
+		return fmt.Errorf("%w: max_conns must be >= 0", ErrInvalid)
+	}
+	for _, p := range s.CIDRs {
+		if !p.IsValid() {
+			return fmt.Errorf("%w: invalid cidr", ErrInvalid)
+		}
+	}
+	return nil
+}
+
+// Validate проверяет запись журнала MTProto.
+func (s MTProtoSession) Validate() error {
+	if s.SecretID <= 0 || s.BytesIn < 0 || s.BytesOut < 0 {
+		return fmt.Errorf("%w: mtproto session needs secret_id and non-negative bytes", ErrInvalid)
+	}
+	if s.EndedAt.Before(s.StartedAt) {
+		return fmt.Errorf("%w: mtproto session ended before start", ErrInvalid)
+	}
+	return nil
+}

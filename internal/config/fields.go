@@ -42,3 +42,5 @@ func yamlFields(t reflect.Type) []fieldInfo {
 func isStructNode(t reflect.Type) bool {
 	return t.Kind() == reflect.Struct && t != prefixType
 }
+
+func typeOf[T any]() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }

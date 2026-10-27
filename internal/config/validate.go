@@ -149,6 +149,7 @@ func ValidateServer(c *ServerConfig) error {
 	v.update(c.Update)
 	v.notify(c.Notify)
 	v.ban(c.Ban)
+	v.mtproto(c)
 
 	if c.Metrics.BearerFile == "" && !isLoopbackListen(c.Listen.Metrics) {
 		v.add("metrics.bearer_file", "required when listen.metrics (%q) is not loopback", c.Listen.Metrics)
@@ -441,6 +442,7 @@ func ValidateAgent(c *AgentConfig) error {
 	if c.DataDir == "" {
 		v.add("data_dir", "required")
 	}
+	v.agentMTProto(c.MTProto)
 	if c.Metrics.BearerFile == "" && !isLoopbackListen(c.Listen.Metrics) {
 		v.add("metrics.bearer_file", "required when listen.metrics (%q) is not loopback", c.Listen.Metrics)
 	}
