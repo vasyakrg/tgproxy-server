@@ -78,6 +78,7 @@ func DefaultServer() *ServerConfig {
 			DCProbeInterval:      30 * time.Second,
 			AgentPool: MTProtoAgentPool{
 				ReverseConns:      2,
+				MaxReverseConns:   DefaultReverseConnsMax,
 				MaxStreamsPerConn: 500,
 				DialTimeout:       5 * time.Second,
 			},

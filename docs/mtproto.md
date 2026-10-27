@@ -218,6 +218,7 @@ mtproto:
   dc_probe_interval: 30s       # пробрасывается агентам через /_agent/config
   agent_pool:
     reverse_conns: 2
+    max_reverse_conns: 16        # потолок MTProto-соединений агента; = agent reverse_conns_max
     max_streams_per_conn: 500
     dial_timeout: 5s
 ```

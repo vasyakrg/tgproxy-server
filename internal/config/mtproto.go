@@ -101,7 +101,10 @@ type MTProtoConfig struct {
 
 // MTProtoAgentPool — пул потоков сервер -> агент.
 type MTProtoAgentPool struct {
-	ReverseConns      int           `yaml:"reverse_conns"`
+	ReverseConns int `yaml:"reverse_conns"`
+	// MaxReverseConns — потолок MTProto-соединений reverse-агента на сервере
+	// (согласуйте с агентским mtproto.reverse_conns_max, по умолчанию 16).
+	MaxReverseConns   int           `yaml:"max_reverse_conns"`
 	MaxStreamsPerConn int           `yaml:"max_streams_per_conn"`
 	DialTimeout       time.Duration `yaml:"dial_timeout"`
 }
@@ -201,6 +204,10 @@ func (v *validator) mtproto(c *ServerConfig) {
 		v.add("mtproto.replay_cache", "must be in %s..%s, got %s", ByteSize(minReplayCache), ByteSize(maxReplayCache), m.ReplayCache)
 	}
 	positiveInt("mtproto.agent_pool.reverse_conns", m.AgentPool.ReverseConns)
+	positiveInt("mtproto.agent_pool.max_reverse_conns", m.AgentPool.MaxReverseConns)
+	if m.AgentPool.MaxReverseConns > 0 && m.AgentPool.MaxReverseConns < m.AgentPool.ReverseConns {
+		v.add("mtproto.agent_pool.max_reverse_conns", "must be >= reverse_conns (%d), got %d", m.AgentPool.ReverseConns, m.AgentPool.MaxReverseConns)
+	}
 	positiveInt("mtproto.agent_pool.max_streams_per_conn", m.AgentPool.MaxStreamsPerConn)
 	v.positive("mtproto.agent_pool.dial_timeout", m.AgentPool.DialTimeout)
 	if m.PublicPort < 0 || m.PublicPort > 65535 {

@@ -29,6 +29,8 @@ type mtOpts struct {
 	disabled  map[string]bool // агенты с mtproto.enabled=false
 	dedicated bool            // отдельный листенер MTProto
 	maxPerIP  int             // mtproto.max_conns_per_ip (0 — 1000)
+	obs       bool            // метрики (https), история и журнал ошибок (ручной сэмплер)
+	banThresh int             // ban.threshold (0 — по умолчанию)
 }
 
 type mtEnv struct {
@@ -68,12 +70,16 @@ func newMTEnv(t *testing.T, o mtOpts) *mtEnv {
 	}
 	m.e2e = newE2E(t, e2eOpts{
 		agents: n,
+		obs:    o.obs,
 		mut: func(c *config.ServerConfig) {
 			cf, kf := writeIngressPair(t, t.TempDir(), 1)
 			c.TLS = config.IngressTLS{Mode: config.TLSModeFiles, CertFile: cf, KeyFile: kf}
 			c.MTProto.Enabled = true
 			c.MTProto.FrontingDomain = mtDomain
 			c.MTProto.MaxConnsPerIP = perIP
+			if o.banThresh > 0 {
+				c.Ban.Threshold = o.banThresh
+			}
 			if o.dedicated {
 				c.MTProto.Listen = "127.0.0.1:0"
 			}
@@ -91,6 +97,7 @@ func newMTEnv(t *testing.T, o mtOpts) *mtEnv {
 	})
 	// newE2E строит proxyURL как http://…: листенер теперь TLS.
 	m.proxy = strings.TrimPrefix(m.proxyURL, "http://")
+	m.metricsURL = strings.Replace(m.metricsURL, "http://", "https://", 1) // вход MTProto — всегда TLS
 	if m.mtAddr == "" {
 		m.mtAddr = m.proxy
 	}

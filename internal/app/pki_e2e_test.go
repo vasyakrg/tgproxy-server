@@ -61,6 +61,10 @@ type pkiOpts struct {
 	// pkgVersion != "" — «версия сервера» с подписанным релизом в кэше загрузок: нужна для команды
 	// установки агента (enroll.Service требует проверенный пакет текущей версии).
 	pkgVersion string
+	// mtproto включает MTProto на shared-листенере (TLS-вход с SAN mtDomain).
+	mtproto bool
+	// scfg правит конфиг сервера до старта (после базовых значений).
+	scfg func(*config.ServerConfig)
 }
 
 const pkiMetricsBearer = "pki-metrics-bearer"
@@ -117,6 +121,16 @@ func newPKIEnvWith(t *testing.T, o pkiOpts) *pkiEnv {
 	if err := pki.GenerateKEK(scfg.PKI.KEKFile); err != nil {
 		t.Fatal(err)
 	}
+	if o.mtproto {
+		cf, kf := writeIngressPair(t, t.TempDir(), 1)
+		scfg.TLS = config.IngressTLS{Mode: config.TLSModeFiles, CertFile: cf, KeyFile: kf}
+		scfg.MTProto.Enabled = true
+		scfg.MTProto.FrontingDomain = mtDomain
+		scfg.MTProto.MaxConnsPerIP = 1000
+	}
+	if o.scfg != nil {
+		o.scfg(scfg)
+	}
 
 	// `tgproxy pki init`: без явной инициализации сервер не стартует.
 	if _, err := NewServer(context.Background(), scfg, logger); err == nil || !strings.Contains(err.Error(), "CA is not initialized") {
@@ -138,9 +152,13 @@ func newPKIEnvWith(t *testing.T, o pkiOpts) *pkiEnv {
 
 	gwLn, mln, pln, adln := listen(t), listen(t), listen(t), listen(t)
 	e.gwAddr = gwLn.Addr().String()
-	e.metrics = "http://" + mln.Addr().String()
-	e.proxyURL = "http://" + pln.Addr().String()
-	e.adminURL = "http://" + adln.Addr().String()
+	scheme := "http://"
+	if o.mtproto {
+		scheme = "https://"
+	}
+	e.metrics = scheme + mln.Addr().String()
+	e.proxyURL = scheme + pln.Addr().String()
+	e.adminURL = scheme + adln.Addr().String()
 	srv, err := NewServer(context.Background(), scfg, logger, ServerOptions{
 		Level: level, GatewayListener: gwLn, MetricsListener: mln, SamplerTicks: e.ticks,
 		GatewayURL:       "https://" + e.gwAddr,
@@ -297,7 +315,11 @@ func (e *pkiEnv) metricsBody() string {
 		e.t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+pkiMetricsBearer)
-	resp, err := http.DefaultClient.Do(req)
+	hc := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // тестовый самоподписанный сертификат входа
+	}}
+	defer hc.CloseIdleConnections()
+	resp, err := hc.Do(req)
 	if err != nil {
 		e.t.Fatal(err)
 	}

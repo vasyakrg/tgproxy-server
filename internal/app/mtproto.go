@@ -14,13 +14,16 @@ import (
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/config"
+	"github.com/vasyakrg/tgproxy-server/internal/metrics"
 	"github.com/vasyakrg/tgproxy-server/internal/mtproto"
 	"github.com/vasyakrg/tgproxy-server/internal/mtproto/mux"
 	"github.com/vasyakrg/tgproxy-server/internal/mtproto/upstream"
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
+	"github.com/vasyakrg/tgproxy-server/internal/server/access"
 	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
 	"github.com/vasyakrg/tgproxy-server/internal/server/balancer"
+	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
 
 const mtprotoResyncInterval = 5 * time.Second
@@ -33,6 +36,13 @@ type mtprotoState struct {
 	network   *upstream.Network
 	available atomic.Bool
 	mgr       atomic.Pointer[mtproto.Manager]
+	mux       atomic.Pointer[mux.Listener] // для SetOptions по SIGHUP
+
+	metrics  *metrics.Server
+	names    *secretNames
+	mobs     *mtproto.MetricsObserver
+	journal  *mtproto.Journal
+	listener string // метка tgp_mtproto_client_conns: shared|dedicated
 }
 
 // Route реализует mux.Router: до создания Manager MTProto недоступен (fallthrough).
@@ -45,7 +55,63 @@ func (m *mtprotoState) Route() mux.Route {
 	if r == nil {
 		return nil // typed-nil в интерфейсе не пропускаем
 	}
-	return r
+	return countedRoute{Route: r, m: m.metrics, listener: m.listener}
+}
+
+// countedRoute считает активные клиентские соединения (tgp_mtproto_client_conns).
+type countedRoute struct {
+	mux.Route
+	m        *metrics.Server
+	listener string
+}
+
+func (r countedRoute) Serve(idx int, conn net.Conn) {
+	r.m.MTProtoClientConns(r.listener, 1)
+	defer r.m.MTProtoClientConns(r.listener, -1)
+	r.Route.Serve(idx, conn)
+}
+
+// secretNames — кэш id секрета -> имя для метки secret (в метки идёт имя, не ключ и не префикс).
+// Промах (новый секрет) обновляет кэш из БД не чаще раза в секунду.
+type secretNames struct {
+	repo store.MTProtoSecretRepo
+	m    atomic.Pointer[map[int64]string]
+	last atomic.Int64 // unix-nano последнего обновления
+}
+
+const secretNamesMinGap = time.Second
+
+func (n *secretNames) refresh() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	list, err := n.repo.List(ctx)
+	n.last.Store(time.Now().UnixNano())
+	if err != nil {
+		return
+	}
+	m := make(map[int64]string, len(list))
+	for _, sec := range list {
+		m[sec.ID] = sec.Name
+	}
+	n.m.Store(&m)
+}
+
+// SecretName реализует mtproto.SecretNamer.
+func (n *secretNames) SecretName(id int64) (string, bool) {
+	if mp := n.m.Load(); mp != nil {
+		if name, ok := (*mp)[id]; ok {
+			return name, true
+		}
+	}
+	if time.Since(time.Unix(0, n.last.Load())) < secretNamesMinGap {
+		return "", false
+	}
+	n.refresh()
+	if mp := n.m.Load(); mp != nil {
+		name, ok := (*mp)[id]
+		return name, ok
+	}
+	return "", false
 }
 
 // errFrontingDomain — fronting_domain отсутствует в SAN сертификата входа.
@@ -110,12 +176,20 @@ func (s *Server) wireMTProto(cfg *config.ServerConfig) error {
 	if err != nil {
 		return fmt.Errorf("app: mtproto: load kek: %w", redact.Error(err))
 	}
-	m := &mtprotoState{kek: kek, keyed: balancer.NewKeyed()}
+	m := &mtprotoState{kek: kek, keyed: balancer.NewKeyed(), metrics: s.obs.m, listener: "shared"}
+	if !cfg.MTProto.Shared() {
+		m.listener = "dedicated"
+	}
+	m.names = &secretNames{repo: s.st.MTProtoSecrets()}
+	m.mobs = mtproto.NewMetricsObserver(s.obs.m, m.names)
+	m.journal = mtproto.NewJournal(s.st.MTProtoSessions(), s.logger)
+	s.obs.coll.SetMTProto(m.journal)
 	m.network, err = upstream.New(upstream.Options{
 		Picker:      upstream.KeyedPicker{K: m.keyed},
 		Streams:     s.tr,
 		Resolve:     s.reg.Ref,
 		DialTimeout: cfg.MTProto.AgentPool.DialTimeout,
+		Metrics:     s.obs.m,
 	})
 	if err != nil {
 		return fmt.Errorf("app: mtproto network: %w", err)
@@ -141,6 +215,76 @@ func (s *Server) syncMTProtoAgents() {
 	}
 	s.mt.keyed.Update(cands)
 	s.mt.available.Store(avail)
+	s.syncMTProtoDCMetrics(list)
+}
+
+// syncMTProtoDCMetrics зеркалит состояние DC из статусов агентов в dc_up / dc_rtt_seconds.
+func (s *Server) syncMTProtoDCMetrics(list []agents.State) {
+	for _, st := range list {
+		capable, dc := st.MTProtoView()
+		if !capable || dc == nil {
+			continue
+		}
+		out := make(map[int]metrics.DCState, len(dc))
+		for n, d := range dc {
+			out[n] = metrics.DCState{Up: d.Up, RTT: d.RTT}
+		}
+		s.obs.m.SetMTProtoDCs(st.Agent.ID, out)
+	}
+}
+
+// mtprotoDenied фиксирует отказ MTProto-клиента: запись в «Ошибках» (фаза mtproto,
+// без секрета) и учёт для автобана (считаются только причины с CountsForBan).
+func (s *Server) mtprotoDenied(ip netip.Addr, reason access.Reason) {
+	if s.obs != nil && s.obs.errlog != nil {
+		s.obs.errlog.Record(context.Background(), access.MTProtoErrorEvent(time.Now(), ip, reason))
+	}
+	if s.bans != nil {
+		s.bans.Record(ip, reason)
+	}
+}
+
+// onMTProtoReplay — повтор ClientHello (Manager.OnReplay): автобан по порогу ban.
+func (s *Server) onMTProtoReplay(ip netip.Addr) {
+	s.logger.Warn("mtproto: replayed ClientHello", "ip", ip.String())
+	s.mt.mobs.Reject("replay")
+	s.obs.m.MTProtoConnection("unknown", "replay")
+	s.mtprotoDenied(ip, access.ReasonMTProtoReplay)
+}
+
+// onMTProtoReject — отказ на входе mux (лимиты, таймаут, битая запись).
+func (s *Server) onMTProtoReject(ip netip.Addr, r mux.Reason) {
+	s.logger.Debug("mtproto: connection rejected", "reason", string(r), "ip", ip.String())
+	mtproto.RejectHook[mux.Reason](s.mt.mobs)(ip, r)
+	if r == mux.ReasonConnLimit {
+		s.obs.m.MTProtoConnection("unknown", "conn_limit")
+		s.mtprotoDenied(ip, access.ReasonMTProtoConnLimit)
+	}
+}
+
+// muxOptions собирает лимиты mux из конфига (старт и SIGHUP).
+func (s *Server) muxOptions(mc config.MTProtoConfig) mux.Options {
+	return mux.Options{
+		MaxConns: mc.MaxConns, MaxConnsPerIP: mc.MaxConnsPerIP, MaxPendingHandshakes: mc.MaxPendingHandshakes,
+		HandshakeTimeout: mc.HandshakeTimeout, Logger: s.logger,
+	}
+}
+
+// reloadMTProtoLimits применяет лимиты mux по SIGHUP без разрыва живых соединений.
+func (s *Server) reloadMTProtoLimits(mc config.MTProtoConfig) {
+	if s.mt == nil {
+		return
+	}
+	if ml := s.mt.mux.Load(); ml != nil {
+		ml.SetOptions(s.muxOptions(mc))
+	}
+	s.warnFDBudget(mc)
+}
+
+func (s *Server) warnFDBudget(mc config.MTProtoConfig) {
+	if w := mtproto.CheckFDBudget(mc.MaxConns); w != "" {
+		s.logger.Warn(w, "max_conns", mc.MaxConns)
+	}
 }
 
 // runMTProtoAgents следит за событиями реестра (и периодически пересинхронизируется:
@@ -197,29 +341,25 @@ func (s *Server) startMTProto(cfg *config.ServerConfig, proxyLn net.Listener) (n
 		}
 	}
 	hooks := mux.Hooks{
-		Banned: func(ip netip.Addr) bool { return s.bans != nil && s.bans.Banned(ip) },
-		OnReject: func(ip netip.Addr, r mux.Reason) {
-			s.logger.Debug("mtproto: connection rejected", "reason", string(r), "ip", ip.String())
-		},
+		Banned:        func(ip netip.Addr) bool { return s.bans != nil && s.bans.Banned(ip) },
+		OnReject:      s.onMTProtoReject,
+		OnFallthrough: s.mt.mobs.Fallthrough,
 	}
-	ml, err := mux.New(inner, s.mt, hooks, mux.Options{
-		MaxConns: mc.MaxConns, MaxConnsPerIP: mc.MaxConnsPerIP, MaxPendingHandshakes: mc.MaxPendingHandshakes,
-		HandshakeTimeout: mc.HandshakeTimeout, Logger: s.logger,
-	})
+	ml, err := mux.New(inner, s.mt, hooks, s.muxOptions(mc))
 	if err != nil {
 		return nil, nil, fmt.Errorf("app: mtproto mux: %w", err)
 	}
+	s.mt.mux.Store(ml)
+	s.warnFDBudget(mc)
 	kek := s.mt.kek
 	mgr, err := mtproto.New(mtproto.Options{
 		Secrets: s.st.MTProtoSecrets(),
 		Open:    func(sealed []byte, aad string) ([]byte, error) { return kek.Open(sealed, []byte(aad)) },
 		Network: s.mt.network, FrontingAddr: ml.FrontingAddr(),
 		Available: s.mt.available.Load,
-		OnReplay: func(ip netip.Addr) {
-			// Запись в автобан (mtproto_replay) — M11-T4.
-			s.logger.Warn("mtproto: replayed ClientHello", "ip", ip.String())
-		},
-		Logger: s.logger, Config: mc,
+		OnReplay:  s.onMTProtoReplay,
+		Observer:  mtproto.MultiObserver(s.mt.mobs, s.mt.journal),
+		Logger:    s.logger, Config: mc,
 	})
 	if err != nil {
 		_ = ml.Close()

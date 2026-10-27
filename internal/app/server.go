@@ -298,6 +298,7 @@ func (s *Server) Reload(ctx context.Context) error {
 	if old != nil && old.cfg.MTProto.NeedsRestart(cfg.MTProto) {
 		s.logger.Warn("mtproto: enabled/listen/fronting_domain require restart, not applied")
 	}
+	s.reloadMTProtoLimits(cfg.MTProto)
 	if s.obs.deliv != nil {
 		if err := s.obs.deliv.Reload(); err != nil {
 			s.logger.Warn("notify recipients reload failed, keeping previous", "error", redact.Error(err))
@@ -416,6 +417,7 @@ func (s *Server) Serve(ctx context.Context, proxyLn, adminLn net.Listener) error
 	if mtrt != nil {
 		s.runMTProtoAgents(rctx, &mtWG)
 		mtWG.Go(func() { _ = mtrt.mgr.Run(rctx) })
+		mtWG.Go(func() { s.mt.journal.Run(rctx) })
 	}
 	obsWait := s.runObs(rctx)
 	webWait := s.runWeb(rctx)

@@ -38,10 +38,12 @@ const (
 // agent_gateway, enrollment, ротация/удаление агентов и SSH-установщик. nil —
 // сервер работает со статическими agent_tls-файлами (без reverse и enrollment).
 type pkiState struct {
-	auth  *pki.Authority
-	deny  *pki.Denylist
-	pool  *transport.ReversePool
-	caDER []byte
+	auth *pki.Authority
+	deny *pki.Denylist
+	pool *transport.ReversePool
+	// mtpool — MTProto-класс reverse-соединений (nil без mtproto.enabled).
+	mtpool *transport.ReverseStream
+	caDER  []byte
 
 	gw      *gateway.Gateway
 	enroll  *enroll.Service // nil — не удалось определить публичный URL gateway
@@ -177,15 +179,22 @@ func (s *Server) initTransport(ctx context.Context, cfg *config.ServerConfig) er
 		config.AgentModeBoth:    transport.Both{Dial: dial, Reverse: p.pool},
 	})
 	if cfg.MTProto.Enabled {
-		// dial-стримы MTProto идут отдельным пулом TCP; reverse — ErrNotSupported до M11.
+		// dial-стримы MTProto идут отдельным пулом TCP, reverse — отдельным пулом
+		// h2-соединений ALPN tgproxy-mtproto/1 (независимо от Bot API).
 		ds := transport.NewDialStream(tls.Certificate{}, auth.Pool(),
 			transport.WithClientCertFunc(func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { //nolint:contextcheck // колбэк рукопожатия живёт вне запроса
 				return auth.ServerCert(context.Background())
 			}),
 			transport.WithPeerChecks(deny.Check),
 		)
+		pc := cfg.MTProto.AgentPool
+		p.mtpool = transport.NewReverseStream(
+			transport.WithMTProtoMaxConns(pc.MaxReverseConns),
+			transport.WithMTProtoStreamsPerConn(pc.MaxStreamsPerConn),
+		)
 		s.tr.RegisterStream(config.AgentModeDial, ds)
-		s.tr.RegisterStream(config.AgentModeBoth, transport.Both{DialStream: ds})
+		s.tr.RegisterStream(config.AgentModeReverse, p.mtpool)
+		s.tr.RegisterStream(config.AgentModeBoth, transport.Both{DialStream: ds, ReverseStream: p.mtpool})
 	}
 	return nil
 }
@@ -318,9 +327,13 @@ func (s *Server) wirePKI(cfg *config.ServerConfig) error {
 	} else {
 		s.logger.Warn("enrollment disabled: cannot derive public agent_gateway url (set server.public_base_url)")
 	}
-	gw, err := gateway.New(gateway.Config{
+	gcfg := gateway.Config{
 		GetCertificate: p.gatewayCert, CA: p.auth.Pool(), Lookup: repoLookup{s.st.Agents()}, Pool: p.pool,
-	}, gwOpts...)
+	}
+	if p.mtpool != nil {
+		gcfg.MTProtoPool = p.mtpool
+	}
+	gw, err := gateway.New(gcfg, gwOpts...)
 	if err != nil {
 		return fmt.Errorf("app: gateway: %w", err)
 	}

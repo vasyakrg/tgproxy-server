@@ -41,6 +41,7 @@ mtproto:
   dc_probe_interval: 30s
   agent_pool:
     reverse_conns: 2
+    max_reverse_conns: 16
     max_streams_per_conn: 500
     dial_timeout: 5s
 `
@@ -61,7 +62,7 @@ func TestMTProtoServerDefaults(t *testing.T) {
 		Enabled: false, Listen: "shared", MaxConns: 20000, MaxConnsPerIP: 64, MaxPendingHandshakes: 1024,
 		HandshakeTimeout: 5 * time.Second, IdleTimeout: 5 * time.Minute, TimeSkew: 2 * time.Minute,
 		ReplayCache: 4 << 20, DCProbeInterval: 30 * time.Second,
-		AgentPool: MTProtoAgentPool{ReverseConns: 2, MaxStreamsPerConn: 500, DialTimeout: 5 * time.Second},
+		AgentPool: MTProtoAgentPool{ReverseConns: 2, MaxReverseConns: 16, MaxStreamsPerConn: 500, DialTimeout: 5 * time.Second},
 	}
 	if d != want {
 		t.Fatalf("defaults = %+v, want %+v", d, want)
@@ -150,6 +151,8 @@ func TestMTProtoServerValidation(t *testing.T) {
 		{"idle zero", on + "  idle_timeout: 0s\n", "mtproto.idle_timeout"},
 		{"probe zero", on + "  dc_probe_interval: 0s\n", "mtproto.dc_probe_interval"},
 		{"reverse_conns zero", on + "  agent_pool:\n    reverse_conns: 0\n", "mtproto.agent_pool.reverse_conns"},
+		{"max_reverse_conns below reverse_conns", on + "  agent_pool:\n    reverse_conns: 4\n    max_reverse_conns: 3\n", "mtproto.agent_pool.max_reverse_conns"},
+		{"max_reverse_conns zero", on + "  agent_pool:\n    max_reverse_conns: 0\n", "mtproto.agent_pool.max_reverse_conns"},
 		{"streams per conn zero", on + "  agent_pool:\n    max_streams_per_conn: 0\n", "mtproto.agent_pool.max_streams_per_conn"},
 		{"pool dial zero", on + "  agent_pool:\n    dial_timeout: 0s\n", "mtproto.agent_pool.dial_timeout"},
 		{"limits checked when disabled", "mtproto:\n  max_conns: 0\n", "mtproto.max_conns"},

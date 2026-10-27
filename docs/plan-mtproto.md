@@ -123,7 +123,7 @@
 - [x] **M11-T7 · Журнал соединений и история** (S-obs + S-core) · зависит от M9-T3
   - Файлы: `internal/store/sqlite/migrations/0010_samples_mtproto.sql` (S-core), `internal/server/history/*` (ряды `mtproto_conns`, `mtproto_bytes_in/out`), `internal/mtproto/journal.go` (батч-писатель сессий раз в 10 с, очередь с потолком, переполнение → метрика, а не блокировка), retention как у `error_events`.
   - Тесты первыми: 10k завершённых соединений за 10 с пишутся одним батчем; переполнение очереди не блокирует relay; Prune по retention; ряды в 10s/5m агрегируются.
-- [ ] **M11-T8 · Wiring** (S-wire): reverse-пул в `internal/app/server.go`/`agent.go`, алерты, журнал, SIGHUP.
+- [x] **M11-T8 · Wiring** (S-wire): reverse-пул в `internal/app/server.go`/`agent.go`, алерты, журнал, SIGHUP.
   - Приёмка среза: reverse-агент за NAT обслуживает MTProto (probe до fake-DC и реального DC); метрики и алерты видны в `/metrics`; replay-флуд с одного IP приводит к автобану.
 
 **Срез M11:** оба режима связи, защита от злоупотреблений, полная наблюдаемость.

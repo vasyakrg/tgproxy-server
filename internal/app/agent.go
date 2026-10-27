@@ -95,6 +95,8 @@ func applyAgentMTProtoReload(a mtprotoLimitSetter, logger *slog.Logger, cur, nex
 // (ответил Telegram) пишется как "none".
 type agentRecorder struct{ *metrics.Agent }
 
+var _ agent.MTProtoRecorder = agentRecorder{}
+
 func (r agentRecorder) Request(codeClass, phase string) {
 	if phase == "" {
 		phase = "none"
