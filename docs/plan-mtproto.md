@@ -135,7 +135,7 @@
 - [ ] **M12-T1 · Сервис секретов и API** (S-web) · зависит от M9-T3, M10-T6
   - Файлы: `internal/server/web/api/mtproto.go` (сервис: генерация ключа `crypto/rand`, `KEK.Seal` c `aad "mtproto/<id>"`, ссылка через `link.Build`), `internal/server/web/api/mtproto_http.go` (маршруты из `docs/mtproto.md` §12, `RequireAuth`+`Protect` как `access_http.go`), `internal/server/web/auth/` — механизм «свежего TOTP» (отметка времени последней проверки TOTP в сессии, `RequireFreshTOTP(5m)`; сейчас его нет — добавляется), аудит `mtproto_secret.*`.
   - Тесты первыми: POST возвращает ссылку один раз, GET списка — только префикс; `/link` без свежего TOTP → `401 totp_required`, со свежим → ссылка + аудит `reveal`; DELETE без `confirm=yes` → 400; rotate создаёт новый секрет и ставит `grace_until`; CSRF как у остальных; ключ не в ответах (кроме create/link) и не в аудите.
-- [ ] **M12-T2 · Stats API** (S-web) · зависит от M10-T5, M11-T5
+- [x] **M12-T2 · Stats API** (S-web) · зависит от M10-T5, M11-T5
   - Файлы: `internal/server/web/api/stats.go` (`GET /api/v1/mtproto/stats`: agent×dc streams/rtt/up/errors, итоги), ряды `mtproto_conns`, `mtproto_bps` в `stats/timeseries`, фильтр `phase=mtproto` в `errors`.
   - Тесты первыми: форма JSON; пустая матрица при `enabled:false`; ряды в timeseries.
 - [ ] **M12-T3 · CLI** (S-wire) · зависит от M12-T1

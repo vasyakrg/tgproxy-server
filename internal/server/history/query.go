@@ -65,6 +65,9 @@ type Point struct {
 	// DeniedRPS — отказы доступа в секунду (все причины); DeniedBy — разбивка по причинам (для тултипа).
 	DeniedRPS float64            `json:"denied_rps"`
 	DeniedBy  map[string]float64 `json:"denied_by,omitempty"`
+	// MTConns — пик активных MTProto-соединений в окне; MTBps — полоса MTProto (вход+выход), байт/с.
+	MTConns int64   `json:"mtproto_conns"`
+	MTBps   float64 `json:"mtproto_bps"`
 }
 
 // Series — ответ Timeseries.
@@ -153,6 +156,7 @@ func (q *Query) Timeseries(ctx context.Context, rng Range, agentID string, since
 			T: r.At.Unix(), OKRPS: float64(r.OK) / sec, ErrRPS: float64(r.Err) / sec,
 			R429RPS: float64(r.RateLimited) / sec, P95Ms: r.P95Ms, P95N: BucketTotal(r.Buckets), Inflight: r.Inflight,
 			DeniedRPS: float64(sumDenied(r.Denied)) / sec, DeniedBy: ratePerSec(r.Denied, sec),
+			MTConns: r.MTConns, MTBps: float64(r.MTBytesIn+r.MTBytesOut) / sec,
 		})
 	}
 	if res == store.Res5m {
@@ -194,6 +198,9 @@ func (q *Query) openTail(ctx context.Context, id string, now time.Time, closed m
 		g.Inflight = max(g.Inflight, r.Inflight)
 		g.Buckets = addBuckets(g.Buckets, r.Buckets)
 		g.Denied = addDenied(g.Denied, r.Denied)
+		g.MTConns = max(g.MTConns, r.MTConns)
+		g.MTBytesIn += r.MTBytesIn
+		g.MTBytesOut += r.MTBytesOut
 	}
 	slices.SortFunc(order, func(a, b time.Time) int { return a.Compare(b) })
 	out := make([]Point, 0, len(order))
@@ -208,6 +215,7 @@ func (q *Query) openTail(ctx context.Context, id string, now time.Time, closed m
 			T: ts.Unix(), OKRPS: float64(g.OK) / span, ErrRPS: float64(g.Err) / span,
 			R429RPS: float64(g.RateLimited) / span, P95Ms: P95(g.Buckets), P95N: BucketTotal(g.Buckets), Inflight: g.Inflight,
 			DeniedRPS: float64(sumDenied(g.Denied)) / span, DeniedBy: ratePerSec(g.Denied, span),
+			MTConns: g.MTConns, MTBps: float64(g.MTBytesIn+g.MTBytesOut) / span,
 		})
 	}
 	return out, nil
