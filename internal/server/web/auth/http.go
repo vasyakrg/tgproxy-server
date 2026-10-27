@@ -38,6 +38,7 @@ func (a *Auth) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/auth/login", Protect(http.HandlerFunc(a.handleLogin)))
 	mux.Handle("POST /api/v1/auth/totp", Protect(http.HandlerFunc(a.handleTOTP)))
 	mux.Handle("POST /api/v1/auth/logout", Protect(http.HandlerFunc(a.handleLogout)))
+	mux.Handle("POST /api/v1/auth/totp/confirm", Protect(a.RequireAuth(http.HandlerFunc(a.handleTOTPConfirm))))
 	mux.Handle("GET /api/v1/auth/me", Protect(a.RequireAuth(http.HandlerFunc(a.handleMe))))
 }
 

@@ -297,25 +297,8 @@ func (a *Auth) TOTPStep(ctx context.Context, pending, code, ip string) (*Session
 		_ = a.sessions.Destroy(ctx, pending)
 		return nil, ErrPendingInvalid
 	}
-	if usr.TOTPSecretEnc != "" {
-		verr := a.totp.Verify(ctx, p.User, usr.TOTPSecretEnc, code, a.now())
-		switch {
-		case errors.Is(verr, ErrTOTPInvalid), errors.Is(verr, ErrTOTPReplayed):
-			reason := "bad_totp"
-			if errors.Is(verr, ErrTOTPReplayed) {
-				reason = "totp_replay"
-			}
-			left, err := a.registerFailure(ctx, p.User, ip, reason)
-			if err != nil {
-				return nil, err
-			}
-			return nil, &FailError{Err: ErrInvalidCode, AttemptsLeft: left}
-		case verr != nil:
-			a.log.Error("totp verification error", "user", p.User, "err", verr)
-			return nil, fmt.Errorf("auth: totp: %w", verr)
-		}
-	} else if !a.allowPwd {
-		return nil, ErrTOTPNotConfigured
+	if err := a.checkTOTP(ctx, p.User, usr, code, ip); err != nil {
+		return nil, err
 	}
 	_ = a.sessions.Destroy(ctx, pending)
 	s, err := a.sessions.Create(ctx, p.User, ip)
@@ -324,8 +307,40 @@ func (a *Auth) TOTPStep(ctx context.Context, pending, code, ip string) (*Session
 	}
 	_ = a.store.RateState().Delete(ctx, failKey(p.User, ip))
 	_ = a.store.RateState().Delete(ctx, failKeyGlobal(p.User))
+	if err := a.MarkTOTPFresh(ctx, s); err != nil {
+		return nil, err
+	}
 	a.audit(ctx, p.User, AuditLoginOK, ip, "")
 	return s, nil
+}
+
+// checkTOTP проверяет код пользователя; неверный/повторный код учитывается как неудача входа.
+// Пользователь без TOTP-секрета допускается только в режиме allow_password_only.
+func (a *Auth) checkTOTP(ctx context.Context, user string, usr User, code, ip string) error {
+	if usr.TOTPSecretEnc == "" {
+		if !a.allowPwd {
+			return ErrTOTPNotConfigured
+		}
+		return nil
+	}
+	verr := a.totp.Verify(ctx, user, usr.TOTPSecretEnc, code, a.now())
+	switch {
+	case verr == nil:
+		return nil
+	case errors.Is(verr, ErrTOTPInvalid), errors.Is(verr, ErrTOTPReplayed):
+		reason := "bad_totp"
+		if errors.Is(verr, ErrTOTPReplayed) {
+			reason = "totp_replay"
+		}
+		left, err := a.registerFailure(ctx, user, ip, reason)
+		if err != nil {
+			return err
+		}
+		return &FailError{Err: ErrInvalidCode, AttemptsLeft: left}
+	default:
+		a.log.Error("totp verification error", "user", user, "err", verr)
+		return fmt.Errorf("auth: totp: %w", verr)
+	}
 }
 
 // Logout уничтожает сессию и пишет аудит.
@@ -333,6 +348,7 @@ func (a *Auth) Logout(ctx context.Context, s *Session, ip string) error {
 	if err := a.sessions.Destroy(ctx, s.Token); err != nil {
 		return err
 	}
+	_ = a.store.RateState().Delete(ctx, freshKey(s.Token))
 	a.audit(ctx, s.User, AuditLogout, ip, "")
 	return nil
 }

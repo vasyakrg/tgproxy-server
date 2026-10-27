@@ -132,7 +132,7 @@
 
 ## M12 — API, CLI, UI · объём **L**
 
-- [ ] **M12-T1 · Сервис секретов и API** (S-web) · зависит от M9-T3, M10-T6
+- [x] **M12-T1 · Сервис секретов и API** (S-web) · зависит от M9-T3, M10-T6
   - Файлы: `internal/server/web/api/mtproto.go` (сервис: генерация ключа `crypto/rand`, `KEK.Seal` c `aad "mtproto/<id>"`, ссылка через `link.Build`), `internal/server/web/api/mtproto_http.go` (маршруты из `docs/mtproto.md` §12, `RequireAuth`+`Protect` как `access_http.go`), `internal/server/web/auth/` — механизм «свежего TOTP» (отметка времени последней проверки TOTP в сессии, `RequireFreshTOTP(5m)`; сейчас его нет — добавляется), аудит `mtproto_secret.*`.
   - Тесты первыми: POST возвращает ссылку один раз, GET списка — только префикс; `/link` без свежего TOTP → `401 totp_required`, со свежим → ссылка + аудит `reveal`; DELETE без `confirm=yes` → 400; rotate создаёт новый секрет и ставит `grace_until`; CSRF как у остальных; ключ не в ответах (кроме create/link) и не в аудите.
 - [x] **M12-T2 · Stats API** (S-web) · зависит от M10-T5, M11-T5
