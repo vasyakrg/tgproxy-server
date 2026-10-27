@@ -51,6 +51,7 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, logger *slog.Logger,
 		}
 		defer msrv.stop(context.WithoutCancel(ctx))
 	}
+	curMTP := cfg.MTProto
 	if o.ReloadConfig != nil && o.Level != nil {
 		onReload(ctx, func() {
 			nc, err := o.ReloadConfig()
@@ -64,14 +65,30 @@ func RunAgent(ctx context.Context, cfg *config.AgentConfig, logger *slog.Logger,
 				return
 			}
 			o.Level.Set(lvl)
-			logger.Info("config reloaded (only log level is applied at runtime)")
+			applyAgentMTProtoReload(a, logger, curMTP, nc.MTProto)
+			curMTP = nc.MTProto
+			logger.Info("config reloaded (applied at runtime: log level, mtproto limits)")
 		})
 	}
+	defer a.StartMTProtoProbe(ctx)()
 	logger.Info("agent starting", "mode", cfg.Mode, "api", cfg.Listen.API, "server_url", cfg.ServerURL)
 	if o.Listener != nil {
 		return a.Serve(ctx, o.Listener)
 	}
 	return a.Run(ctx)
+}
+
+type mtprotoLimitSetter interface {
+	SetMTProtoLimits(config.AgentMTProtoConfig)
+}
+
+// applyAgentMTProtoReload применяет лимиты mtproto по SIGHUP; enabled меняется
+// только рестартом.
+func applyAgentMTProtoReload(a mtprotoLimitSetter, logger *slog.Logger, cur, next config.AgentMTProtoConfig) {
+	if cur.Enabled != next.Enabled {
+		logger.Warn("mtproto.enabled changed: restart required, not applied")
+	}
+	a.SetMTProtoLimits(next)
 }
 
 // agentRecorder адаптирует metrics.Agent к agent.Recorder: пустая фаза

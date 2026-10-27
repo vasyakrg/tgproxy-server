@@ -143,7 +143,7 @@ func (p *dcProber) probeOne(ctx context.Context, dc int, addr []netip.AddrPort) 
 	if ctx.Err() != nil {
 		return
 	}
-	pctx, cancel := context.WithTimeout(ctx, p.a.mtp.cfg.DialTimeout)
+	pctx, cancel := context.WithTimeout(ctx, p.a.mtp.cfg().DialTimeout)
 	defer cancel()
 	start := time.Now()
 	conn, err := p.a.mtp.dialFn(pctx, addr)

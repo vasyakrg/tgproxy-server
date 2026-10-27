@@ -472,7 +472,9 @@ func TestMTProtoAddrs(t *testing.T) {
 	if len(v4) == 0 || !v4[0].Addr().Is4() {
 		t.Fatalf("v4 = %v", v4)
 	}
-	r.cfg.IPv6 = true
+	lim := r.cfg()
+	lim.IPv6 = true
+	r.lim.Store(&lim)
 	both := r.addrs(2)
 	if len(both) != len(v4)+1 || !both[0].Addr().Is6() || !both[len(both)-1].Addr().Is4() {
 		t.Fatalf("ipv6 first expected: %v", both)
@@ -485,5 +487,25 @@ func TestMTProtoAddrs(t *testing.T) {
 func TestDCDialerNoAddrs(t *testing.T) {
 	if _, err := newDCDialer(true).dial(context.Background(), nil); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+func TestMTProtoSetLimitsKeepsLiveStreams(t *testing.T) {
+	dc := newFakeDC(t, echoDC)
+	e := newMTEnv(t, dc.addr, func(c *config.AgentConfig) { c.MTProto.MaxStreams = 2 })
+	_, _ = openStream(t, e, "/_agent/mtproto/dc/2", nil)
+	_, _ = openStream(t, e, "/_agent/mtproto/dc/2", nil)
+	waitStreams(t, e.agent, 2)
+
+	next := e.cfg.MTProto
+	next.MaxStreams = 3
+	next.Enabled = false // enabled игнорируется: только рестарт
+	e.agent.SetMTProtoLimits(next)
+	if !e.agent.MTProtoEnabled() {
+		t.Fatal("enabled изменился на лету")
+	}
+	waitStreams(t, e.agent, 2) // живые стримы не разорваны
+	if _, code := openStream(t, e, "/_agent/mtproto/dc/2", nil); code != http.StatusOK {
+		t.Fatalf("третий стрим после увеличения лимита: code = %d", code)
 	}
 }

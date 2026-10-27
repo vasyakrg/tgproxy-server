@@ -31,22 +31,36 @@ var relayBufs = sync.Pool{New: func() any { b := make([]byte, relayBufSize); ret
 // сервера не используются.
 type mtprotoRelay struct {
 	a        *Agent
-	cfg      config.AgentMTProtoConfig
-	override map[int][]netip.AddrPort // тест-оверрайд таблицы DC; nil — вшитая
+	lim      atomic.Pointer[config.AgentMTProtoConfig] // лимиты; меняются через SetMTProtoLimits
+	override map[int][]netip.AddrPort                  // тест-оверрайд таблицы DC; nil — вшитая
 	dialer   *dcDialer
 	dialFn   func(ctx context.Context, addrs []netip.AddrPort) (net.Conn, error)
 	streams  atomic.Int64
 }
 
 func newMTProtoRelay(a *Agent) *mtprotoRelay {
-	r := &mtprotoRelay{a: a, cfg: a.cfg.MTProto, override: a.cfg.MTProtoDCOverride()}
+	r := &mtprotoRelay{a: a, override: a.cfg.MTProtoDCOverride()}
+	c := a.cfg.MTProto
+	r.lim.Store(&c)
 	r.dialer = newDCDialer(r.override != nil)
 	r.dialFn = r.dialer.dial
 	return r
 }
 
+// cfg возвращает текущие лимиты релея.
+func (r *mtprotoRelay) cfg() config.AgentMTProtoConfig { return *r.lim.Load() }
+
+// SetMTProtoLimits применяет max_streams, dial/idle/max_duration, ipv6 и
+// dc_probe_interval на лету (SIGHUP) без разрыва живых стримов: новые лимиты
+// действуют на новые стримы. enabled не меняется (только рестарт).
+func (a *Agent) SetMTProtoLimits(next config.AgentMTProtoConfig) {
+	next.Enabled = a.mtp.cfg().Enabled
+	a.mtp.lim.Store(&next)
+	a.SetDCProbeInterval(next.DCProbeInterval)
+}
+
 // MTProtoEnabled сообщает, включён ли релей MTProto (mtproto.enabled).
-func (a *Agent) MTProtoEnabled() bool { return a.mtp.cfg.Enabled }
+func (a *Agent) MTProtoEnabled() bool { return a.mtp.cfg().Enabled }
 
 // MTProtoStreams возвращает число активных MTProto-стримов (для /_agent/status).
 func (a *Agent) MTProtoStreams() int { return int(a.mtp.streams.Load()) }
@@ -54,7 +68,7 @@ func (a *Agent) MTProtoStreams() int { return int(a.mtp.streams.Load()) }
 func (r *mtprotoRelay) acquire() bool {
 	for {
 		n := r.streams.Load()
-		if n >= int64(r.cfg.MaxStreams) {
+		if n >= int64(r.cfg().MaxStreams) {
 			return false
 		}
 		if r.streams.CompareAndSwap(n, n+1) {
@@ -70,7 +84,7 @@ func (r *mtprotoRelay) addrs(dc int) []netip.AddrPort {
 	if r.override != nil {
 		return r.override[dc]
 	}
-	if r.cfg.IPv6 {
+	if r.cfg().IPv6 {
 		return append(tgapi.DCAddrs(dc, true), tgapi.DCAddrs(dc, false)...)
 	}
 	return tgapi.DCAddrs(dc, false)
@@ -81,7 +95,7 @@ func (a *Agent) handleMTProto(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *mtprotoRelay) serve(w http.ResponseWriter, req *http.Request) {
-	if !r.cfg.Enabled {
+	if !r.cfg().Enabled {
 		writeAgentError(w, http.StatusNotFound, "", "tgproxy: not found")
 		return
 	}
@@ -120,7 +134,7 @@ func (r *mtprotoRelay) serve(w http.ResponseWriter, req *http.Request) {
 
 // connect устанавливает TCP к DC; при ошибке сам отвечает клиенту.
 func (r *mtprotoRelay) connect(w http.ResponseWriter, req *http.Request, dc int, addrs []netip.AddrPort) (net.Conn, bool) {
-	ctx, cancel := context.WithTimeout(req.Context(), r.cfg.DialTimeout)
+	ctx, cancel := context.WithTimeout(req.Context(), r.cfg().DialTimeout)
 	defer cancel()
 	conn, err := r.dialFn(ctx, addrs)
 	if err == nil {
@@ -226,8 +240,8 @@ func (r *mtprotoRelay) downstream(w http.ResponseWriter, rc *http.ResponseContro
 
 // watch закрывает conn по idle_timeout, max_duration или отмене запроса.
 func (r *mtprotoRelay) watch(ctx context.Context, conn net.Conn, last *atomic.Int64, done <-chan struct{}) {
-	idle := r.cfg.IdleTimeout
-	maxT := time.NewTimer(r.cfg.MaxDuration)
+	idle := r.cfg().IdleTimeout
+	maxT := time.NewTimer(r.cfg().MaxDuration)
 	defer maxT.Stop()
 	idleT := time.NewTimer(idle)
 	defer idleT.Stop()

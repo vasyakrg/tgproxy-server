@@ -19,3 +19,6 @@ data_dir: ./dev/data/agent2
 logging:
   level: debug
   format: text
+
+mtproto:                       # релей MTProto-стримов сервера к DC Telegram
+  enabled: true

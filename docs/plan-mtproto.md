@@ -58,7 +58,7 @@
 - [x] **M9-T6 · `StreamTransport` (dial)** (S-agent)
   - Файлы: `internal/transport/stream.go` (`StreamTransport`, `streamConn`: `io.Pipe` → тело, `resp.Body` → чтение, `CloseWrite`/`CloseRead`/`Close`, дедлайны, `RemoteAddr` `*net.TCPAddr`), `internal/transport/stream_dial.go` (второй `http.Transport` на агента, `http2.Transport` с `MaxReadFrameSize`, окнами ≥4 МБ, `StrictMaxConcurrentStreams`, PING), `registry.go`/`both.go` (выбор реализации по `AgentRef.Mode`; reverse — `ErrNotSupported` до M11-T1).
   - Тесты первыми: `OpenMTProto` возвращает conn только после 200; 403/502/503 агента → `*PhaseError` с фазой из заголовка; `CloseWrite` доставляет EOF агенту, обратное направление продолжает работать; Bot API-запросы и 500 MTProto-стримов идут по разным TCP (проверка через `httptrace`/счётчик соединений); goleak.
-- [ ] **M9-T7 · Wiring агента** (S-wire)
+- [x] **M9-T7 · Wiring агента** (S-wire)
   - Файлы: `internal/app/agent.go` (конфиг `mtproto`, пробы, метрики-заглушки), SIGHUP для лимитов.
   - Приёмка среза: `curl --http2 --cert … -X POST https://127.0.0.1:8443/_agent/mtproto/dc/2` открывает стрим до fake-DC (dev) и до реального DC 2 (агент с доступом); `/_agent/status` содержит `capabilities` и матрицу DC.
 
@@ -70,7 +70,7 @@
 
 Цель: клиент с FakeTLS-секретом проходит через сервер и агента до DC; невалидный клиент видит обычный TLS.
 
-- [ ] **M10-T1 · `faketls`: разбор ClientHello и HMAC-разводка** (S-mtproto) · зависит от M9-T0
+- [x] **M10-T1 · `faketls`: разбор ClientHello и HMAC-разводка** (S-mtproto) · зависит от M9-T0
   - Файлы: `internal/mtproto/faketls/clienthello.go` (`ReadFirstRecord(r, max=16KiB)`, `Parse(b) (Hello{SNI, Random, SessionID, raw}, error)`), `match.go` (`Match(hello, secrets []Key, domain string, now, skew) (idx int, ok bool)`: HMAC-SHA256 по ClientHello с обнулённым `random`, `subtle.ConstantTimeCompare`, timestamp из XOR последних 4 байт, перебор всех секретов без раннего выхода), `fuzz_test.go`.
   - Тесты первыми: эталонные ClientHello, сгенерированные probe-клиентом (M10-T6) и захваченные у tdlib (testdata); неверный SNI / HMAC / timestamp вне окна → `ok=false`; два секрета — выбирается верный; не-Handshake запись и >16 КиБ → ошибка; `testing.AllocsPerRun` фиксирует отсутствие аллокаций на секрет; **fuzz** `FuzzParseClientHello` (в `make fuzz` и nightly).
 - [ ] **M10-T2 · `mux`: muxListener, replayConn, fronting-листенер** (S-mtproto) · зависит от M10-T1
@@ -82,10 +82,10 @@
 - [ ] **M10-T4 · `upstream.Network` через агентов** (S-mtproto) · зависит от M9-T6, M10-T5
   - Файлы: `internal/mtproto/upstream/network.go` (`Dial`/`DialContext`: addr→DC, `context.WithTimeout(dial_timeout)`, `Balancer.Pick(dc)`, `StreamTransport.OpenMTProto`, учёт `exclude` в пределах одного соединения клиента), `addrmap.go` (из `essentials.TelegramCoreAddresses`), `conn.go` (`essentials.Conn` поверх стрима, release балансировщика на `Close`), `nativedialer.go`.
   - Тесты первыми: неизвестный адрес → ошибка без обращения к агентам; IPv4-набор `tgapi.DCAddrs` ≡ `essentials.TelegramCoreAddresses` (защита от рассинхрона таблиц); ошибка агента A → следующий Dial mtg идёт на агента B; inflight уменьшается на `Close`, а не на открытие; дедлайны conn работают.
-- [ ] **M10-T5 · Keyed-балансировщик (agent, dc)** (S-proxy) · параллельно с M10-T1…T3
+- [x] **M10-T5 · Keyed-балансировщик (agent, dc)** (S-proxy) · параллельно с M10-T1…T3
   - Файлы: `internal/server/balancer/keyed.go` (`NewKeyed(opts) *Keyed`; `Update(agents []KeyedCandidate{ID, Weight, Healthy, Draining, Capable, DC map[int]DCState{Up, RTT}})`, `Pick(ctx, dc, exclude)`; переиспользует `ewma.go`, `breaker.go`), `internal/server/agents` — проброс `Capabilities`/`MTProto` из статуса в событие реестра.
   - Тесты первыми: агент без `mtproto/1` не выбирается; `dc.up=false` исключает агента только для этого DC; EWMA засевается `rtt_ms`; score = (streams+1)×EWMA/weight, P2C на 10k выборок распределяет пропорционально; breaker по ключу не влияет на другие DC того же агента и на Bot API-балансировщик; draining исключает; покрытие ≥ 85%.
-- [ ] **M10-T6 · Probe-клиент и fake-DC** (S-mtproto) · параллельно с M10-T1
+- [x] **M10-T6 · Probe-клиент и fake-DC** (S-mtproto) · параллельно с M10-T1
   - Файлы: `internal/mtproto/link/link.go` (`Build(host, port, key, domain) (tg, https string)`, `Parse(link) (host, port, key, domain, error)`), `internal/mtproto/probe/client.go` (FakeTLS ClientHello с HMAC → ServerHello → obfuscated2 → `req_pq_multi` → `resPQ`), `internal/mtproto/probe/fakedc.go` (obfuscated2-сервер, отвечает `resPQ`).
   - Тесты первыми: `link.Parse(link.Build(…))` — круговой; ссылка содержит `ee` + 32 hex + hex домена; probe против fake-DC напрямую (без прокси) получает `resPQ` с нашим nonce; неверный секрет → ошибка рукопожатия, а не зависание.
 - [ ] **M10-T7 · Wiring сервера** (S-wire) · зависит от M10-T1…T6

@@ -71,3 +71,14 @@ func (e *ewma) Observe(d time.Duration) {
 	}
 	e.value = ewmaAlpha*s + (1-ewmaAlpha)*e.value
 }
+
+// seed засевает оценку значением d, если реальных наблюдений ещё не было.
+func (e *ewma) seed(d time.Duration) {
+	s := d.Seconds()
+	if s <= 0 {
+		return
+	}
+	e.mu.Lock()
+	e.value, e.init, e.last = s, true, time.Time{}
+	e.mu.Unlock()
+}

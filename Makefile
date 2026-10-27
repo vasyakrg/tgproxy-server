@@ -36,7 +36,7 @@ FUZZTIME ?= 60s
 FUZZ_TARGETS := ./internal/tgapi:FuzzParsePath ./internal/tgapi:FuzzParseEnvelope \
 	./internal/redact:FuzzString ./internal/redact:FuzzKeys \
 	./internal/server/web/auth:FuzzParsePHC ./internal/server/router:FuzzExtractChatID \
-	./internal/selfupdate:FuzzParseRequest ./internal/deployhelper:FuzzArgs
+	./internal/selfupdate:FuzzParseRequest ./internal/deployhelper:FuzzArgs ./internal/mtproto/faketls:FuzzParseClientHello
 
 fuzz: ## фаззеры (FUZZTIME=60s на каждый)
 	@set -e; for t in $(FUZZ_TARGETS); do \

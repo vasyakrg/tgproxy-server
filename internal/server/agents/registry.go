@@ -55,6 +55,9 @@ const (
 	AgentAdded    EventType = "agent_added"
 	AgentRemoved  EventType = "agent_removed"
 	AgentDraining EventType = "agent_draining"
+	// AgentMTProto — изменились capabilities или состояние DC (up/rtt) агента.
+	// Состояние читается из List/Get (State.MTProtoView).
+	AgentMTProto EventType = "agent_mtproto"
 )
 
 // Event — событие реестра. Draining заполнен только для AgentDraining.

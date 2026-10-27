@@ -287,6 +287,9 @@ func (s *Server) Reload(ctx context.Context) error {
 		!reflect.DeepEqual(old.cfg.Ban, cfg.Ban) || old.cfg.GeoIP != cfg.GeoIP) {
 		s.logger.Warn("listen/tls/store/ban/geoip settings changed: restart required, not applied")
 	}
+	if old != nil && old.cfg.MTProto.NeedsRestart(cfg.MTProto) {
+		s.logger.Warn("mtproto: enabled/listen/fronting_domain require restart, not applied")
+	}
 	if s.obs.deliv != nil {
 		if err := s.obs.deliv.Reload(); err != nil {
 			s.logger.Warn("notify recipients reload failed, keeping previous", "error", redact.Error(err))

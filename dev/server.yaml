@@ -73,6 +73,13 @@ access_rules:
   - name: dev-key                  # только ключ: /k/tgp_devkey_local_only/bot<token>/<method>
     key_sha256: 5d920d4d62626d92a41b29c61d704f31857190681e0f521e08d22ce671082be7
 
+# MTProto-прокси для клиентов Telegram (docs/mtproto.md). enabled/listen/fronting_domain — только рестарт.
+# mtproto:
+#   enabled: true
+#   listen: shared                 # или отдельный адрес, напр. ":8453"
+#   public_host: proxy.example.com
+#   fronting_domain: www.example.com
+
 logging:
   level: debug
   format: text

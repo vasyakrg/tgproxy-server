@@ -82,6 +82,7 @@ func (r *Registry) applySuccessLocked(e *entry, st *transport.AgentStatus) {
 	e.passiveFails = 0
 	e.LastSeen = r.now()
 	cp := *st
+	changed := mtprotoChanged(e.LastStatus, &cp)
 	e.LastStatus = &cp
 	e.reportedDraining = st.Draining
 	if eff := e.Agent.Draining || st.Draining; eff != e.Draining {
@@ -93,6 +94,9 @@ func (r *Registry) applySuccessLocked(e *entry, st *transport.AgentStatus) {
 		e.Up = true
 		r.sink.SetHealthy(id, true)
 		r.publishLocked(AgentUp, id, false)
+	}
+	if changed {
+		r.publishLocked(AgentMTProto, id, false)
 	}
 }
 
