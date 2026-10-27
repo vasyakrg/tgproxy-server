@@ -75,6 +75,27 @@ sudo runuser -u tgproxy -- tgproxy hostkeys forget <host:port> -c /etc/tgproxy/s
 
 Событие пишется в аудит (`hostkey.forget`). При следующей установке отпечаток подтверждается заново — сверяйте его с консолью хостинга.
 
+## Баны и автобан
+
+Источник правды — таблица `bans` в SQLite; сервер перечитывает её по версии каждые ~2 с, поэтому баны из CLI/UI действуют без рестарта.
+
+```sh
+sudo runuser -u tgproxy -- tgproxy ban list -c /etc/tgproxy/server.yaml
+sudo runuser -u tgproxy -- tgproxy ban add --ip 203.0.113.7 --duration 24h --comment "скан" -c /etc/tgproxy/server.yaml   # 30m, 1h, 7d; либо --permanent
+sudo runuser -u tgproxy -- tgproxy ban delete --ip 203.0.113.7 -c /etc/tgproxy/server.yaml                               # или --id N
+```
+
+- **Клиент с правилом «сеть + ключ» получает 403 и сам себя «банит».** Это И: запрос из сети без ключа — `key_required`. Сети правил доступа от автобана защищены (клиент из разрешённой сети не банится никогда), но 403 он получает, пока не добавит ключ в адрес (`/k/<ключ>/bot…`) или заголовок `X-Proxy-Key`. Хотите «сеть ИЛИ ключ» — заведите два правила.
+- **Кого забанило по ошибке.** «Баны» → иконка разбана; в «Ошибках» фильтр «Причина»/IP покажет, чем именно он набрал порог. Эскалация (1ч → 24ч → 7д) хранится в строке бана; разбан её сбрасывает.
+- **Автобан не срабатывает.** Проверьте `ban.enabled`; что клиент не за reverse proxy без `trusted_proxies` (тогда клиентом считается адрес прокси — приватный/доверенный адрес не банится); что отказы именно `no_rule|key_required|bad_key` (`rate_limited` не считается). Журнал: `ban: autoban` (WARN) и `ban: autoban skipped, address is protected`.
+- **Откуда IP.** `client_ip` берётся из `X-Forwarded-For` только если соединение пришло с `trusted_proxies` (правый недоверенный адрес); иначе — адрес соединения. IPv6 банится целой /64.
+- **Метрики/графики.** `tgp_denied_total{reason}`; забаненные запросы (`banned`) в журнал ошибок не пишутся (флуд), лог — Debug (`logging.level: debug`).
+- Запись `ban.create|ban.delete|ban.auto` в аудите; переменная `ban.*` — только через рестарт (`SIGHUP` предупредит, что не применяется).
+
+### GeoIP (флаги стран)
+
+Файл `geoip.file` (по умолчанию `/usr/share/tgproxy/geoip/dbip-country-lite.mmdb`) поставляется пакетом и обновляется вместе с ним; отдельного обновления и сетевых запросов нет. Нет файла или он битый — сервер стартует, в журнале `geoip database not found/unavailable`, флаги не показываются. Своя база: положите mmdb в любое место и укажите в `geoip.file` (формат MaxMind DB, записи `country.iso_code`). Лицензия DB-IP Lite — CC BY 4.0 (атрибуция «IP Geolocation by DB-IP» показана в UI).
+
 ## Сертификаты
 
 - **Агент**: листовой сертификат 90 дней, агент сам продлевает его по mTLS на 2/3 срока (`/_agent/csr` → `/_agent/cert`), рестарт не нужен. Отпечаток CA: `tgproxy pki fingerprint -c /etc/tgproxy/server.yaml`.

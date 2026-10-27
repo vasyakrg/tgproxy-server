@@ -41,6 +41,7 @@ func Catalog() []EventInfo {
 		{HostKeyMismatch, "Ключ SSH-хоста изменился", "Возможна подмена хоста при установке агента", SeverityCritical},
 		{AgentEnrolled, "Агент подключён", "Новый агент за NAT завершил подключение", SeverityInfo},
 		{RolloutFailed, "Раскатка обновления остановлена", "Обновление агента не прошло проверку, остальные агенты не тронуты", SeverityCritical},
+		{IPAutoBan, "Автобан IP", "Встроенный fail2ban заблокировал адреса за серию отказов доступа (одно сообщение на пачку)", SeverityWarning},
 	}
 }
 

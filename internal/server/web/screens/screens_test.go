@@ -20,6 +20,7 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
 	"github.com/vasyakrg/tgproxy-server/internal/server/history"
 	"github.com/vasyakrg/tgproxy-server/internal/server/web"
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/api"
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/screens"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 	"github.com/vasyakrg/tgproxy-server/internal/store/memtest"
@@ -448,4 +449,18 @@ func TestGolden(t *testing.T) {
 		Agent: "ist-1", Phase: "dial", PhaseTone: "warn", Code: "200", OutcomeText: "переотправлен", OutcomeTone: "ok",
 		Description: "connect: <i/o> timeout",
 	}}, "/errors?cursor=abc&phase=dial"))
+	golden(t, "error_rows_access", screens.ErrorRows([]screens.ErrorRow{{
+		Time: "14:32:18", RequestID: "01JBX4…Q2", RequestIDFull: "01JBX4ABCDEFGHQ2", BotID: "6123450001", Method: "sendmessage",
+		Agent: "—", Phase: "access", PhaseTone: "tg", Code: "403", OutcomeText: "отказ боту", OutcomeTone: "err",
+		Description: "access denied: key_required", IP: "203.0.113.9", Code2: "NL", Flag: "🇳🇱",
+		Reason: "key_required", ReasonText: "нужен ключ", ReasonTone: "warn", BanURL: "/bans/new?from=errors&ip=203.0.113.9",
+	}}, ""))
+	golden(t, "bans_table", screens.BansSection([]screens.BanRow{
+		{ID: 7, IP: "203.0.113.9", Code: "NL", Flag: "🇳🇱", Source: "авто", SourceTone: "warn", Actor: "система", Comment: "автобан: 20 отказов за 10m0s", Left: "47 мин", Hits: "1 204", Level: 1},
+		{ID: 8, IP: "2001:db8:1:2::/64", Source: "вручную", Actor: "admin", Left: "навсегда", Permanent: true, Hits: "0"},
+	}, false))
+	golden(t, "bans_empty", screens.BansSection(nil, false))
+	golden(t, "ban_form", screens.BanForm(screens.BanFormVM{IP: "203.0.113.9", Duration: "24h", From: "errors"}))
+	golden(t, "ban_form_errors", screens.BanForm(screens.BanFormVM{IP: "10.1.2.3", Duration: "1h", From: "bans",
+		Errors: api.FieldErrors{"ip": "Этот адрес банить нельзя: приватный адрес"}}))
 }

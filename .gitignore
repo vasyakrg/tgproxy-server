@@ -20,3 +20,7 @@ deploy/.env
 deploy/known_hosts
 # отчёты валидации: адреса и домены прод-стенда — не в публичный репозиторий
 /swarm-report/
+
+# GeoIP-база DB-IP (качается scripts/geoip/fetch.sh при сборке релиза)
+/build/
+*.mmdb

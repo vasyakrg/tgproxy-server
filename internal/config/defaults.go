@@ -56,6 +56,16 @@ func DefaultServer() *ServerConfig {
 			CertExpiryWarn:  14 * 24 * time.Hour,
 			DeliveryTimeout: 30 * time.Second,
 		},
+		Ban: BanConfig{
+			Enabled:    true,
+			Threshold:  20,
+			Window:     10 * time.Minute,
+			Duration:   time.Hour,
+			Escalation: []time.Duration{24 * time.Hour, 7 * 24 * time.Hour},
+			ResetAfter: 30 * 24 * time.Hour,
+			MaxTracked: 10000,
+		},
+		GeoIP:   GeoIPConfig{File: "/usr/share/tgproxy/geoip/dbip-country-lite.mmdb"},
 		Logging: LoggingConfig{Level: "info", Format: "json"},
 	}
 }

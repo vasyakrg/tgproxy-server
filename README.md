@@ -50,6 +50,18 @@ sudo systemctl enable --now tgproxy-server tgproxy-update-server.path
 
 Правила `access_rules` из `server.yaml` засеваются в БД только при пустой таблице; дальше источник правды — БД (UI «Доступ» или `tgproxy access add|list|delete`).
 
+Правило «сеть + ключ» требует **оба** условия: запрос из этой сети без ключа получает 403 (в UI чекбокс «Скрытый ключ в адресе» по умолчанию выключен, при заданных сетях показывается подсказка).
+
+### Отказы, баны и страны
+
+Каждый отказ доступа виден в логе (`client_ip`, `reason`, `country`), в метрике `tgp_denied_total{reason}`, на графике «Обзор» (серия «Отказы») и в «Ошибках» (фаза `access`). Причины: `no_rule`, `key_required`, `bad_key`, `rate_limited`, `banned`.
+
+Встроенный fail2ban (`ban:` в `server.yaml`, включён по умолчанию): 20 отказов `no_rule|key_required|bad_key` за 10 минут — бан на 1 ч, повторные — 24 ч, затем 7 д. Свои адреса (trusted_proxies, агенты, сети правил, приватные) не банятся. Ручное управление — экран «Баны», иконка бана в «Ошибках», `tgproxy ban add|list|delete -c /etc/tgproxy/server.yaml`, API `/api/v1/bans`. Алерт `ip_autoban` приходит админам одним сообщением на пачку.
+
+Флаги стран (`geoip.file`) — по локальной базе, deb кладёт её в `/usr/share/tgproxy/geoip/`; нет файла — флаги не показываются. Для локальной сборки пакета: `make geoip` (скачивает базу в `build/geoip/`).
+
+IP Geolocation by [DB-IP](https://db-ip.com) — база «IP to Country Lite» распространяется под лицензией [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
 ### TLS на входе (`tls.mode`)
 
 | Режим | Что делать |

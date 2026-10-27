@@ -2,6 +2,13 @@ version: 2
 
 project_name: tgproxy
 
+# База стран для deb: DB-IP «IP to Country Lite» (CC BY 4.0). В git не хранится — скачивается при
+# сборке релиза и проверяется (scripts/geoip/fetch.sh). Без сети сборка падает осознанно: пакет без
+# базы потерял бы флаги стран. Локально можно подложить файл вручную: build/geoip/dbip-country-lite.mmdb.
+before:
+  hooks:
+    - sh -c 'test -s build/geoip/dbip-country-lite.mmdb || scripts/geoip/fetch.sh build/geoip/dbip-country-lite.mmdb'
+
 builds:
   - id: tgproxy
     main: ./cmd/tgproxy
@@ -90,6 +97,10 @@ nfpms:
         dst: /etc/tgproxy/agent.yaml
         type: config|noreplace
         file_info: {mode: 0640, owner: root, group: tgproxy}
+      # GeoIP: DB-IP Lite (CC BY 4.0, атрибуция «IP Geolocation by DB-IP» — в UI и README)
+      - src: build/geoip/dbip-country-lite.mmdb
+        dst: /usr/share/tgproxy/geoip/dbip-country-lite.mmdb
+        file_info: {mode: 0644}
       # Данные
       - dst: /var/lib/tgproxy
         type: dir

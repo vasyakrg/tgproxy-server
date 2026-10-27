@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
 	"github.com/vasyakrg/tgproxy-server/internal/server/access"
 	"github.com/vasyakrg/tgproxy-server/internal/server/notify"
+	"github.com/vasyakrg/tgproxy-server/internal/store"
 	"github.com/vasyakrg/tgproxy-server/internal/tgapi"
 )
 
@@ -48,6 +50,10 @@ type Handler struct {
 	log     *slog.Logger
 	rec     Recorder
 	bots    BotObserver
+	bans    Banner
+	denied  []func(reason string)
+	errs    ErrorSink
+	geo     Geo
 }
 
 // New создаёт Handler. logger должен быть обёрнут redact-хендлером.
@@ -68,17 +74,40 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(tgapi.HeaderRequestID, id)
 
 	var (
-		rule  string
-		botID int64
-		route tgapi.Route
+		rule     string
+		botID    int64
+		route    tgapi.Route
+		reason   access.Reason // причина отказа доступа; "" — запрос не отклонён
+		clientIP netip.Addr
 	)
 	internal := notify.IsInternal(r.Context())
-	defer func() {
+	defer func() { //nolint:contextcheck // журнал запроса пишется на выходе, ctx берётся из r
 		h.observe(internal, rule, route.Method, botID, sw.status)
-		h.log.Info("request",
+		attrs := []any{
 			"request_id", id, "rule", rule, "bot_id", botID, "method", route.Method,
-			"status", sw.status, "duration", time.Since(start))
+			"status", sw.status, "duration", time.Since(start),
+		}
+		lvl := slog.LevelInfo
+		if reason != "" {
+			// IP клиента и причина — для расследований; токена бота здесь нет (redact + только bot_id)
+			attrs = append(attrs, "client_ip", ipString(clientIP), "reason", string(reason), "country", h.country(clientIP))
+			if reason == access.ReasonBanned {
+				lvl = slog.LevelDebug // забаненный клиент может стучаться тысячами rps — журнал не засоряем
+			}
+		}
+		h.log.Log(r.Context(), lvl, "request", attrs...)
 	}()
+
+	// Бан проверяется первым: до разбора пути, правил доступа и агентов.
+	if h.bans != nil {
+		clientIP = h.checker.ClientAddr(r)
+		if clientIP.IsValid() && h.bans.Banned(clientIP) {
+			reason = access.ReasonBanned
+			h.noteDenied(r, id, route, reason, clientIP, http.StatusForbidden, internal)
+			tgapi.WriteError(w, http.StatusForbidden, descDenied, 0)
+			return
+		}
+	}
 
 	route, err := tgapi.ParsePath(r.URL.EscapedPath())
 	if err != nil {
@@ -89,12 +118,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	info, err := h.checker.Check(r, route)
 	if err != nil {
+		if !clientIP.IsValid() {
+			clientIP = h.checker.ClientAddr(r)
+		}
+		reason = access.ReasonOf(err)
+		if reason == "" {
+			reason = access.ReasonNoRule
+		}
 		var rl *access.RateLimitedError
 		if errors.As(err, &rl) {
+			h.noteDenied(r, id, route, reason, clientIP, http.StatusTooManyRequests, internal)
 			secs := max(int(math.Ceil(rl.RetryAfter.Seconds())), 1)
 			tgapi.WriteError(w, http.StatusTooManyRequests, "Too Many Requests: retry after "+strconv.Itoa(secs), secs)
 			return
 		}
+		h.noteDenied(r, id, route, reason, clientIP, http.StatusForbidden, internal)
 		tgapi.WriteError(w, http.StatusForbidden, descDenied, 0)
 		return
 	}
@@ -135,6 +173,50 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(flushWriter{w: w, rc: http.NewResponseController(w)}, resp.Body); err != nil {
 		h.log.Debug("response stream aborted", "request_id", id, "error", redact.Error(err))
 	}
+}
+
+// noteDenied фиксирует отказ доступа: метрика и график «Обзор», журнал ошибок (кроме banned —
+// забаненный может стучаться бесконечно), счётчик автобана (только no_rule | key_required | bad_key).
+func (h *Handler) noteDenied(r *http.Request, id string, route tgapi.Route, reason access.Reason, ip netip.Addr, code int, internal bool) {
+	if internal {
+		return
+	}
+	for _, f := range h.denied {
+		f(string(reason))
+	}
+	if h.bans != nil && ip.IsValid() {
+		h.bans.Record(ip, reason)
+	}
+	if h.errs == nil || reason == access.ReasonBanned {
+		return
+	}
+	bot := ""
+	if route.BotID > 0 {
+		bot = strconv.FormatInt(route.BotID, 10)
+	}
+	method := ""
+	if route.Method != "" {
+		method = tgapi.MethodLabel(route.Method)
+	}
+	h.errs.Record(r.Context(), store.ErrorEvent{
+		At: time.Now(), RequestID: id, BotID: bot, Method: method, Phase: tgapi.PhaseAccess, Code: code,
+		Outcome: store.OutcomeFailedToBot, Description: "access denied: " + string(reason),
+		ClientIP: ipString(ip), Reason: string(reason),
+	})
+}
+
+func (h *Handler) country(a netip.Addr) string {
+	if h.geo == nil || !a.IsValid() {
+		return ""
+	}
+	return h.geo.Lookup(a)
+}
+
+func ipString(a netip.Addr) string {
+	if !a.IsValid() {
+		return ""
+	}
+	return a.String()
 }
 
 func (h *Handler) writeErr(w http.ResponseWriter, r *http.Request, err error, id string) {

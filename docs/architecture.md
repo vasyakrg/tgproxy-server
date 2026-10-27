@@ -19,10 +19,12 @@
 ## 2. Компоненты
 
 ```
-cmd/tgproxy                     cobra: server | agent (csr, enroll) | hashpw | pki | totp | access | agents | hostkeys | update apply | deploy-helper | version | config validate
+cmd/tgproxy                     cobra: server | agent (csr, enroll) | hashpw | pki | totp | access | ban | agents | hostkeys | update apply | deploy-helper | version | config validate
 internal/config                 YAML + env (TGPROXY_*) + *_file секреты; users_database.yml (формат Authelia)
 internal/server/proxy           вход /bot<token>/<method>, /file/bot<token>/<path>, те же пути с префиксом /k/<key>
-internal/server/access          правила доступа: сети (CIDR) и/или скрытый ключ, rate-limit
+internal/server/access          правила доступа: сети (CIDR) и/или скрытый ключ, rate-limit; причина каждого отказа (Reason)
+internal/server/ban             встроенный fail2ban: бан-лист (кэш), автобан скользящим окном, защита от самоблокировки, пачки алертов
+internal/geoip                  страна по IP из локальной mmdb (DB-IP Lite), emoji-флаг
 internal/server/router          классификация методов, синхронные ретраи, бюджет, 429-окна
 internal/server/balancer        P2C по (inflight+1)×EWMA(latency), circuit breaker
 internal/server/agents          реестр, poller /_agent/status (5s), drain
@@ -62,7 +64,13 @@ internal/redact                 маскирование токенов везд
 | только ключ | `{base}/k/<key>/bot<token>/sendMessage` | ключ совпал |
 | сеть + ключ | `{base}/k/<key>/bot<token>/sendMessage` | оба условия |
 
-Правило без сети и без ключа запрещено валидацией: это открытый relay к Bot API → бан IP агентов. `X-Forwarded-For` учитывается только от `trusted_proxies`. Нет подходящего правила → 403 в формате Telegram. Upstream жёстко `api.telegram.org`.
+Правило без сети и без ключа запрещено валидацией: это открытый relay к Bot API → бан IP агентов. `X-Forwarded-For` учитывается только от `trusted_proxies`. Нет подходящего правила → 403 в формате Telegram (тело одинаково для всех причин, наружу причина не раскрывается). Upstream жёстко `api.telegram.org`.
+
+**Причины отказа** (`access.Reason`, `Check` возвращает `*DeniedError`; в значении нет ключей и хешей): `no_rule` — ни одно правило не подошло по сети; `key_required` — сеть подошла, но правило требует ключ, а его нет (правило «сеть + ключ» — это **И**: клиент из своей сети без ключа получает 403); `bad_key` — ключ передан, но не подошёл (верный ключ из чужой сети — `no_rule`); `rate_limited` — исчерпан rps правила (429); `banned` — IP в бане. Для каждого отказа: лог `request` с `client_ip` (с учётом `trusted_proxies`), `reason`, `country`; метрика `tgp_denied_total{reason}`; серия «Отказы» на графике «Обзор» (разбивка по причинам в тултипе); запись в «Ошибках» (фаза `access`, IP с флагом, причина). Запросы забаненных (`banned`) в журнал ошибок и лог Info не пишутся (флуд): они видны в метрике, графике и счётчике попаданий бана, лог — уровня Debug.
+
+**Бан (встроенный fail2ban, `internal/server/ban`).** Порядок обработки: бан → разбор пути → `access.Check` → роутер/агенты. Забаненный IP получает дешёвый 403 до разбора пути и без обращения к БД (кэш в памяти, перечитывается по версии таблицы `bans`, поэтому бан из CLI/другого процесса вступает в силу за ~2 с). Префикс бана: IPv4 — /32, IPv6 — /64. Автобан (`ban:` в server.yaml): `threshold` отказов `no_rule|key_required|bad_key` за скользящее окно `window` (`rate_limited` и `banned` не считаются) → бан на `duration`; повторные баны того же префикса эскалируют: `duration` → `escalation[0]` → `escalation[1]` … (по умолчанию 1ч → 24ч → 7д), уровень хранится в строке бана и обнуляется после `reset_after` (30д) без активности. Окно — в памяти, кольцо из `threshold` меток времени на IP, LRU с потолком `max_tracked`. **Никогда не банятся** (и ручной бан такого адреса отклоняется с понятной ошибкой): `trusted_proxies`, адреса агентов (хост из url; имена резолвятся), сети действующих правил доступа (сети `/0` защитой не считаются), loopback и приватные/служебные адреса (за прокси-цепочкой без `trusted_proxies` клиентом выглядит адрес прокси — бан отрезал бы всех). Ручное управление: UI «Баны» (+ иконка бана у IP в «Ошибках»), `GET|POST /api/v1/bans`, `DELETE /api/v1/bans/{id}` (Protect+RequireAuth, CSRF как у остальных, аудит `ban.create|ban.delete`; автобан — `ban.auto`, actor `auto`), `tgproxy ban add|list|delete`. Алерт `ip_autoban` агрегируется: автобаны за минуту уходят одним сообщением. Хранилище банов — только SQLite (таблица `bans`, миграция 0008; Redis её не затрагивает).
+
+**GeoIP.** `internal/geoip` читает локальную mmdb (`geoip.file`, по умолчанию `/usr/share/tgproxy/geoip/dbip-country-lite.mmdb`, кладётся deb-пакетом; `maxminddb-golang/v2`); приватные/зарезервированные адреса → пусто; нет файла → флаги просто не показываются. База — DB-IP «IP to Country Lite» (CC BY 4.0), скачивается при сборке релиза `scripts/geoip/fetch.sh` (в runtime — никаких сетевых запросов, в git mmdb не хранится). Флаг — emoji из ISO-кода (regional indicators) с `title` страны; атрибуция «IP Geolocation by DB-IP» — на экранах «Ошибки» и «Баны» и в README.
 
 Заголовки: вычищаются hop-by-hop, `X-Forwarded-*`, `Forwarded`, `Via`, `Cookie`, `Authorization`; в ответ добавляется `X-Request-ID`.
 
@@ -168,6 +176,7 @@ HTTP/2 reverse proxy поверх mTLS 1.3 (не gRPC — multipart и файл�
 | агенты, host-key fingerprints, сертификаты, denylist | ✓ | — |
 | история метрик (10s/24h, 5m/30d) | ✓ | — |
 | outbox алертов, аудит-лог админов | ✓ | — |
+| баны IP (`bans`) | ✓ | — |
 | сессии, rate-limit/429-окна | ✓ по умолчанию | ✓ (для нескольких инстансов) |
 
 SQLite: `modernc.org/sqlite`, WAL, миграции goose. Redis — только `rediss://` + ACL, иначе отказ старта.
@@ -186,12 +195,12 @@ SQLite: `modernc.org/sqlite`, WAL, миграции goose. Redis — тольк�
 
 - Отдельный notifier-бот-токен; `sendMessage` идёт через тот же Router/Balancer с меткой `internal` (сервер сам Telegram не видит).
 - Получатели — `telegram_id` из users_database.yml.
-- Типы: `agent_down`, `agent_degraded` (err>5%/5m), `overload` (inflight выше порога), `cert_expiring`, `ingress_cert_expiring`, `ingress_cert_invalid`, `version_mismatch`, `login_lockout`, `hostkey_mismatch`, `agent_enrolled`, `all_agents_down`.
+- Типы: `agent_down`, `agent_degraded` (err>5%/5m), `overload` (inflight выше порога), `cert_expiring`, `ingress_cert_expiring`, `ingress_cert_invalid`, `version_mismatch`, `login_lockout`, `hostkey_mismatch`, `agent_enrolled`, `all_agents_down`, `rollout_failed`, `ip_autoban` (пачкой, не чаще раза в минуту).
 - Outbox в SQLite, дедуп по `(agent_id,type)`, повтор firing ≤1/ч, resolved — один раз, глобально ≤20/мин со склейкой. Нет агентов → копится в outbox + метрика `tgp_alerts_undeliverable_total`.
 
 ## 10. Метрики (`tgp_`)
 
-Server (отдельный порт, bearer, constant-time): `requests_total{rule,method,code}`, `request_duration_seconds{method_class,agent}`, `upstream_attempts_total{agent,result}`, `retries_total{class,reason}`, `telegram_429_total{rule}`, `agent_up{agent,mode}`, `agent_inflight{agent}`, `agent_reverse_conns{agent}`, `enroll_attempts_total{result}`, `no_healthy_agents_total`, `inflight_buffered_bytes`, `longpoll_active`, `webhook_blocked_total`, `install_jobs_total{result}`, `admin_logins_total{result}`, `alerts_undeliverable_total`, `build_info`.
+Server (отдельный порт, bearer, constant-time): `requests_total{rule,method,code}`, `request_duration_seconds{method_class,agent}`, `upstream_attempts_total{agent,result}`, `retries_total{class,reason}`, `telegram_429_total{rule}`, `agent_up{agent,mode}`, `agent_inflight{agent}`, `agent_reverse_conns{agent}`, `enroll_attempts_total{result}`, `no_healthy_agents_total`, `inflight_buffered_bytes`, `longpoll_active`, `webhook_blocked_total`, `denied_total{reason}` (no_rule|key_required|bad_key|rate_limited|banned), `install_jobs_total{result}`, `admin_logins_total{result}`, `alerts_undeliverable_total`, `build_info`.
 Agent: `agent_requests_total{code_class,error_phase}`, `agent_upstream_duration_seconds`, `agent_inflight`, `agent_upstream_bytes_total{direction}`, `agent_dial_errors_total{kind}`, `build_info` + go/process.
 Кардинальность: `method` ~150+`other`, `code` из фиксированного набора, `rule` = число правил доступа. `bot_id` в метки не попадает (ботов никто не регистрирует — множество неограниченно); «топ ботов» для UI — in-memory top-K по `bot_id` за окно, плюс фильтр по `bot_id` в журнале ошибок.
 
@@ -199,7 +208,7 @@ Agent: `agent_requests_total{code_class,error_phase}`, `agent_upstream_duration_
 
 UI: **templ + htmx 2 + uPlot**, всё через `go:embed`, без CDN и node-тулчейна. Тот же сервисный слой отдаёт JSON `/api/v1`:
 
-`auth/{login,logout,me,totp}` · `agents` CRUD, `agents/{id}/{drain,update,rollback,metrics,config}`, `enrollments` (создать/отозвать токен) · `ssh/hostkey` (TOFU) · `install-jobs` + SSE `install-jobs/{id}/events` · `stats/{summary,timeseries}` · `errors` (курсор) · `inflight` · `access-rules` CRUD · `notifications` + `test` · `system/{version,releases,update,upload}` · `audit`.
+`auth/{login,logout,me,totp}` · `agents` CRUD, `agents/{id}/{drain,update,rollback,metrics,config}`, `enrollments` (создать/отозвать токен) · `ssh/hostkey` (TOFU) · `install-jobs` + SSE `install-jobs/{id}/events` · `stats/{summary,timeseries}` (точка ряда: `denied_rps`, `denied_by{reason}`) · `errors` (курсор; фильтры `phase=access`, `reason`, `client_ip`) · `inflight` · `access-rules` CRUD · `bans` (GET, POST `{ip, duration|permanent, comment}`, DELETE `{id}`) · `notifications` + `test` · `system/{version,releases,update,upload}` · `audit`.
 
 ## 12. Поставка и обновление
 

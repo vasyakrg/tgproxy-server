@@ -118,3 +118,25 @@ func (e InstallJobEvent) Validate() error {
 	}
 	return nil
 }
+
+// Validate проверяет бан: префикс — IPv4 /32 или IPv6 /64 без битов хоста.
+func (b Ban) Validate() error {
+	p := b.Prefix
+	if !p.IsValid() {
+		return fmt.Errorf("%w: ban prefix", ErrInvalid)
+	}
+	want := 32
+	if p.Addr().Is6() {
+		want = 64
+	}
+	if p.Addr().Is4In6() || p.Bits() != want || p != p.Masked() {
+		return fmt.Errorf("%w: ban prefix must be IPv4 /32 or IPv6 /64", ErrInvalid)
+	}
+	if b.Source != BanAuto && b.Source != BanManual {
+		return fmt.Errorf("%w: ban source %q", ErrInvalid, b.Source)
+	}
+	if b.Level < 0 {
+		return fmt.Errorf("%w: ban level", ErrInvalid)
+	}
+	return nil
+}

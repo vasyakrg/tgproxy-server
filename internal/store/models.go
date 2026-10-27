@@ -108,6 +108,8 @@ type Sample struct {
 	P95Ms       float64 // p95 по окну
 	Inflight    int
 	Buckets     []int64 // гистограмма латентности (для корректного rollup p95)
+	// Denied — отказы доступа по причинам (только у строки-агрегата: отказ никуда не маршрутизируется).
+	Denied map[string]int64
 }
 
 // AuditEntry — запись аудит-лога админов. Секреты не пишутся.
@@ -192,6 +194,10 @@ type ErrorEvent struct {
 	Code        int
 	Outcome     ErrorOutcome
 	Description string
+	// ClientIP / Reason заполняются для отказов доступа (Phase "access"): реальный адрес
+	// клиента и причина (no_rule | key_required | bad_key | rate_limited).
+	ClientIP string
+	Reason   string
 }
 
 // ErrorQuery — фильтр и курсор журнала ошибок (новые первыми).
@@ -205,6 +211,8 @@ type ErrorQuery struct {
 	Phase     string
 	Code      int // 0 — любой
 	RequestID string
+	Reason    string
+	ClientIP  string
 }
 
 // AuditQuery — фильтр и курсор аудит-лога (новые первыми).
@@ -245,3 +253,30 @@ type InstallJobEvent struct {
 	Level   string // info | warn | error
 	Message string
 }
+
+// BanSource — кто создал бан.
+type BanSource string
+
+// Источники бана.
+const (
+	BanAuto   BanSource = "auto"
+	BanManual BanSource = "manual"
+)
+
+// Ban — бан сетевого префикса клиента (IPv4 /32, IPv6 /64). Одна запись на префикс:
+// повторный бан обновляет её, сохраняя Level (эскалация) до сброса.
+type Ban struct {
+	ID        int64
+	Prefix    netip.Prefix
+	Source    BanSource
+	Actor     string // логин админа или "auto"
+	Comment   string
+	CreatedAt time.Time
+	ExpiresAt *time.Time // nil — бессрочно
+	Hits      int64      // отклонённые запросы с момента бана
+	Level     int        // уровень эскалации (0 — первый бан)
+	LastHitAt time.Time  // последняя активность (создание или попадание) — для сброса эскалации
+}
+
+// Active сообщает, что бан действует в момент now.
+func (b Ban) Active(now time.Time) bool { return b.ExpiresAt == nil || b.ExpiresAt.After(now) }

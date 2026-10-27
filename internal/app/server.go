@@ -17,11 +17,13 @@ import (
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/config"
+	"github.com/vasyakrg/tgproxy-server/internal/geoip"
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
 	"github.com/vasyakrg/tgproxy-server/internal/server/access"
 	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
 	"github.com/vasyakrg/tgproxy-server/internal/server/balancer"
+	"github.com/vasyakrg/tgproxy-server/internal/server/ban"
 	"github.com/vasyakrg/tgproxy-server/internal/server/gateway"
 	"github.com/vasyakrg/tgproxy-server/internal/server/proxy"
 	"github.com/vasyakrg/tgproxy-server/internal/server/rollout"
@@ -93,6 +95,9 @@ type Server struct {
 	up         *Upstream
 	windows    *router.Windows
 	obs        *obs
+	bans       *ban.Manager
+	banDigest  *ban.Digest
+	geo        *geoip.DB // nil — базы стран нет (флаги не показываются)
 	rstats     *ruleStats
 	web        *webState                             // nil — веб-UI не поднят
 	pki        *pkiState                             // nil — статические agent_tls (без reverse и enrollment)
@@ -193,7 +198,10 @@ func (s *Server) wire(ctx context.Context, cfg *config.ServerConfig, distributed
 	}
 	s.windows = router.NewWindows(ws, nil)
 	s.rstats = newRuleStats(nil)
-	return s.wireObs(cfg)
+	if err := s.wireObs(cfg); err != nil {
+		return err
+	}
+	return s.wireBans(ctx, cfg)
 }
 
 func (s *Server) build(cfg *config.ServerConfig) (*snapshot, error) {
@@ -209,7 +217,10 @@ func (s *Server) build(cfg *config.ServerConfig) (*snapshot, error) {
 		router.WithInflight(s.obs.inflight),
 		router.WithBufferGauge(s.obs.m.BufferedBytes()),
 	)
-	h := proxy.New(s.checker, rt, cfg, s.logger, proxy.WithRecorder(ruleRecorder{Recorder: s.obs.m, stats: s.rstats}), proxy.WithBots(s.obs.top))
+	h := proxy.New(s.checker, rt, cfg, s.logger,
+		proxy.WithRecorder(ruleRecorder{Recorder: s.obs.m, stats: s.rstats}), proxy.WithBots(s.obs.top),
+		proxy.WithBans(s.bans), proxy.WithDenied(s.obs.m.Denied, s.obs.coll.ObserveDenied),
+		proxy.WithErrorLog(s.obs.errlog), proxy.WithGeo(s.geo))
 	return &snapshot{cfg: cfg, router: rt, handler: h}, nil
 }
 
@@ -224,6 +235,12 @@ func (s *Server) Close() {
 		}
 		if s.checker != nil {
 			s.checker.Close()
+		}
+		if s.bans != nil {
+			s.bans.Wait()
+		}
+		if s.geo != nil {
+			_ = s.geo.Close()
 		}
 		if s.tr != nil {
 			_ = s.tr.Close()
@@ -266,8 +283,9 @@ func (s *Server) Reload(ctx context.Context) error {
 	}
 	if old != nil && (!reflect.DeepEqual(old.cfg.Listen, cfg.Listen) || !reflect.DeepEqual(old.cfg.TLS, cfg.TLS) ||
 		!reflect.DeepEqual(old.cfg.AgentTLS, cfg.AgentTLS) || old.cfg.Metrics.BearerFile != cfg.Metrics.BearerFile ||
-		!reflect.DeepEqual(old.cfg.Notify, cfg.Notify) || !reflect.DeepEqual(old.cfg.Store, cfg.Store)) {
-		s.logger.Warn("listen/tls/store settings changed: restart required, not applied")
+		!reflect.DeepEqual(old.cfg.Notify, cfg.Notify) || !reflect.DeepEqual(old.cfg.Store, cfg.Store) ||
+		!reflect.DeepEqual(old.cfg.Ban, cfg.Ban) || old.cfg.GeoIP != cfg.GeoIP) {
+		s.logger.Warn("listen/tls/store/ban/geoip settings changed: restart required, not applied")
 	}
 	if s.obs.deliv != nil {
 		if err := s.obs.deliv.Reload(); err != nil {

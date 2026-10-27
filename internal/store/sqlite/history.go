@@ -35,9 +35,9 @@ func (r historyRepo) Append(ctx context.Context, res store.Resolution, samples [
 	}
 	defer func() { _ = tx.Rollback() }()
 	upsert := `INSERT INTO ` + t + // #nosec G202 -- t — из белого списка table()
-		` (agent_id, ts, ok, err, rate_limited, p95_ms, inflight, buckets) VALUES (?,?,?,?,?,?,?,?)
+		` (agent_id, ts, ok, err, rate_limited, p95_ms, inflight, buckets, denied) VALUES (?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(agent_id, ts) DO UPDATE SET ok=excluded.ok, err=excluded.err, rate_limited=excluded.rate_limited,
-		   p95_ms=excluded.p95_ms, inflight=excluded.inflight, buckets=excluded.buckets`
+		   p95_ms=excluded.p95_ms, inflight=excluded.inflight, buckets=excluded.buckets, denied=excluded.denied`
 	stmt, err := tx.PrepareContext(ctx, upsert)
 	if err != nil {
 		return mapErr(err)
@@ -48,7 +48,15 @@ func (r historyRepo) Append(ctx context.Context, res store.Resolution, samples [
 		if err != nil {
 			return err
 		}
-		if _, err := stmt.ExecContext(ctx, sm.AgentID, ms(sm.At), sm.OK, sm.Err, sm.RateLimited, sm.P95Ms, sm.Inflight, string(b)); err != nil {
+		den := ""
+		if len(sm.Denied) > 0 {
+			db, err := json.Marshal(sm.Denied)
+			if err != nil {
+				return err
+			}
+			den = string(db)
+		}
+		if _, err := stmt.ExecContext(ctx, sm.AgentID, ms(sm.At), sm.OK, sm.Err, sm.RateLimited, sm.P95Ms, sm.Inflight, string(b), den); err != nil {
 			return mapErr(err)
 		}
 	}
@@ -60,7 +68,7 @@ func (r historyRepo) Range(ctx context.Context, res store.Resolution, agentID st
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT agent_id, ts, ok, err, rate_limited, p95_ms, inflight, buckets FROM ` + t + ` WHERE ts >= ? AND ts < ?` // #nosec G202 -- t — из белого списка table()
+	q := `SELECT agent_id, ts, ok, err, rate_limited, p95_ms, inflight, buckets, denied FROM ` + t + ` WHERE ts >= ? AND ts < ?` // #nosec G202 -- t — из белого списка table()
 	args := []any{ms(from), ms(to)}
 	if agentID != "" {
 		q += ` AND agent_id = ?`
@@ -78,8 +86,9 @@ func (r historyRepo) Range(ctx context.Context, res store.Resolution, agentID st
 			sm store.Sample
 			ts int64
 			b  string
+			dn string
 		)
-		if err := rows.Scan(&sm.AgentID, &ts, &sm.OK, &sm.Err, &sm.RateLimited, &sm.P95Ms, &sm.Inflight, &b); err != nil {
+		if err := rows.Scan(&sm.AgentID, &ts, &sm.OK, &sm.Err, &sm.RateLimited, &sm.P95Ms, &sm.Inflight, &b, &dn); err != nil {
 			return nil, mapErr(err)
 		}
 		sm.At = fromMS(ts)
@@ -88,6 +97,11 @@ func (r historyRepo) Range(ctx context.Context, res store.Resolution, agentID st
 		}
 		if len(sm.Buckets) == 0 {
 			sm.Buckets = nil
+		}
+		if dn != "" {
+			if err := json.Unmarshal([]byte(dn), &sm.Denied); err != nil {
+				return nil, fmt.Errorf("sqlite: decode denied: %w", err)
+			}
 		}
 		out = append(out, sm)
 	}

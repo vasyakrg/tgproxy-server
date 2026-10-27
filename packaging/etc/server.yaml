@@ -73,6 +73,28 @@ access_rules: []
 #   - name: backend               # ключ из файла (хешируется при загрузке)
 #     key_file: /etc/tgproxy/keys/backend.key   # 0640 root:tgproxy, не короче 16 символов
 
+# Встроенный fail2ban: IP, набравший threshold отказов доступа за window, банится (403 до проверки
+# правил и обращения к агентам). Считаются причины no_rule | key_required | bad_key; rate_limited и
+# banned — нет. IPv4 банится по /32, IPv6 — по /64. Повторный бан того же адреса длится дольше:
+# duration -> escalation[0] -> escalation[1] ... (последний шаг повторяется); уровень обнуляется
+# через reset_after без нарушений. Никогда не банятся: trusted_proxies, адреса агентов, сети из
+# правил доступа, loopback и приватные адреса. Ручные баны: UI «Баны», API /api/v1/bans, `tgproxy ban`.
+# Если сервер стоит за reverse proxy — обязательно задайте trusted_proxies (иначе клиентом будет
+# адрес прокси, а он защищён от бана).
+ban:
+  enabled: true
+  threshold: 20
+  window: 10m
+  duration: 1h
+  escalation: [24h, 168h]         # 24h, затем 7d
+  reset_after: 720h               # 30d без нарушений — эскалация с нуля
+  max_tracked: 10000              # потолок отслеживаемых IP в памяти (LRU)
+
+# Страна клиента (флаг в «Ошибках» и «Банах»): локальная база DB-IP «IP to Country Lite» (CC BY 4.0,
+# https://db-ip.com), кладётся deb-пакетом. Нет файла — флаги просто не показываются, сервер работает.
+geoip:
+  file: /usr/share/tgproxy/geoip/dbip-country-lite.mmdb
+
 # Алерты в Telegram (опционально): файл с токеном бота-уведомителя, 0640 root:tgproxy.
 # notify:
 #   bot_token_file: /etc/tgproxy/notify-token

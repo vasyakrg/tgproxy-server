@@ -78,3 +78,16 @@ func addBuckets(dst, src []int64) []int64 {
 	}
 	return dst
 }
+
+func addDenied(dst, src map[string]int64) map[string]int64 {
+	if len(src) == 0 {
+		return dst
+	}
+	if dst == nil {
+		dst = make(map[string]int64, len(src))
+	}
+	for k, v := range src {
+		dst[k] += v
+	}
+	return dst
+}

@@ -19,6 +19,10 @@ templ ErrorsPage(vm ErrorsVM) {
 			@errorsFilters(vm)
 			@ErrorsResults(vm)
 		</section>
+		if vm.GeoAttr {
+			@views.GeoAttribution()
+		}
+		@BanModal(false)
 	</div>
 }
 
@@ -64,6 +68,19 @@ templ errorsFilters(vm ErrorsVM) {
 				}
 			</select>
 		</div>
+		<div class="field errs-f-reason">
+			<label class="field-label" for="f-reason">Причина отказа</label>
+			<select class="select" id="f-reason" name="reason">
+				<option value="">Все</option>
+				for _, o := range vm.ReasonOpts {
+					<option value={ o.Value } selected?={ o.Value == vm.Filter.Reason }>{ o.Label }</option>
+				}
+			</select>
+		</div>
+		<div class="field errs-f-ip">
+			<label class="field-label" for="f-client_ip">IP клиента</label>
+			<input class="input mono" id="f-client_ip" name="client_ip" type="text" autocomplete="off" placeholder="203.0.113.7" value={ vm.Filter.ClientIP }/>
+		</div>
 		<div class="field errs-f-req">
 			<label class="field-label" for="f-request_id">Request ID</label>
 			<input class="input mono" id="f-request_id" name="request_id" type="text" autocomplete="off" placeholder="01JB…" value={ vm.Filter.RequestID }/>
@@ -82,7 +99,7 @@ templ ErrorsResults(vm ErrorsVM) {
 				@views.EmptyState("Ошибок нет", "Журнал пуст — отказов прокси и агентов не было.")
 			}
 		} else {
-			@views.Table("Журнал ошибок", []string{"Время", "Request ID", "bot_id", "Метод", "Агент", "Фаза", "Код", "Итог"}) {
+			@views.Table("Журнал ошибок", []string{"Время", "Request ID", "bot_id", "Метод", "IP", "Причина", "Агент", "Фаза", "Код", "Итог"}) {
 				@ErrorRows(vm.Rows, vm.MoreURL)
 			}
 		}
@@ -98,6 +115,27 @@ templ ErrorRows(rows []ErrorRow, moreURL string) {
 			<td class="mono col-id" title={ r.RequestIDFull }>{ r.RequestID }</td>
 			<td class="mono col-id" title={ r.BotID }>{ r.BotID }</td>
 			<td class="mono">{ r.Method }</td>
+			<td class="mono errs-ip">
+				if r.BanURL != "" {
+					@views.Flag(r.Code2, r.Flag)
+					<span>{ r.IP }</span>
+					@views.IconButton("Забанить "+r.IP, "ban", true, templ.Attributes{
+						"hx-get":          r.BanURL,
+						"hx-target":       "#ban-modal-body",
+						"hx-swap":         "innerHTML",
+						"data-modal-open": "ban-modal",
+					})
+				} else {
+					<span class="muted">—</span>
+				}
+			</td>
+			<td>
+				if r.ReasonText != "" {
+					<span title={ r.Reason }>@views.Chip(r.ReasonText, r.ReasonTone)</span>
+				} else {
+					<span class="muted">—</span>
+				}
+			</td>
 			<td class="mono">{ r.Agent }</td>
 			<td class={ "mono", "phase-" + r.PhaseTone }>{ r.Phase }</td>
 			<td class="mono">{ r.Code }</td>
@@ -105,13 +143,13 @@ templ ErrorRows(rows []ErrorRow, moreURL string) {
 		</tr>
 		if r.Description != "" {
 			<tr class="errs-detail">
-				<td colspan="8" class="errs-desc"><span class="sr-only">Описание: </span>{ r.Description }</td>
+				<td colspan="10" class="errs-desc"><span class="sr-only">Описание: </span>{ r.Description }</td>
 			</tr>
 		}
 	}
 	if moreURL != "" {
 		<tr class="errs-more-row">
-			<td colspan="8">
+			<td colspan="10">
 				<button
 					type="button"
 					class="btn"

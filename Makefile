@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build generate test test-race lint vuln snapshot deb dev-certs dev-setup run-server run-agent run-agent2 redis-up dev-target-up dev-target-down dev-keys build-dev dev-packages vendor-verify deploy release-dry fuzz gosec bench
+.PHONY: help build generate test test-race lint vuln snapshot deb dev-certs dev-setup run-server run-agent run-agent2 redis-up dev-target-up dev-target-down dev-keys build-dev dev-packages vendor-verify deploy release-dry fuzz gosec bench geoip
 
 help: ## Список целей
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -49,6 +49,9 @@ gosec: ## gosec (исключения только #nosec Gxxx -- причина
 
 vuln: ## govulncheck
 	go tool govulncheck ./...
+
+geoip: ## Скачать базу стран DB-IP Lite в build/geoip (для deb; в git не коммитится)
+	scripts/geoip/fetch.sh build/geoip/dbip-country-lite.mmdb
 
 snapshot: ## goreleaser snapshot (архивы + deb в dist/, без подписи)
 	goreleaser release --snapshot --clean --skip=sign

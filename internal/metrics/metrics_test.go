@@ -211,6 +211,15 @@ func TestServerRecorders(t *testing.T) {
 	if testutil.ToFloat64(s.tg429.WithLabelValues("r")) != 1 {
 		t.Error("429")
 	}
+	s.Denied("no_rule")
+	s.Denied("no_rule")
+	s.Denied("banned")
+	s.Denied("<script>")
+	for reason, want := range map[string]float64{"no_rule": 2, "banned": 1, "other": 1, "bad_key": 0} {
+		if got := testutil.ToFloat64(s.denied.WithLabelValues(reason)); got != want {
+			t.Errorf("denied{%s}=%v want %v", reason, got, want)
+		}
+	}
 }
 
 func TestAgentRecorders(t *testing.T) {

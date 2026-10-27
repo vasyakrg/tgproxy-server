@@ -1,0 +1,141 @@
+package screens
+
+import (
+	"strconv"
+
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/views"
+)
+
+var banHeaders = []string{"IP", "Источник", "Кто", "Причина", "Осталось", "Попаданий", views.ActionsHeader}
+
+// BansPage — экран «Баны».
+templ BansPage(v BansVM) {
+	@views.PageHeader("Баны", "Заблокированные адреса: клиент получает 403 до проверки правил и обращения к агентам. IPv6 банится целой сетью /64.") {
+		<button type="button" class="btn btn-primary" data-modal-open="ban-modal" hx-get="/bans/new?from=bans" hx-target="#ban-modal-body" hx-swap="innerHTML">+ Забанить</button>
+	}
+	@BansSection(v.Rows, false)
+	if v.Geo {
+		@views.GeoAttribution()
+	}
+	@BanModal(false)
+}
+
+// BanModal — диалог бана (тело подгружается htmx). С oob=true заменяет открытый диалог закрытым.
+templ BanModal(oob bool) {
+	<div
+		id="ban-modal-wrap"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		@views.Modal("ban-modal", "Бан IP") {
+			<div id="ban-modal-body"></div>
+		}
+	</div>
+}
+
+// BansSection — таблица банов (разбан возвращает её же целиком).
+templ BansSection(rows []BanRow, oob bool) {
+	<section
+		id="bans-section"
+		class="card card-flush"
+		aria-label="Баны"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		if len(rows) == 0 {
+			@views.EmptyState("Банов нет", "Сейчас никто не заблокирован. Автобан срабатывает после серии отказов доступа с одного адреса; вручную — кнопкой «Забанить» или иконкой в «Ошибках».")
+		} else {
+			@views.Table("Баны", banHeaders) {
+				for _, r := range rows {
+					@banRow(r)
+				}
+			}
+		}
+	</section>
+}
+
+templ banRow(r BanRow) {
+	<tr>
+		<td class="cell-name mono">
+			@views.Flag(r.Code, r.Flag)
+			{ r.IP }
+		</td>
+		<td>@views.Chip(r.Source, r.SourceTone)</td>
+		<td>{ r.Actor }</td>
+		<td class="col-wrap">
+			if r.Comment == "" {
+				<span class="muted">—</span>
+			} else {
+				{ r.Comment }
+			}
+			if r.Level > 0 {
+				<span class="chip chip-warn" title="Уровень эскалации автобана">повтор { strconv.Itoa(r.Level) }</span>
+			}
+		</td>
+		<td class={ "mono", templ.KV("muted", r.Permanent) }>{ r.Left }</td>
+		<td class="mono">{ r.Hits }</td>
+		<td class="col-actions">
+			<div class="row-actions">
+				@views.IconButton("Разбанить "+r.IP, "unban", false, templ.Attributes{
+					"hx-post":    "/bans/" + strconv.FormatInt(r.ID, 10) + "/delete",
+					"hx-target":  "#bans-section",
+					"hx-swap":    "outerHTML",
+					"hx-confirm": "Разбанить " + r.IP + "?",
+				})
+			</div>
+		</td>
+	</tr>
+}
+
+// BanForm — форма ручного бана: IP, срок (1ч / 24ч / 7д / навсегда), комментарий.
+templ BanForm(f BanFormVM) {
+	<form
+		class="stack"
+		method="post"
+		action="/bans"
+		hx-post="/bans"
+		hx-target="#ban-modal-body"
+		hx-swap="innerHTML"
+		hx-disabled-elt="find button[type=submit]"
+		novalidate
+	>
+		<h3 class="form-title">Забанить IP</h3>
+		<input type="hidden" name="from" value={ f.From }/>
+		if f.Errors["_"] != "" {
+			<div class="alert alert-err" role="alert">{ f.Errors["_"] }</div>
+		}
+		@views.Field(views.FieldProps{
+			ID: "ban-ip", Name: "ip", Label: "IP-адрес", Value: f.IP, Error: f.Errors["ip"],
+			Hint: "IPv4 банится целиком, IPv6 — сетью /64", Required: true,
+			Attrs: templ.Attributes{"autocomplete": "off", "spellcheck": "false", "maxlength": "45"},
+		})
+		<div class={ "field", templ.KV("field-invalid", f.Errors["duration"] != "") }>
+			<label class="field-label" for="ban-duration">Срок</label>
+			<select class="select" id="ban-duration" name="duration">
+				@durOption("1h", "1 час", f.Duration)
+				@durOption("24h", "24 часа", f.Duration)
+				@durOption("7d", "7 дней", f.Duration)
+				@durOption("permanent", "Навсегда", f.Duration)
+			</select>
+			if f.Errors["duration"] != "" {
+				<div class="field-error" role="alert">{ f.Errors["duration"] }</div>
+			}
+		</div>
+		@views.Field(views.FieldProps{
+			ID: "ban-comment", Name: "comment", Label: "Комментарий", Value: f.Comment, Error: f.Errors["comment"],
+			Hint: "Необязательно, до 200 символов",
+			Attrs: templ.Attributes{"autocomplete": "off", "maxlength": "200"},
+		})
+		<p class="form-note">Свои адреса (доверенные прокси, агенты, сети правил доступа, приватные) банить нельзя: это заблокировало бы сам сервис.</p>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-primary">Забанить</button>
+		</div>
+	</form>
+}
+
+templ durOption(value, label, cur string) {
+	<option value={ value } selected?={ value == cur }>{ label }</option>
+}

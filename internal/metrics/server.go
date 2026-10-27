@@ -15,6 +15,7 @@ type Server struct {
 	upstream         *prometheus.CounterVec
 	retries          *prometheus.CounterVec
 	tg429            *prometheus.CounterVec
+	denied           *prometheus.CounterVec
 	agentUp          *prometheus.GaugeVec
 	agentInflight    *prometheus.GaugeVec
 	agentReverse     *prometheus.GaugeVec
@@ -50,6 +51,7 @@ func NewServerRegistry() (*prometheus.Registry, *Server) {
 		upstream:      c("upstream_attempts_total", "Upstream attempts via agents.", "agent", "result"),
 		retries:       c("retries_total", "Retried requests.", "class", "reason"),
 		tg429:         c("telegram_429_total", "Telegram 429 responses.", "rule"),
+		denied:        c("denied_total", "Requests denied by access control (reason: no_rule|key_required|bad_key|rate_limited|banned).", "reason"),
 		agentUp:       g("agent_up", "1 if the agent is up.", "agent", "mode"),
 		agentInflight: g("agent_inflight", "In-flight requests per agent.", "agent"),
 		agentReverse:  g("agent_reverse_conns", "Active reverse connections per agent.", "agent"),
@@ -66,7 +68,7 @@ func NewServerRegistry() (*prometheus.Registry, *Server) {
 		ingressCertAfter: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace, Name: "ingress_cert_not_after_seconds", Help: "Ingress certificate NotAfter, unix seconds."}),
 	}
-	reg.MustRegister(s.requests, s.duration, s.upstream, s.retries, s.tg429, s.agentUp,
+	reg.MustRegister(s.requests, s.duration, s.upstream, s.retries, s.tg429, s.denied, s.agentUp,
 		s.agentInflight, s.agentReverse, s.enroll, s.noHealthy, s.buffered, s.longPoll,
 		s.webhookBlocked, s.installJobs, s.adminLogins, s.undeliverable, s.ingressCertAfter)
 	return reg, s
@@ -95,6 +97,16 @@ func (s *Server) Retry(class, reason string) { s.retries.WithLabelValues(class, 
 
 // Telegram429 — ответ 429 от Telegram для правила rule.
 func (s *Server) Telegram429(rule string) { s.tg429.WithLabelValues(rule).Inc() }
+
+// Denied — отказ доступа. Причина вне известного набора схлопывается в "other" (ограничивает кардинальность).
+func (s *Server) Denied(reason string) {
+	switch reason {
+	case "no_rule", "key_required", "bad_key", "rate_limited", "banned":
+	default:
+		reason = "other"
+	}
+	s.denied.WithLabelValues(reason).Inc()
+}
 
 // SetAgentUp выставляет agent_up; при смене mode старая серия удаляется.
 func (s *Server) SetAgentUp(agent, mode string, up bool) {

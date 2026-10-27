@@ -371,6 +371,7 @@ html.sb-collapsed { --sb-w: var(--sb-w-collapsed); }
 .legend-ok { background: var(--accent); }
 .legend-err { background: var(--orange); }
 .legend-r429 { background: var(--tg); }
+.legend-denied { background: var(--err); }
 .ov-tip { min-height: 20px; font-size: 12px; color: var(--muted); }
 .ov-tip[data-active="true"] { color: var(--text); }
 .chart { position: relative; height: 240px; min-width: 0; }
@@ -403,6 +404,8 @@ html.sb-collapsed { --sb-w: var(--sb-w-collapsed); }
 .errs-f-bot { flex: 0 1 170px; }
 .errs-f-phase { flex: 0 1 150px; }
 .errs-f-code { flex: 0 1 130px; }
+.errs-f-reason { flex: 0 1 150px; }
+.errs-f-ip { flex: 0 1 150px; }
 .errs-f-req { flex: 1 1 200px; }
 .errs-card .table th, .errs-card .table td { padding-left: 8px; padding-right: 8px; }
 .errs-card .table td.mono { font-size: 12px; }
@@ -607,3 +610,13 @@ html.sb-collapsed { --sb-w: var(--sb-w-collapsed); }
 .ro-step[data-state="running"] .ro-state { color: var(--warn); }
 .ro-step[data-state="done"] .ro-state { color: var(--ok); }
 .ro-step[data-state="failed"] .ro-state { color: var(--err); }
+
+/* ---------- GeoIP (флаги), баны, подсказка формы правила ---------- */
+.flag { margin-right: 6px; font-size: 14px; line-height: 1; vertical-align: middle; }
+.geo-attr { margin: 0; font-size: 11px; color: var(--muted); }
+.geo-attr a { color: inherit; text-decoration: underline; }
+.errs-ip { white-space: nowrap; }
+.errs-ip .icon-btn { width: 28px; height: 28px; margin-left: 4px; vertical-align: middle; }
+.key-hint { display: none; color: var(--warn); }
+.key-hint[data-active],
+.rule-form:has(#rule-with-key:checked):has(#rule-cidrs:not(:placeholder-shown)) .key-hint { display: block; }

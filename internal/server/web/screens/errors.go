@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
+	"github.com/vasyakrg/tgproxy-server/internal/server/access"
 	"github.com/vasyakrg/tgproxy-server/internal/server/history"
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/views"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
@@ -28,6 +29,7 @@ type ErrorsDeps struct {
 	Shell    Shell
 	Source   ErrorSource
 	Agents   AgentLister // nil — список агентов в фильтре строится только из выбранного значения
+	Geo      GeoLookup   // nil — флаги стран не показываются
 	Location *time.Location
 	Now      func() time.Time
 	Log      *slog.Logger
@@ -74,12 +76,21 @@ type ErrorRow struct {
 	OutcomeText                                          string
 	OutcomeTone                                          views.Tone
 	Description                                          string
+	// Отказ доступа (фаза access): IP клиента, страна и причина.
+	IP, Code2, Flag    string // Code2 — ISO-код страны
+	Reason, ReasonText string
+	ReasonTone         views.Tone
+	BanURL             string // пусто — у записи нет IP, банить нечего
 }
 
 // ErrorsFilter — выбранные фильтры (значения форм).
 type ErrorsFilter struct {
 	Agent, BotID, Phase, Code, RequestID string
+	Reason, ClientIP                     string
 }
+
+// ReasonOpt — вариант фильтра по причине отказа.
+type ReasonOpt struct{ Value, Label string }
 
 // ErrorsVM — модель страницы «Ошибки».
 type ErrorsVM struct {
@@ -89,23 +100,51 @@ type ErrorsVM struct {
 	AgentOpts  []string
 	PhaseOpts  []string
 	CodeOpts   []string
+	ReasonOpts []ReasonOpt
+	GeoAttr    bool // выводить атрибуцию DB-IP (есть флаги)
 	Rows       []ErrorRow
 	MoreURL    string // пусто — страниц больше нет
 	Filtered   bool
 }
 
 var (
-	phaseOptions = []string{tgapi.PhaseDial, tgapi.PhaseTLS, tgapi.PhasePreSend, tgapi.PhaseWrite, tgapi.PhaseRead, tgapi.PhaseTimeout, "telegram", "server"}
-	codeOptions  = []string{"200", "429", "502", "503", "504"}
+	phaseOptions = []string{tgapi.PhaseAccess, tgapi.PhaseDial, tgapi.PhaseTLS, tgapi.PhasePreSend, tgapi.PhaseWrite, tgapi.PhaseRead, tgapi.PhaseTimeout, "telegram", "server"}
+	codeOptions  = []string{"200", "403", "429", "502", "503", "504"}
 )
+
+// reasonLabels — причины отказа доступа для фильтра и таблицы.
+var reasonLabels = []ReasonOpt{
+	{string(access.ReasonNoRule), "нет правила"},
+	{string(access.ReasonKeyRequired), "нужен ключ"},
+	{string(access.ReasonBadKey), "неверный ключ"},
+	{string(access.ReasonRateLimited), "лимит правила"},
+	{string(access.ReasonBanned), "в бане"},
+}
+
+func reasonView(reason string) (string, views.Tone) {
+	for _, o := range reasonLabels {
+		if o.Value == reason {
+			tone := views.ToneWarn
+			if reason == string(access.ReasonBanned) {
+				tone = views.ToneErr
+			}
+			return o.Label, tone
+		}
+	}
+	return dash(reason), views.ToneNeutral
+}
 
 func (s *errorsScreen) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := ErrorsFilter{
 		Agent: q.Get("agent"), BotID: strings.TrimSpace(q.Get("bot_id")), Phase: q.Get("phase"),
 		Code: q.Get("code"), RequestID: strings.TrimSpace(q.Get("request_id")),
+		Reason: q.Get("reason"), ClientIP: strings.TrimSpace(q.Get("client_ip")),
 	}
-	hf := history.Filters{AgentID: f.Agent, BotID: f.BotID, Phase: f.Phase, RequestID: f.RequestID}
+	if !access.Reason(f.Reason).Valid() {
+		f.Reason = "" // мусор в причине игнорируем, а не ломаем страницу
+	}
+	hf := history.Filters{AgentID: f.Agent, BotID: f.BotID, Phase: f.Phase, RequestID: f.RequestID, Reason: f.Reason, ClientIP: f.ClientIP}
 	if f.Code != "" {
 		n, err := strconv.Atoi(f.Code)
 		if err != nil || n < 0 || n > 999 {
@@ -140,7 +179,7 @@ func (s *errorsScreen) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	vm := ErrorsVM{
 		Filter: f, Rows: rows, MoreURL: more, Filtered: hf != (history.Filters{}),
 		PhaseOpts: withCurrent(phaseOptions, f.Phase), CodeOpts: withCurrent(codeOptions, f.Code),
-		AgentOpts: s.agentOptions(f.Agent),
+		AgentOpts: s.agentOptions(f.Agent), ReasonOpts: reasonLabels, GeoAttr: geoAvailable(s.Geo),
 	}
 	if isFragment(r) {
 		renderFragment(w, r, http.StatusOK, ErrorsResults(vm)) //nolint:contextcheck // templ
@@ -162,6 +201,8 @@ func moreURL(f ErrorsFilter, cursor string) string {
 	set("phase", f.Phase)
 	set("code", f.Code)
 	set("request_id", f.RequestID)
+	set("reason", f.Reason)
+	set("client_ip", f.ClientIP)
 	v.Set("cursor", cursor)
 	return errorsPath + "?" + v.Encode()
 }
@@ -195,6 +236,14 @@ func (s *errorsScreen) rows(items []store.ErrorEvent) []ErrorRow {
 		}
 		if e.Code > 0 {
 			r.Code = strconv.Itoa(e.Code)
+		}
+		r.IP, r.Reason = dash(e.ClientIP), dash(e.Reason)
+		if e.ClientIP != "" {
+			r.Code2, r.Flag = geoView(s.Geo, e.ClientIP)
+			r.BanURL = banFormURL(e.ClientIP, "errors")
+		}
+		if e.Reason != "" {
+			r.ReasonText, r.ReasonTone = reasonView(e.Reason)
 		}
 		r.OutcomeText, r.OutcomeTone = outcomeView(e.Outcome)
 		out = append(out, r)
@@ -236,7 +285,7 @@ func phaseTone(p string) string {
 		return "warn"
 	case tgapi.PhaseWrite, tgapi.PhaseRead, tgapi.PhaseTimeout:
 		return "err"
-	case "telegram", "server":
+	case "telegram", "server", tgapi.PhaseAccess:
 		return "tg"
 	}
 	return ""
@@ -245,6 +294,7 @@ func phaseTone(p string) string {
 // ---------- сводка по фазам ----------
 
 type phaseCounts struct {
+	denied                     int
 	dialTLS, dialTLSRetried    int
 	preSend, preSendRetried    int
 	timeoutRead, timeoutFailed int
@@ -285,6 +335,8 @@ loop:
 func (c *phaseCounts) add(e store.ErrorEvent) {
 	retried := e.Outcome == store.OutcomeRetried
 	switch {
+	case e.Phase == tgapi.PhaseAccess:
+		c.denied++
 	case e.Code == 429:
 		c.r429++
 	case e.Phase == noAgentsPhase || (e.Code == 503 && e.AgentID == ""):
@@ -340,7 +392,15 @@ func (c *phaseCounts) kpis(capped bool) []PhaseKPI {
 		{"timeout / read", cnt(c.timeoutRead), timeoutHint, toneIf(c.timeoutRead > 0, "err")},
 		{"429 Telegram", cnt(c.r429), r429Hint, toneIf(c.r429 > 0, "tg")},
 		{"нет агентов", cnt(c.noAgents), "за 24 часа", toneIf(c.noAgents > 0, "err")},
+		{"отказы доступа", cnt(c.denied), deniedHint(c.denied), toneIf(c.denied > 0, "tg")},
 	}
+}
+
+func deniedHint(n int) string {
+	if n == 0 {
+		return "за 24 часа"
+	}
+	return "403 / 429 до агентов"
 }
 
 func toneIf(cond bool, tone string) string {

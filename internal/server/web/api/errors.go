@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
+	"github.com/vasyakrg/tgproxy-server/internal/server/access"
 	"github.com/vasyakrg/tgproxy-server/internal/server/history"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
@@ -36,6 +37,9 @@ type ErrorItem struct {
 	Code        int       `json:"code"`
 	Outcome     string    `json:"outcome"`
 	Description string    `json:"description"`
+	// ClientIP / Reason — только у отказов доступа (phase "access").
+	ClientIP string `json:"client_ip,omitempty"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 // ErrorsPage — ответ GET /api/v1/errors.
@@ -50,7 +54,7 @@ func ToItem(e store.ErrorEvent) ErrorItem {
 	return ErrorItem{
 		ID: e.ID, At: e.At, RequestID: e.RequestID, BotID: e.BotID, AgentID: e.AgentID,
 		Method: e.Method, Phase: e.Phase, Code: e.Code, Outcome: string(e.Outcome),
-		Description: redact.String(e.Description),
+		Description: redact.String(e.Description), ClientIP: e.ClientIP, Reason: e.Reason,
 	}
 }
 
@@ -65,6 +69,11 @@ func (a *ErrorsAPI) list(w http.ResponseWriter, r *http.Request) {
 		AgentID: q.Get("agent"), BotID: q.Get("bot_id"), Phase: q.Get("phase"),
 		RequestID: q.Get("request_id"), Method: q.Get("method"),
 		Outcome: store.ErrorOutcome(q.Get("outcome")),
+		Reason:  q.Get("reason"), ClientIP: q.Get("client_ip"),
+	}
+	if f.Reason != "" && !access.Reason(f.Reason).Valid() {
+		writeErr(w, http.StatusBadRequest, "bad_reason", "reason — no_rule, key_required, bad_key, rate_limited или banned.")
+		return
 	}
 	if s := q.Get("code"); s != "" {
 		n, err := strconv.Atoi(s)

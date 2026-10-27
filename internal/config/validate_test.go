@@ -49,6 +49,14 @@ func TestServerValidation(t *testing.T) {
 		{"store bad driver", baseServer + "store:\n  driver: postgres\n", []string{"store.driver"}},
 		{"store no sqlite path", baseServer + "store:\n  sqlite_path: ''\n", []string{"store.sqlite_path"}},
 
+		{"ban defaults ok", baseServer + "ban:\n  enabled: true\n", nil},
+		{"ban disabled skips checks", baseServer + "ban:\n  enabled: false\n  threshold: 0\n", nil},
+		{"ban threshold zero", baseServer + "ban:\n  threshold: 0\n", []string{"ban.threshold"}},
+		{"ban window zero", baseServer + "ban:\n  window: 0s\n", []string{"ban.window"}},
+		{"ban duration negative", baseServer + "ban:\n  duration: -1h\n", []string{"ban.duration"}},
+		{"ban escalation bad step", baseServer + "ban:\n  escalation: [24h, 0s]\n", []string{"ban.escalation[1]"}},
+		{"ban max tracked small", baseServer + "ban:\n  max_tracked: 5\n", []string{"ban.max_tracked"}},
+		{"ban unknown field", baseServer + "ban:\n  nope: 1\n", []string{"ban.nope", "unknown field"}},
 		{"webhook bad", baseServer + "webhook_policy: allow\n", []string{"webhook_policy", "deny|passthrough"}},
 		{"webhook passthrough ok", baseServer + "webhook_policy: passthrough\n", nil},
 

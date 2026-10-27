@@ -191,7 +191,7 @@ func TestAccessPage(t *testing.T) {
 	for _, want := range []string{
 		"<title>Доступ — tgproxy</title>", "+ Новое правило", `aria-current="page"`, "Как подключить бота",
 		"https://tgproxy.corp.local/bot&lt;token&gt;/sendMessage", "https://tgproxy.corp.local/k/&lt;ключ&gt;/bot&lt;token&gt;/sendMessage",
-		">office", ">crm", ">monitoring", "сеть + ключ", `>ключ<`, "10.20.0.0/16", "10.30.0.0/16", "любые",
+		">office", ">crm", ">monitoring", "сеть+ключ", `>ключ<`, "10.20.0.0/16", "10.30.0.0/16", "любые",
 		"tgp_k7Qm…", "50 rps", "30 rps", "без лимита",
 		"694 120", "4 812", "только что", "3 мин назад", "не было",
 		`aria-label="Изменить правило office"`, `aria-label="Удалить правило crm"`,
@@ -493,12 +493,14 @@ func TestAccessCrossOriginRejected(t *testing.T) {
 func TestAccessGolden(t *testing.T) {
 	rows := []screens.RuleRow{
 		{ID: 1, Name: "office", Enabled: true, KindLabel: "сеть", CIDRs: []string{"10.20.0.0/16"}, KeyPrefix: "—", Limit: "50 rps", Requests: "694 120", LastSeen: "только что"},
+		{ID: 3, Name: "lan-key", Enabled: true, KindLabel: "сеть+ключ", KindTone: "tg", BothTip: true, CIDRs: []string{"10.30.0.0/16"}, KeyPrefix: "tgp_a1B2…", Limit: "без лимита", Requests: "12", LastSeen: "только что"},
 		{ID: 2, Name: "crm", Enabled: false, KindLabel: "ключ", KindTone: "accent", KeyPrefix: "tgp_k7Qm…", Limit: "без лимита", Requests: "—", LastSeen: "—", SeenMuted: true},
 	}
 	cases := map[string]templ.Component{
 		"access_rules_table":   screens.RulesSection(rows, false),
 		"access_rules_empty":   screens.RulesSection(nil, true),
-		"access_form_new":      screens.RuleForm(screens.RuleFormVM{WithKey: true}),
+		"access_form_new":      screens.RuleForm(screens.RuleFormVM{}),
+		"access_form_net_key":  screens.RuleForm(screens.RuleFormVM{WithKey: true, CIDRs: "10.20.0.0/16"}),
 		"access_form_errors":   screens.RuleForm(screens.RuleFormVM{Name: "x", CIDRs: "0.0.0.0/0", Errors: api.FieldErrors{"cidrs": "открытый прокси"}}),
 		"access_form_edit":     screens.RuleForm(screens.RuleFormVM{ID: 2, Name: "crm", KeyPrefix: "tgp_k7Qm…", RPS: "30", Enabled: true}),
 		"access_delete":        screens.DeleteConfirm(2, "crm"),

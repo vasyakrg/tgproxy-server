@@ -6,6 +6,7 @@ package store
 
 import (
 	"context"
+	"net/netip"
 	"time"
 )
 
@@ -25,6 +26,7 @@ type Store interface {
 	InstallJobs() InstallJobRepo
 	Settings() SettingsRepo
 	Rollouts() RolloutRepo
+	Bans() BanRepo
 	Close() error
 }
 
@@ -176,4 +178,22 @@ type SettingsRepo interface {
 	Set(ctx context.Context, key, value string) error
 	// List — все пары ключ-значение.
 	List(ctx context.Context) (map[string]string, error)
+}
+
+// BanRepo — баны IP. Version растёт при выдаче/изменении/снятии бана (в том числе из другого
+// процесса, например CLI) — для инвалидации кэша; счётчики попаданий версию не меняют.
+type BanRepo interface {
+	// Upsert создаёт бан или перезапускает существующий для этого префикса (hits обнуляется).
+	Upsert(ctx context.Context, b Ban) (Ban, error)
+	Get(ctx context.Context, id int64) (Ban, error)
+	// GetByPrefix — запись по префиксу, в том числе истёкшая (ErrNotFound, если нет).
+	GetByPrefix(ctx context.Context, p netip.Prefix) (Ban, error)
+	// ListActive — действующие на now баны, новые первыми.
+	ListActive(ctx context.Context, now time.Time) ([]Ban, error)
+	Delete(ctx context.Context, id int64) error
+	// AddHits прибавляет попадания и двигает last_hit_at (нет записи — тихо игнорируется).
+	AddHits(ctx context.Context, id, n int64, at time.Time) error
+	// Prune удаляет истёкшие баны, по которым не было активности с before.
+	Prune(ctx context.Context, before time.Time) (int, error)
+	Version(ctx context.Context) (int64, error)
 }

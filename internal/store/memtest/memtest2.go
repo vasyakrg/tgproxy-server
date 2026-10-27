@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"maps"
+	"net/netip"
 	"slices"
 	"sort"
 	"time"
@@ -140,6 +141,7 @@ func (r historyRepo) Append(_ context.Context, res store.Resolution, samples []s
 		if len(sm.Buckets) == 0 {
 			sm.Buckets = nil
 		}
+		sm.Denied = cloneDenied(sm.Denied)
 		m[[2]string{sm.AgentID, sm.At.Format(time.RFC3339Nano)}] = sm
 	}
 	return nil
@@ -161,6 +163,7 @@ func (r historyRepo) Range(_ context.Context, res store.Resolution, agentID stri
 			continue
 		}
 		sm.Buckets = slices.Clone(sm.Buckets)
+		sm.Denied = cloneDenied(sm.Denied)
 		out = append(out, sm)
 	}
 	slices.SortFunc(out, func(a, b store.Sample) int {
@@ -184,6 +187,13 @@ func (r historyRepo) Prune(_ context.Context, res store.Resolution, before time.
 		}
 	}
 	return n, nil
+}
+
+func cloneDenied(m map[string]int64) map[string]int64 {
+	if len(m) == 0 {
+		return nil
+	}
+	return maps.Clone(m)
 }
 
 // ---- audit ----
@@ -531,7 +541,9 @@ func (r errRepo) List(_ context.Context, q store.ErrorQuery) ([]store.ErrorEvent
 			q.Outcome != "" && e.Outcome != q.Outcome,
 			q.Phase != "" && e.Phase != q.Phase,
 			q.Code != 0 && e.Code != q.Code,
-			q.RequestID != "" && e.RequestID != q.RequestID:
+			q.RequestID != "" && e.RequestID != q.RequestID,
+			q.Reason != "" && e.Reason != q.Reason,
+			q.ClientIP != "" && e.ClientIP != q.ClientIP:
 			continue
 		}
 		out = append(out, e)
@@ -804,4 +816,120 @@ func (r rolloutRepo) SetStep(_ context.Context, id, agentID, state, fromVersion,
 		}
 	}
 	return store.ErrNotFound
+}
+
+// ---- bans ----
+
+type banRepo struct{ s *Store }
+
+func (r banRepo) find(p netip.Prefix) int {
+	return slices.IndexFunc(r.s.bans, func(b store.Ban) bool { return b.Prefix == p })
+}
+
+func (r banRepo) Upsert(_ context.Context, b store.Ban) (store.Ban, error) {
+	if err := b.Validate(); err != nil {
+		return store.Ban{}, err
+	}
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if b.CreatedAt.IsZero() {
+		b.CreatedAt = time.Now()
+	}
+	b.CreatedAt = trunc(b.CreatedAt)
+	b.LastHitAt, b.Hits = b.CreatedAt, 0
+	if b.ExpiresAt != nil {
+		t := trunc(*b.ExpiresAt)
+		b.ExpiresAt = &t
+	}
+	r.s.bansVer++
+	if i := r.find(b.Prefix); i >= 0 {
+		b.ID = r.s.bans[i].ID
+		r.s.bans[i] = b
+		return b, nil
+	}
+	r.s.banID++
+	b.ID = r.s.banID
+	r.s.bans = append(r.s.bans, b)
+	return b, nil
+}
+
+func (r banRepo) Get(_ context.Context, id int64) (store.Ban, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	for _, b := range r.s.bans {
+		if b.ID == id {
+			return b, nil
+		}
+	}
+	return store.Ban{}, store.ErrNotFound
+}
+
+func (r banRepo) GetByPrefix(_ context.Context, p netip.Prefix) (store.Ban, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if i := r.find(p); i >= 0 {
+		return r.s.bans[i], nil
+	}
+	return store.Ban{}, store.ErrNotFound
+}
+
+func (r banRepo) ListActive(_ context.Context, now time.Time) ([]store.Ban, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	var out []store.Ban
+	for _, b := range r.s.bans {
+		if b.Active(trunc(now)) {
+			out = append(out, b)
+		}
+	}
+	slices.SortFunc(out, func(a, b store.Ban) int { return cmp.Compare(b.ID, a.ID) })
+	return out, nil
+}
+
+func (r banRepo) Delete(_ context.Context, id int64) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	for i, b := range r.s.bans {
+		if b.ID == id {
+			r.s.bans = slices.Delete(r.s.bans, i, i+1)
+			r.s.bansVer++
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+func (r banRepo) AddHits(_ context.Context, id, n int64, at time.Time) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	for i := range r.s.bans {
+		if r.s.bans[i].ID == id && n > 0 {
+			r.s.bans[i].Hits += n
+			if t := trunc(at); t.After(r.s.bans[i].LastHitAt) {
+				r.s.bans[i].LastHitAt = t
+			}
+		}
+	}
+	return nil
+}
+
+func (r banRepo) Prune(_ context.Context, before time.Time) (int, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	n0 := len(r.s.bans)
+	b := trunc(before)
+	r.s.bans = slices.DeleteFunc(r.s.bans, func(x store.Ban) bool {
+		return x.ExpiresAt != nil && x.ExpiresAt.Before(b) && x.LastHitAt.Before(b)
+	})
+	if d := n0 - len(r.s.bans); d > 0 {
+		r.s.bansVer++
+		return d, nil
+	}
+	return 0, nil
+}
+
+func (r banRepo) Version(_ context.Context) (int64, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	return r.s.bansVer, nil
 }

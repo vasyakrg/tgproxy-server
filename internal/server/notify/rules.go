@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/buildinfo"
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
 	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
+	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
 
 const (
@@ -290,6 +293,38 @@ func (e *Evaluator) RolloutFailed(ctx context.Context, agentID, version, reason 
 		Type: RolloutFailed, AgentID: agentID, Severity: SeverityCritical,
 		Title: fmt.Sprintf("Раскатка %s остановлена на агенте %s", version, agentID),
 		Text:  fmt.Sprintf("Обновление агента не прошло: %s. Остальные агенты не тронуты; агент откатывается на прежнюю версию сам.", reason),
+	})
+}
+
+// autoBanListMax — сколько адресов перечислять в одном сообщении об автобане.
+const autoBanListMax = 10
+
+// AutoBans — пачка автобанов за интервал агрегации (internal/server/ban.Digest): одно сообщение
+// на пачку, чтобы скан из ботнета не превратился в поток алертов.
+func (e *Evaluator) AutoBans(ctx context.Context, bans []store.Ban) {
+	if len(bans) == 0 {
+		return
+	}
+	var b strings.Builder
+	for i, x := range bans {
+		if i == autoBanListMax {
+			fmt.Fprintf(&b, "… и ещё %d\n", len(bans)-autoBanListMax)
+			break
+		}
+		until := "бессрочно"
+		if x.ExpiresAt != nil {
+			until = "до " + x.ExpiresAt.UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		fmt.Fprintf(&b, "%s — %s (уровень %d)\n", strings.TrimSuffix(x.Prefix.String(), "/32"), until, x.Level+1)
+	}
+	title := "Автобан IP: 1 адрес"
+	if len(bans) > 1 {
+		title = fmt.Sprintf("Автобан IP: %d адресов", len(bans))
+	}
+	now := e.o.Clock()
+	e.fire(ctx, Alert{
+		Type: IPAutoBan, Key: AlertKey(IPAutoBan, strconv.FormatInt(now.UnixNano(), 10)), Severity: SeverityWarning,
+		Title: title, Text: strings.TrimRight(b.String(), "\n"), At: now,
 	})
 }
 

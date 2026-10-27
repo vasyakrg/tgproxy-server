@@ -25,6 +25,7 @@ const (
 	AgentEnrolled       AlertType = "agent_enrolled"
 	AllAgentsDown       AlertType = "all_agents_down"
 	RolloutFailed       AlertType = "rollout_failed"
+	IPAutoBan           AlertType = "ip_autoban"
 )
 
 // Severity — важность алерта.

@@ -14,6 +14,7 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/config"
 	"github.com/vasyakrg/tgproxy-server/internal/metrics"
 	"github.com/vasyakrg/tgproxy-server/internal/server/agents"
+	"github.com/vasyakrg/tgproxy-server/internal/server/ban"
 	"github.com/vasyakrg/tgproxy-server/internal/server/history"
 	"github.com/vasyakrg/tgproxy-server/internal/server/notify"
 	"github.com/vasyakrg/tgproxy-server/internal/server/router"
@@ -172,6 +173,8 @@ func (s *Server) runObs(ctx context.Context) (wait func()) {
 		run(sampler.RunTicker)
 	}
 	run(s.obs.errlog.Run)
+	run(s.bans.Run)
+	run(func(ctx context.Context) { s.banDigest.Run(ctx, ban.DefaultDigestInterval) })
 	if s.obs.deliv != nil {
 		run(s.obs.deliv.Run)
 		run(s.obs.eval.Run)

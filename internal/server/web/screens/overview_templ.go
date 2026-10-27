@@ -668,14 +668,14 @@ func chartCard(vm OverviewVM) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "</span></button> <span class=\"mono ov-updated\" data-updated>обновлено 0 с назад</span><ul class=\"legend\" aria-label=\"Серии графика\"><li><span class=\"legend-sw legend-ok\" aria-hidden=\"true\"></span>успешные</li><li><span class=\"legend-sw legend-err\" aria-hidden=\"true\"></span>ошибки прокси</li><li><span class=\"legend-sw legend-r429\" aria-hidden=\"true\"></span>429 Telegram</li></ul></div><div class=\"mono ov-tip\" data-chart-tip>Наведите на график, чтобы увидеть значения</div><div class=\"chart\" data-chart data-range=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "</span></button> <span class=\"mono ov-updated\" data-updated>обновлено 0 с назад</span><ul class=\"legend\" aria-label=\"Серии графика\"><li><span class=\"legend-sw legend-ok\" aria-hidden=\"true\"></span>успешные</li><li><span class=\"legend-sw legend-err\" aria-hidden=\"true\"></span>ошибки прокси</li><li><span class=\"legend-sw legend-r429\" aria-hidden=\"true\"></span>429 Telegram</li><li><span class=\"legend-sw legend-denied\" aria-hidden=\"true\"></span>отказы</li></ul></div><div class=\"mono ov-tip\" data-chart-tip>Наведите на график, чтобы увидеть значения</div><div class=\"chart\" data-chart data-range=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var37 string
 		templ_7745c5c3_Var37, templ_7745c5c3_Err = templruntime.NewAttributeExpression(string(vm.Range)).Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 124, Col: 32}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 125, Col: 32}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var37)
 		if templ_7745c5c3_Err != nil {
@@ -688,7 +688,7 @@ func chartCard(vm OverviewVM) templ.Component {
 		var templ_7745c5c3_Var38 string
 		templ_7745c5c3_Var38, templ_7745c5c3_Err = templruntime.NewAttributeExpression(strconv.Itoa(vm.PollMS)).Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 125, Col: 41}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 126, Col: 41}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var38)
 		if templ_7745c5c3_Err != nil {
@@ -701,7 +701,7 @@ func chartCard(vm OverviewVM) templ.Component {
 		var templ_7745c5c3_Var39 string
 		templ_7745c5c3_Var39, templ_7745c5c3_Err = templruntime.NewAttributeExpression(vm.TimeseriesURL).ResolveURL(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 126, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 127, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var39)
 		if templ_7745c5c3_Err != nil {
@@ -714,7 +714,7 @@ func chartCard(vm OverviewVM) templ.Component {
 		var templ_7745c5c3_Var40 string
 		templ_7745c5c3_Var40, templ_7745c5c3_Err = templruntime.NewAttributeExpression(vm.SummaryURL).ResolveURL(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 127, Col: 35}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 128, Col: 35}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var40)
 		if templ_7745c5c3_Err != nil {
@@ -727,7 +727,7 @@ func chartCard(vm OverviewVM) templ.Component {
 		var templ_7745c5c3_Var41 string
 		templ_7745c5c3_Var41, templ_7745c5c3_Err = templruntime.NewAttributeExpression("График запросов в секунду за выбранный период, обновляется каждые " + strconv.Itoa(vm.PollSec) + " с").Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 129, Col: 175}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 130, Col: 175}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var41)
 		if templ_7745c5c3_Err != nil {

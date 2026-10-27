@@ -3,7 +3,9 @@ package notify
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,5 +264,32 @@ func TestEvaluatorWithRealNotifierDedups(t *testing.T) {
 	}
 	if got := len(pending(t, s)); got != 1 {
 		t.Fatalf("overload deduped to %d items, want 1", got)
+	}
+}
+
+func TestAutoBansDigest(t *testing.T) {
+	al := &fakeAlerter{}
+	ev, _ := newEval(newFakeRegistry(), al)
+	ctx := context.Background()
+	ev.AutoBans(ctx, nil)
+	if len(al.fired) != 0 {
+		t.Fatal("empty batch must not alert")
+	}
+	exp := time.Date(2026, 10, 27, 13, 0, 0, 0, time.UTC)
+	var bans []store.Ban
+	for i := range 15 {
+		bans = append(bans, store.Ban{Prefix: netip.PrefixFrom(netip.AddrFrom4([4]byte{203, 0, 113, byte(i + 1)}), 32), ExpiresAt: &exp, Level: i % 3})
+	}
+	ev.AutoBans(ctx, bans)
+	if len(al.fired) != 1 || al.fired[0].Type != IPAutoBan {
+		t.Fatalf("want one aggregated alert, got %+v", al.fired)
+	}
+	a := al.fired[0]
+	if !strings.Contains(a.Title, "15") || !strings.Contains(a.Text, "203.0.113.1 ") || !strings.Contains(a.Text, "и ещё 5") ||
+		strings.Contains(a.Text, "/32") || strings.Count(a.Text, "\n") != 10 {
+		t.Fatalf("alert %+v", a)
+	}
+	if !KnownType(IPAutoBan) {
+		t.Fatal("ip_autoban must be in catalog (toggleable)")
 	}
 }

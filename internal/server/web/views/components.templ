@@ -184,3 +184,18 @@ templ Card(title string) {
 		{ children... }
 	</section>
 }
+
+// ---------- Flag / GeoAttribution ----------
+
+// Flag — emoji-флаг страны из ISO-кода (regional indicators, без картинок и сетевых запросов);
+// title с кодом страны. Пустой флаг (нет базы, приватный адрес) — ничего не выводит.
+templ Flag(code, flag string) {
+	if flag != "" {
+		<span class="flag" role="img" title={ "Страна: " + code } aria-label={ "Страна: " + code }>{ flag }</span>
+	}
+}
+
+// GeoAttribution — атрибуция CC BY 4.0 для DB-IP; выводится на экранах с флагами.
+templ GeoAttribution() {
+	<p class="geo-attr"><a href="https://db-ip.com" rel="noopener noreferrer" target="_blank">IP Geolocation by DB-IP</a></p>
+}

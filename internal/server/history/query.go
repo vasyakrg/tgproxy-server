@@ -59,6 +59,9 @@ type Point struct {
 	R429RPS  float64 `json:"r429_rps"`
 	P95Ms    float64 `json:"p95_ms"`
 	Inflight int     `json:"inflight"`
+	// DeniedRPS — отказы доступа в секунду (все причины); DeniedBy — разбивка по причинам (для тултипа).
+	DeniedRPS float64            `json:"denied_rps"`
+	DeniedBy  map[string]float64 `json:"denied_by,omitempty"`
 }
 
 // Series — ответ Timeseries.
@@ -89,6 +92,8 @@ type Filters struct {
 	RequestID string
 	Method    string
 	Outcome   store.ErrorOutcome
+	Reason    string // причина отказа доступа
+	ClientIP  string
 	Limit     int // 0 → 50, максимум 200
 }
 
@@ -144,6 +149,7 @@ func (q *Query) Timeseries(ctx context.Context, rng Range, agentID string, since
 		s.Points = append(s.Points, Point{
 			T: r.At.Unix(), OKRPS: float64(r.OK) / sec, ErrRPS: float64(r.Err) / sec,
 			R429RPS: float64(r.RateLimited) / sec, P95Ms: r.P95Ms, Inflight: r.Inflight,
+			DeniedRPS: float64(sumDenied(r.Denied)) / sec, DeniedBy: ratePerSec(r.Denied, sec),
 		})
 	}
 	if res == store.Res5m {
@@ -184,6 +190,7 @@ func (q *Query) openTail(ctx context.Context, id string, now time.Time, closed m
 		g.RateLimited += r.RateLimited
 		g.Inflight = max(g.Inflight, r.Inflight)
 		g.Buckets = addBuckets(g.Buckets, r.Buckets)
+		g.Denied = addDenied(g.Denied, r.Denied)
 	}
 	slices.SortFunc(order, func(a, b time.Time) int { return a.Compare(b) })
 	out := make([]Point, 0, len(order))
@@ -197,6 +204,7 @@ func (q *Query) openTail(ctx context.Context, id string, now time.Time, closed m
 		out = append(out, Point{
 			T: ts.Unix(), OKRPS: float64(g.OK) / span, ErrRPS: float64(g.Err) / span,
 			R429RPS: float64(g.RateLimited) / span, P95Ms: P95(g.Buckets), Inflight: g.Inflight,
+			DeniedRPS: float64(sumDenied(g.Denied)) / span, DeniedBy: ratePerSec(g.Denied, span),
 		})
 	}
 	return out, nil
@@ -252,6 +260,7 @@ func (q *Query) Errors(ctx context.Context, cursor string, f Filters) (Page, err
 	items, err := q.ErrorRepo.List(ctx, store.ErrorQuery{
 		BeforeID: before, Limit: limit + 1, AgentID: f.AgentID, BotID: f.BotID, Method: f.Method,
 		Outcome: f.Outcome, Phase: f.Phase, Code: f.Code, RequestID: f.RequestID,
+		Reason: f.Reason, ClientIP: f.ClientIP,
 	})
 	if err != nil {
 		return Page{}, err
@@ -281,4 +290,23 @@ func decodeCursor(c string) (int64, error) {
 		return 0, ErrBadCursor
 	}
 	return id, nil
+}
+
+func sumDenied(m map[string]int64) int64 {
+	var n int64
+	for _, v := range m {
+		n += v
+	}
+	return n
+}
+
+func ratePerSec(m map[string]int64, sec float64) map[string]float64 {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]float64, len(m))
+	for k, v := range m {
+		out[k] = float64(v) / sec
+	}
+	return out
 }

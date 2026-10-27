@@ -41,6 +41,9 @@ func Run(t *testing.T, factory Factory) {
 		{"InstallJobs", testInstallJobs},
 		{"Settings", testSettings},
 		{"Rollouts", testRollouts},
+		{"Bans", testBans},
+		{"DeniedSamples", testDeniedSamples},
+		{"AccessDenials", testAccessDenials},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {
@@ -1031,5 +1034,146 @@ func testRollouts(t *testing.T, s store.Store) {
 	ok(t, err)
 	if latest.ID != "r2" {
 		t.Fatalf("latest %+v", latest)
+	}
+}
+
+func testBans(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	r := s.Bans()
+	v0, err := r.Version(ctx)
+	ok(t, err)
+	_, err = r.Get(ctx, 1)
+	is(t, err, store.ErrNotFound)
+	_, err = r.GetByPrefix(ctx, netip.MustParsePrefix("1.2.3.4/32"))
+	is(t, err, store.ErrNotFound)
+	is(t, r.Delete(ctx, 1), store.ErrNotFound)
+
+	for _, bad := range []store.Ban{
+		{Prefix: netip.MustParsePrefix("1.2.3.0/24"), Source: store.BanManual},
+		{Prefix: netip.MustParsePrefix("2001:db8::1/128"), Source: store.BanManual},
+		{Prefix: netip.MustParsePrefix("2001:db8::/48"), Source: store.BanManual},
+		{Prefix: netip.MustParsePrefix("1.2.3.4/32"), Source: "weird"},
+		{Source: store.BanManual},
+	} {
+		_, err := r.Upsert(ctx, bad)
+		is(t, err, store.ErrInvalid)
+	}
+
+	now := time.Now()
+	exp := now.Add(time.Hour)
+	b, err := r.Upsert(ctx, store.Ban{Prefix: netip.MustParsePrefix("1.2.3.4/32"), Source: store.BanAuto, Actor: "auto",
+		Comment: "x", CreatedAt: now, ExpiresAt: &exp, Level: 1})
+	ok(t, err)
+	if b.ID == 0 || b.Level != 1 || b.ExpiresAt == nil || b.Source != store.BanAuto || b.Hits != 0 {
+		t.Fatalf("ban %+v", b)
+	}
+	perm, err := r.Upsert(ctx, store.Ban{Prefix: netip.MustParsePrefix("2001:db8:0:1::/64"), Source: store.BanManual, Actor: "admin"})
+	ok(t, err)
+	if perm.ExpiresAt != nil {
+		t.Fatal("permanent expected")
+	}
+	past := now.Add(-time.Hour)
+	expired, err := r.Upsert(ctx, store.Ban{Prefix: netip.MustParsePrefix("5.6.7.8/32"), Source: store.BanAuto, CreatedAt: now.Add(-2 * time.Hour), ExpiresAt: &past})
+	ok(t, err)
+	v1, _ := r.Version(ctx)
+	if v1 <= v0 {
+		t.Fatalf("version did not grow: %d -> %d", v0, v1)
+	}
+
+	act, err := r.ListActive(ctx, now)
+	ok(t, err)
+	if len(act) != 2 || act[0].ID != perm.ID || act[1].ID != b.ID {
+		t.Fatalf("active %+v", act)
+	}
+	got, err := r.GetByPrefix(ctx, expired.Prefix)
+	ok(t, err)
+	if got.ID != expired.ID {
+		t.Fatalf("expired still stored: %+v", got)
+	}
+
+	// hits не двигают версию
+	ok(t, r.AddHits(ctx, b.ID, 5, now.Add(time.Minute)))
+	ok(t, r.AddHits(ctx, b.ID, 0, now))
+	ok(t, r.AddHits(ctx, 9999, 3, now))
+	v2, _ := r.Version(ctx)
+	if v2 != v1 {
+		t.Fatalf("hits changed version %d -> %d", v1, v2)
+	}
+	got, _ = r.Get(ctx, b.ID)
+	if got.Hits != 5 || !got.LastHitAt.After(b.CreatedAt) {
+		t.Fatalf("hits %+v", got)
+	}
+
+	// повторный бан того же префикса: тот же id, hits обнулены, level новый
+	again, err := r.Upsert(ctx, store.Ban{Prefix: b.Prefix, Source: store.BanManual, Actor: "admin", Level: 2, CreatedAt: now.Add(2 * time.Minute)})
+	ok(t, err)
+	if again.ID != b.ID || again.Hits != 0 || again.Level != 2 || again.Source != store.BanManual || again.ExpiresAt != nil {
+		t.Fatalf("re-ban %+v", again)
+	}
+	v3, _ := r.Version(ctx)
+	if v3 <= v2 {
+		t.Fatal("re-ban must change version")
+	}
+
+	// prune: только истёкшие без недавней активности
+	n, err := r.Prune(ctx, now.Add(-30*time.Minute))
+	ok(t, err)
+	if n != 1 {
+		t.Fatalf("pruned %d", n)
+	}
+	_, err = r.Get(ctx, expired.ID)
+	is(t, err, store.ErrNotFound)
+
+	ok(t, r.Delete(ctx, perm.ID))
+	act, _ = r.ListActive(ctx, now)
+	if len(act) != 1 || act[0].ID != b.ID {
+		t.Fatalf("after delete %+v", act)
+	}
+}
+
+func testDeniedSamples(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	h := s.History()
+	at := time.Now().Truncate(10 * time.Second)
+	ok(t, h.Append(ctx, store.Res10s, []store.Sample{
+		{At: at, AgentID: "*", OK: 1, Denied: map[string]int64{"no_rule": 3, "banned": 7}},
+		{At: at, AgentID: "a1", OK: 1},
+	}))
+	got, err := h.Range(ctx, store.Res10s, "", at, at.Add(time.Second))
+	ok(t, err)
+	if len(got) != 2 {
+		t.Fatalf("rows %+v", got)
+	}
+	for _, g := range got {
+		switch g.AgentID {
+		case "*":
+			if g.Denied["no_rule"] != 3 || g.Denied["banned"] != 7 || len(g.Denied) != 2 {
+				t.Fatalf("denied %+v", g.Denied)
+			}
+		default:
+			if len(g.Denied) != 0 {
+				t.Fatalf("unexpected denied %+v", g.Denied)
+			}
+		}
+	}
+}
+
+func testAccessDenials(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	r := s.Errors()
+	for i, reason := range []string{"no_rule", "key_required", "bad_key"} {
+		_, err := r.Append(ctx, store.ErrorEvent{RequestID: "d" + strconv.Itoa(i), Phase: "access", Code: 403,
+			Outcome: store.OutcomeFailedToBot, ClientIP: "203.0.113." + strconv.Itoa(i%2+1), Reason: reason})
+		ok(t, err)
+	}
+	got, err := r.List(ctx, store.ErrorQuery{Reason: "key_required"})
+	ok(t, err)
+	if len(got) != 1 || got[0].ClientIP != "203.0.113.2" || got[0].Reason != "key_required" {
+		t.Fatalf("reason filter %+v", got)
+	}
+	got, err = r.List(ctx, store.ErrorQuery{ClientIP: "203.0.113.1"})
+	ok(t, err)
+	if len(got) != 2 {
+		t.Fatalf("ip filter %+v", got)
 	}
 }

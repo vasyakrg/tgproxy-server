@@ -74,7 +74,13 @@ templ ruleRow(r RuleRow) {
 				@views.Chip("отключено", views.ToneWarn)
 			}
 		</td>
-		<td>@views.Chip(r.KindLabel, r.KindTone)</td>
+		<td>
+			if r.BothTip {
+				<span title="Нужны и сеть, и ключ: запросы из этих сетей без ключа отклоняются (403)">@views.Chip(r.KindLabel, r.KindTone)</span>
+			} else {
+				@views.Chip(r.KindLabel, r.KindTone)
+			}
+		</td>
 		<td class="col-wrap">
 			if len(r.CIDRs) == 0 {
 				<span class="muted">любые</span>
@@ -136,7 +142,7 @@ templ botsSection(bots []BotRow) {
 // RuleForm — форма создания (ID == 0) или изменения правила.
 templ RuleForm(f RuleFormVM) {
 	<form
-		class="stack"
+		class="stack rule-form"
 		method="post"
 		action={ templ.SafeURL(f.Action()) }
 		hx-post={ f.Action() }
@@ -180,9 +186,15 @@ templ RuleForm(f RuleFormVM) {
 		</div>
 		if f.IsNew() {
 			<label class="check">
-				<input type="checkbox" name="with_key" value="1" checked?={ f.WithKey }/>
+				<input type="checkbox" id="rule-with-key" name="with_key" value="1" checked?={ f.WithKey }/>
 				<span>Скрытый ключ в адресе</span>
 			</label>
+			<p
+				class="field-hint key-hint"
+				id="rule-key-hint"
+				role="note"
+				data-active?={ f.KeyAndNetHint() }
+			>Сеть И ключ: запросы из этих сетей без ключа будут отклонены (403)</p>
 		} else {
 			<div class="field">
 				<span class="field-label">Скрытый ключ</span>

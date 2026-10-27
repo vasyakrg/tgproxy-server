@@ -196,6 +196,7 @@ func TestTimeseriesBadParams(t *testing.T) {
 		"/api/v1/errors?code=99999":          "bad_code",
 		"/api/v1/errors?cursor=!!!":          "bad_cursor",
 		"/api/v1/errors?limit=0":             "bad_limit",
+		"/api/v1/errors?reason=whatever":     "bad_reason",
 	} {
 		rec := do(mux, u)
 		var e struct{ Error string }
@@ -337,5 +338,42 @@ func TestMethodNotAllowed(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/errors", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST: %d", rec.Code)
+	}
+}
+
+func TestAccessDenialsInErrorsAndTimeseries(t *testing.T) {
+	mux, st := setup(t, nil, nil)
+	ctx := context.Background()
+	for i, reason := range []string{"no_rule", "key_required", "bad_key"} {
+		if _, err := st.Errors().Append(ctx, store.ErrorEvent{At: t0.Add(-time.Duration(i) * time.Minute), Phase: "access", Code: 403,
+			Outcome: store.OutcomeFailedToBot, ClientIP: "203.0.113.5", Reason: reason, Description: "access denied: " + reason}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var page api.ErrorsPage
+	decode(t, do(mux, "/api/v1/errors?reason=key_required&client_ip=203.0.113.5"), &page)
+	if len(page.Items) != 1 || page.Items[0].Reason != "key_required" || page.Items[0].ClientIP != "203.0.113.5" || page.Items[0].Phase != "access" {
+		t.Fatalf("items %+v", page.Items)
+	}
+	decode(t, do(mux, "/api/v1/errors?phase=access"), &page)
+	if len(page.Items) != 3 {
+		t.Fatalf("phase filter: %+v", page.Items)
+	}
+
+	if err := st.History().Append(ctx, store.Res10s, []store.Sample{
+		{At: t0.Add(-30 * time.Second).Truncate(10 * time.Second), AgentID: "*", OK: 10, Denied: map[string]int64{"no_rule": 20, "banned": 10}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var ts struct {
+		Points []struct {
+			OKRPS     float64            `json:"ok_rps"`
+			DeniedRPS float64            `json:"denied_rps"`
+			DeniedBy  map[string]float64 `json:"denied_by"`
+		} `json:"points"`
+	}
+	decode(t, do(mux, "/api/v1/stats/timeseries?range=1h"), &ts)
+	if len(ts.Points) != 1 || ts.Points[0].DeniedRPS != 3 || ts.Points[0].DeniedBy["no_rule"] != 2 || ts.Points[0].DeniedBy["banned"] != 1 {
+		t.Fatalf("points %+v", ts.Points)
 	}
 }

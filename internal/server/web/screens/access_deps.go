@@ -52,6 +52,7 @@ type RuleRow struct {
 	CIDRs     []string
 	KeyPrefix string // «tgp_k7Qm…» или «—»
 	Limit     string
+	BothTip   bool // правило «сеть+ключ»: нужны оба условия
 	Requests  string
 	LastSeen  string
 	SeenMuted bool
@@ -86,6 +87,11 @@ type RuleFormVM struct {
 	Errors    api.FieldErrors
 }
 
+// KeyAndNetHint сообщает, что показана подсказка «Сеть И ключ»: заданы сети и включён ключ (создание).
+func (f RuleFormVM) KeyAndNetHint() bool {
+	return f.IsNew() && f.WithKey && strings.TrimSpace(f.CIDRs) != ""
+}
+
 // IsNew — форма создания.
 func (f RuleFormVM) IsNew() bool { return f.ID == 0 }
 
@@ -109,7 +115,7 @@ func kindView(k api.RuleKind) (string, views.Tone) {
 	case api.KindKey:
 		return "ключ", views.ToneAccent
 	case api.KindBoth:
-		return "сеть + ключ", views.ToneTG
+		return "сеть+ключ", views.ToneTG
 	case api.KindNetwork:
 	}
 	return "сеть", views.ToneNeutral
@@ -156,6 +162,7 @@ func makeRuleRow(r store.AccessRule, env AccessEnv, now time.Time) RuleRow {
 		KindLabel: label, KindTone: tone, KeyPrefix: "—",
 		Limit: "без лимита", Requests: "—", LastSeen: "—", SeenMuted: true,
 	}
+	row.BothTip = api.KindOf(r) == api.KindBoth
 	for _, p := range r.CIDRs {
 		row.CIDRs = append(row.CIDRs, p.String())
 	}

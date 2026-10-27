@@ -148,6 +148,7 @@ func ValidateServer(c *ServerConfig) error {
 	v.store(c.Store)
 	v.update(c.Update)
 	v.notify(c.Notify)
+	v.ban(c.Ban)
 
 	if c.Metrics.BearerFile == "" && !isLoopbackListen(c.Listen.Metrics) {
 		v.add("metrics.bearer_file", "required when listen.metrics (%q) is not loopback", c.Listen.Metrics)
@@ -350,6 +351,42 @@ func (v *validator) notify(n NotifyConfig) {
 	v.positive("notify.delivery_timeout", n.DeliveryTimeout)
 	if n.MaxPerMinute < 1 {
 		v.add("notify.max_per_minute", "must be positive, got %d", n.MaxPerMinute)
+	}
+}
+
+// Границы настроек автобана.
+const (
+	maxBanThreshold  = 100000
+	maxBanTracked    = 1_000_000
+	maxBanDuration   = 5 * 365 * 24 * time.Hour
+	maxBanEscalation = 10
+)
+
+func (v *validator) ban(b BanConfig) {
+	if !b.Enabled {
+		return
+	}
+	if b.Threshold < 1 || b.Threshold > maxBanThreshold {
+		v.add("ban.threshold", "must be 1..%d, got %d", maxBanThreshold, b.Threshold)
+	}
+	v.positive("ban.window", b.Window)
+	v.positive("ban.duration", b.Duration)
+	v.positive("ban.reset_after", b.ResetAfter)
+	if b.Duration > maxBanDuration {
+		v.add("ban.duration", "too long, got %s", b.Duration)
+	}
+	if len(b.Escalation) > maxBanEscalation {
+		v.add("ban.escalation", "at most %d steps, got %d", maxBanEscalation, len(b.Escalation))
+	}
+	for i, d := range b.Escalation {
+		path := fmt.Sprintf("ban.escalation[%d]", i)
+		v.positive(path, d)
+		if d > maxBanDuration {
+			v.add(path, "too long, got %s", d)
+		}
+	}
+	if b.MaxTracked < 100 || b.MaxTracked > maxBanTracked {
+		v.add("ban.max_tracked", "must be 100..%d, got %d", maxBanTracked, b.MaxTracked)
 	}
 }
 

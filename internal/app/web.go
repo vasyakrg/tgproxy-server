@@ -168,8 +168,12 @@ func (s *Server) wireWeb(cfg *config.ServerConfig) error {
 		ServerVersion: buildinfo.Version, Log: s.logger,
 	})))
 	rt.Mount("GET /errors", protected(screens.NewErrors(screens.ErrorsDeps{
-		Shell: rt, Source: s.obs.hq, Agents: s.reg, Log: s.logger,
+		Shell: rt, Source: s.obs.hq, Agents: s.reg, Geo: s.geo, Log: s.logger,
 	})))
+	bansSvc := api.NewBansService(s.bans, s.st.Audit(), s.logger, nil)
+	screens.MountBans(rt, screens.BansDeps{
+		Auth: a, Service: bansSvc, Geo: s.geo, ClientIP: s.checker.ClientIP, Logger: s.logger,
+	})
 	agentsAPI := s.mountAgents(rt, a, cfg)
 	sysAPI, sysState, err := s.mountSystem(rt, a, users, cfg)
 	if err != nil {
@@ -182,6 +186,7 @@ func (s *Server) wireWeb(cfg *config.ServerConfig) error {
 		Routes(muxMounter{apiMux}, wrapRefresh(protected, refresh))
 	(&api.StatsAPI{Stats: s.obs.hq, Agents: s.reg, Live: liveInflight{s.obs.inflight}, Log: s.logger}).Routes(apiMux, protected)
 	(&api.ErrorsAPI{Source: s.obs.hq, Log: s.logger}).Routes(apiMux, protected)
+	(&api.BansAPI{Service: bansSvc, ClientIP: s.checker.ClientIP, Country: s.geo.LookupString}).Routes(muxMounter{apiMux}, api.Wrap(protected))
 	agentsAPI(apiMux, protected)
 	sysAPI(apiMux, protected)
 	rt.Mount("/api/v1/", apiMux)

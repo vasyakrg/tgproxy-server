@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -17,8 +18,55 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/tgapi"
 )
 
-// ErrDenied — ни одно правило не подошло.
+// ErrDenied — запрос отклонён (ни одно правило не подошло). Конкретная причина — в
+// *DeniedError (ReasonOf); errors.Is(err, ErrDenied) верно для любой причины.
 var ErrDenied = errors.New("access: denied")
+
+// Reason — причина отказа. Наружу (клиенту) не раскрывается: ответ всегда один и тот же 403;
+// причина идёт в журнал, метрики и счётчик автобана. В значении никогда нет ключей и их хешей.
+type Reason string
+
+// Причины отказа.
+const (
+	ReasonNoRule      Reason = "no_rule"      // ни одно правило не подошло по сети
+	ReasonKeyRequired Reason = "key_required" // сеть подошла, но правило требует ключ, а его нет
+	ReasonBadKey      Reason = "bad_key"      // ключ передан, но не подошёл
+	ReasonRateLimited Reason = "rate_limited" // исчерпан лимит правила
+	ReasonBanned      Reason = "banned"       // IP в бане (проверка до правил, см. internal/server/ban)
+)
+
+// Reasons — все причины в порядке показа.
+var Reasons = []Reason{ReasonNoRule, ReasonKeyRequired, ReasonBadKey, ReasonRateLimited, ReasonBanned}
+
+// Valid сообщает, что причина из известного набора.
+func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
+
+// CountsForBan сообщает, учитывается ли отказ в счётчике автобана. rate_limited — легитимный клиент,
+// упёршийся в лимит; banned — уже забанен.
+func (r Reason) CountsForBan() bool {
+	return r == ReasonNoRule || r == ReasonKeyRequired || r == ReasonBadKey
+}
+
+// DeniedError — отказ с причиной.
+type DeniedError struct{ Reason Reason }
+
+func (e *DeniedError) Error() string { return "access: denied (" + string(e.Reason) + ")" }
+
+// Is связывает любую причину с ErrDenied.
+func (e *DeniedError) Is(target error) bool { return target == ErrDenied }
+
+// ReasonOf возвращает причину отказа из ошибки Check; "" — это не отказ доступа.
+func ReasonOf(err error) Reason {
+	var d *DeniedError
+	if errors.As(err, &d) {
+		return d.Reason
+	}
+	var rl *RateLimitedError
+	if errors.As(err, &rl) {
+		return ReasonRateLimited
+	}
+	return ""
+}
 
 // RuleInfo описывает сработавшее правило.
 type RuleInfo struct {
@@ -85,16 +133,25 @@ func (c *Checker) Check(r *http.Request, route tgapi.Route) (RuleInfo, error) {
 		sum = sha256.Sum256([]byte(key))
 	}
 	best := -1
+	var keyMatchedOffNet, keyRuleOnNet bool // для причины отказа
 	for i := range rules {
 		ru := &rules[i]
 		var ok bool
+		onNet := len(ru.cidrs) == 0 || contains(ru.cidrs, ip)
 		if key != "" {
 			// сравниваем со всеми ключевыми правилами без раннего выхода
-			ok = ru.score >= 2 && subtle.ConstantTimeCompare(sum[:], ru.hash) == 1
+			hashOK := ru.score >= 2 && subtle.ConstantTimeCompare(sum[:], ru.hash) == 1
+			ok = hashOK
+			if hashOK && !onNet {
+				keyMatchedOffNet = true
+			}
 		} else {
 			ok = ru.score == 1
+			if ru.score >= 2 && onNet {
+				keyRuleOnNet = true
+			}
 		}
-		if ok && len(ru.cidrs) > 0 && !contains(ru.cidrs, ip) {
+		if ok && !onNet {
 			ok = false
 		}
 		if ok && (best < 0 || ru.score > rules[best].score) {
@@ -102,7 +159,14 @@ func (c *Checker) Check(r *http.Request, route tgapi.Route) (RuleInfo, error) {
 		}
 	}
 	if best < 0 {
-		return RuleInfo{}, ErrDenied
+		switch {
+		case key == "" && keyRuleOnNet:
+			return RuleInfo{}, &DeniedError{Reason: ReasonKeyRequired}
+		case key != "" && !keyMatchedOffNet:
+			return RuleInfo{}, &DeniedError{Reason: ReasonBadKey}
+		}
+		// ключ верный, но не из своей сети; либо ни одно правило не подошло по сети
+		return RuleInfo{}, &DeniedError{Reason: ReasonNoRule}
 	}
 	ru := &rules[best]
 	if err := c.limit(r.Context(), ru); err != nil {
@@ -162,4 +226,16 @@ func (c *Checker) ClientIP(r *http.Request) string {
 		return ip.String()
 	}
 	return ""
+}
+
+// ClientAddr — то же, что ClientIP, но netip.Addr (невалидный — адрес не определён).
+func (c *Checker) ClientAddr(r *http.Request) netip.Addr { return c.clientIP(r) }
+
+// Networks возвращает все сети действующих правил (для защиты от автобана своих клиентов).
+func (c *Checker) Networks() []netip.Prefix {
+	var out []netip.Prefix
+	for _, ru := range c.snap.Load().rules {
+		out = append(out, ru.cidrs...)
+	}
+	return out
 }

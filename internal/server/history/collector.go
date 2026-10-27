@@ -29,7 +29,11 @@ type acc struct {
 
 func newAcc() *acc { return &acc{buckets: make([]atomic.Int64, NumBuckets())} }
 
-type window struct{ agents map[string]*acc }
+type window struct {
+	agents map[string]*acc
+	dmu    sync.Mutex
+	denied map[string]int64 // отказы доступа по причинам (отказ не маршрутизируется — агента нет)
+}
 
 // Collector — потокобезопасный приёмник событий горячего пути. БД не трогает.
 // Hot path держит RLock + атомики; Drain берёт Lock, поэтому снимок целостный.
@@ -39,7 +43,9 @@ type Collector struct {
 }
 
 // NewCollector создаёт пустой сборщик.
-func NewCollector() *Collector { return &Collector{w: &window{agents: map[string]*acc{}}} }
+func NewCollector() *Collector { return &Collector{w: newWindow()} }
+
+func newWindow() *window { return &window{agents: map[string]*acc{}, denied: map[string]int64{}} }
 
 func (c *Collector) with(agent string, f func(a *acc)) {
 	c.mu.RLock()
@@ -79,6 +85,17 @@ func (c *Collector) ObserveRequest(agent string, outcome Outcome, latency time.D
 	})
 }
 
+// ObserveDenied учитывает отказ доступа с причиной reason (no_rule, key_required, bad_key,
+// rate_limited, banned). Попадает в строку-агрегат; в RPS и долю ошибок прокси не входит.
+func (c *Collector) ObserveDenied(reason string) {
+	c.mu.RLock()
+	w := c.w
+	w.dmu.Lock()
+	w.denied[reason]++
+	w.dmu.Unlock()
+	c.mu.RUnlock()
+}
+
 // SetInflight выставляет текущее число запросов в полёте на агенте.
 func (c *Collector) SetInflight(agent string, n int) {
 	c.with(agent, func(a *acc) {
@@ -100,7 +117,7 @@ func (c *Collector) SetInflight(agent string, n int) {
 func (c *Collector) Drain() []store.Sample {
 	c.mu.Lock()
 	old := c.w
-	next := &window{agents: map[string]*acc{}}
+	next := newWindow()
 	for id, a := range old.agents {
 		if cur := a.inflight.Load(); cur > 0 {
 			n := newAcc()
@@ -118,6 +135,9 @@ func (c *Collector) Drain() []store.Sample {
 	}
 	slices.Sort(ids)
 	total := store.Sample{AgentID: AggregateID, Buckets: make([]int64, NumBuckets())}
+	if len(old.denied) > 0 {
+		total.Denied = old.denied
+	}
 	out := make([]store.Sample, 0, len(ids)+1)
 	for _, id := range ids {
 		a := old.agents[id]

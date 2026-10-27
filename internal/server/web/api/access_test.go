@@ -50,6 +50,7 @@ type acFx struct {
 	mux  acMux
 	sid  *http.Cookie
 	logs *bytes.Buffer
+	wrap api.Wrap
 }
 
 func newAcFx(t *testing.T) *acFx {
@@ -76,7 +77,8 @@ func newAcFx(t *testing.T) *acFx {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &acFx{t: t, st: st, mux: acMux{http.NewServeMux()}, sid: &http.Cookie{Name: auth.SessionCookie, Value: s.Token}, logs: &bytes.Buffer{}}
+	wrap := func(h http.Handler) http.Handler { return auth.Protect(a.RequireAuth(h)) }
+	f := &acFx{t: t, st: st, wrap: wrap, mux: acMux{http.NewServeMux()}, sid: &http.Cookie{Name: auth.SessionCookie, Value: s.Token}, logs: &bytes.Buffer{}}
 	logger := slog.New(slog.NewTextHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	svc := api.NewAccessService(st.AccessRules(), st.Audit(), logger, func() time.Time { return time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC) })
 	(&api.AccessAPI{
@@ -89,7 +91,7 @@ func newAcFx(t *testing.T) *acFx {
 			}
 			return 0, time.Time{}, false
 		},
-	}).Routes(f.mux, func(h http.Handler) http.Handler { return auth.Protect(a.RequireAuth(h)) })
+	}).Routes(f.mux, f.wrap)
 	return f
 }
 

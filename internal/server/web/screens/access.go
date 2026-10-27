@@ -156,7 +156,7 @@ func (s *accessScreen) newForm(w http.ResponseWriter, r *http.Request) {
 	if !htmxOnly(w, r) {
 		return
 	}
-	renderFragment(w, r, http.StatusOK, RuleForm(RuleFormVM{WithKey: true})) //nolint:contextcheck // templ-компонент получает ctx в Render
+	renderFragment(w, r, http.StatusOK, RuleForm(RuleFormVM{})) //nolint:contextcheck // templ-компонент получает ctx в Render
 }
 
 func (s *accessScreen) editForm(w http.ResponseWriter, r *http.Request) {

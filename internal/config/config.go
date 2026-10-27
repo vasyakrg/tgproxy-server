@@ -86,6 +86,8 @@ type ServerConfig struct {
 	Store         StoreConfig     `yaml:"store"`
 	Update        UpdateConfig    `yaml:"update"`
 	Notify        NotifyConfig    `yaml:"notify"`
+	Ban           BanConfig       `yaml:"ban"`
+	GeoIP         GeoIPConfig     `yaml:"geoip"`
 	Metrics       MetricsConfig   `yaml:"metrics"`
 	Logging       LoggingConfig   `yaml:"logging"`
 }
@@ -249,6 +251,26 @@ type NotifyConfig struct {
 
 // Enabled сообщает, настроен ли notifier.
 func (n NotifyConfig) Enabled() bool { return n.BotTokenFile != "" }
+
+// BanConfig — встроенный fail2ban: автобан IP по числу отказов доступа.
+// Считаются только отказы no_rule | key_required | bad_key; rate_limited и banned — нет.
+type BanConfig struct {
+	Enabled   bool          `yaml:"enabled"`
+	Threshold int           `yaml:"threshold"` // отказов за window до бана
+	Window    time.Duration `yaml:"window"`    // скользящее окно подсчёта
+	Duration  time.Duration `yaml:"duration"`  // срок первого бана
+	// Escalation — сроки повторных банов (второй, третий, ...); последний повторяется.
+	Escalation []time.Duration `yaml:"escalation"`
+	// ResetAfter — через сколько без нарушений уровень эскалации обнуляется.
+	ResetAfter time.Duration `yaml:"reset_after"`
+	// MaxTracked — потолок числа одновременно отслеживаемых IP (LRU) в памяти.
+	MaxTracked int `yaml:"max_tracked"`
+}
+
+// GeoIPConfig — локальная база стран (DB-IP Lite, mmdb). Нет файла — флаги не показываются.
+type GeoIPConfig struct {
+	File string `yaml:"file"`
+}
 
 // MetricsConfig — защита /metrics.
 type MetricsConfig struct {

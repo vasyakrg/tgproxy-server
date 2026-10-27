@@ -55,6 +55,10 @@ type Store struct {
 
 	errs  []store.ErrorEvent
 	errID int64
+
+	bans    []store.Ban
+	banID   int64
+	bansVer int64
 }
 
 var _ store.Store = (*Store)(nil)
@@ -65,6 +69,7 @@ func New() *Store {
 		agents:    map[string]store.Agent{},
 		agentsVer: 1,
 		rulesVer:  1,
+		bansVer:   1,
 		rules:     map[int64]store.AccessRule{},
 		sessions:  map[string]store.Session{},
 		rates:     map[string]store.RateWindow{},
@@ -121,6 +126,9 @@ func (s *Store) Settings() store.SettingsRepo { return settingsRepo{s} }
 
 // Rollouts — доступ к репозиторию/ресурсу хранилища (store.Store).
 func (s *Store) Rollouts() store.RolloutRepo { return rolloutRepo{s} }
+
+// Bans — доступ к репозиторию/ресурсу хранилища (store.Store).
+func (s *Store) Bans() store.BanRepo { return banRepo{s} }
 
 // Errors — доступ к репозиторию/ресурсу хранилища (store.Store).
 func (s *Store) Errors() store.ErrorEventRepo { return errRepo{s} }

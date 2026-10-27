@@ -9,6 +9,10 @@
 
   var RANGE_SEC = { '1h': 3600, '6h': 21600, '24h': 86400, '7d': 604800 };
   var ANIM_MS = 600;
+  var DENY_LABELS = {
+    no_rule: 'нет правила', key_required: 'нужен ключ', bad_key: 'неверный ключ',
+    rate_limited: 'лимит', banned: 'бан'
+  };
   var MIN_POLL = 2000;
   var MAX_POLL = 60000;
   var CHART_H = 240;
@@ -65,7 +69,8 @@
     this.summaryUrl = el.getAttribute('data-summary-url') || '';
     this.defaultTip = this.tipEl ? this.tipEl.textContent : '';
 
-    this.data = [[], [], [], []]; // t, ok, err, r429
+    this.data = [[], [], [], [], []]; // t, ok, err, r429, denied
+    this.denyBy = []; // разбивка отказов по причинам для тултипа, параллельно data[0]
     this.stepSec = 0;
     this.live = true;
     this.destroyed = false;
@@ -171,11 +176,13 @@
       if (t === last && last) { // открытое 5m-окно растёт: перезаписываем последнюю точку
         var k = d[0].length - 1;
         d[1][k] = toNum(p.ok_rps); d[2][k] = toNum(p.err_rps); d[3][k] = toNum(p.r429_rps);
+        d[4][k] = toNum(p.denied_rps); this.denyBy[k] = p.denied_by || null;
         added++;
         continue;
       }
       if (t < last) { continue; }
       d[0].push(t); d[1].push(toNum(p.ok_rps)); d[2].push(toNum(p.err_rps)); d[3].push(toNum(p.r429_rps));
+      d[4].push(toNum(p.denied_rps)); this.denyBy.push(p.denied_by || null);
       last = t; added++;
     }
     return added;
@@ -187,7 +194,7 @@
     var cutoff = d[0][n - 1] - this.windowSec - this.stepSec; // одна точка запаса слева — линия не обрывается
     var k = 0;
     while (k < n - 1 && d[0][k] < cutoff) { k++; }
-    if (k > 0) { for (var s = 0; s < 4; s++) { d[s].splice(0, k); } }
+    if (k > 0) { for (var s = 0; s < 5; s++) { d[s].splice(0, k); } this.denyBy.splice(0, k); }
   };
 
   Chart.prototype.target = function () {
@@ -204,6 +211,7 @@
     this.showEmpty('Данных пока нет');
 
     var cOK = css('--accent', '#2DD4BF'), cErr = css('--orange', '#FB923C'), c429 = css('--tg', '#A78BFA');
+    var cDenied = css('--err', '#F87171');
     var muted = css('--muted', '#9AA3B2'), border = css('--border', '#262B36');
     var font = '11px ' + css('--font-mono', 'ui-monospace, monospace');
     function ser(label, color) {
@@ -238,7 +246,8 @@
         {},
         ser('успешные', cOK),
         ser('ошибки прокси', cErr),
-        ser('429 Telegram', c429)
+        ser('429 Telegram', c429),
+        ser('отказы', cDenied)
       ],
       hooks: { setCursor: [function (u) { self.onCursor(u); }] }
     };
@@ -269,9 +278,23 @@
     var txt = fmtTime(d[0][i], this.windowSec > 86400) +
       ' · успешные ' + fmtRPS(d[1][i]) + ' rps' +
       ' · ошибки ' + fmtRPS(d[2][i]) +
-      ' · 429: ' + fmtRPS(d[3][i]);
+      ' · 429: ' + fmtRPS(d[3][i]) +
+      ' · отказы ' + fmtRPS(d[4][i]) + this.denyDetail(i);
     setText(this.tipEl, txt);
     this.tipEl.setAttribute('data-active', 'true');
+  };
+
+  // Разбивка отказов по причинам: « (нет правила 0,2; неверный ключ 1,1)».
+  Chart.prototype.denyDetail = function (i) {
+    var by = this.denyBy[i];
+    if (!by) { return ''; }
+    var parts = [];
+    for (var k in DENY_LABELS) {
+      if (Object.prototype.hasOwnProperty.call(DENY_LABELS, k) && toNum(by[k]) > 0) {
+        parts.push(DENY_LABELS[k] + ' ' + fmtRPS(toNum(by[k])));
+      }
+    }
+    return parts.length ? ' (' + parts.join('; ') + ')' : '';
   };
 
   // Новые точки: дописываем, сдвигаем окно (с плавной анимацией), если не reduced-motion.

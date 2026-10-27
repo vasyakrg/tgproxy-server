@@ -57,8 +57,9 @@ func (s *syncBuf) String() string {
 
 type e2eOpts struct {
 	rules  []config.AccessRule
-	agents int  // число агентов (по умолчанию 1: id "local"); id остальных — "a2", "a3"…
-	obs    bool // метрики + история + уведомления (telegram_id получателя — obsChatID)
+	agents int                        // число агентов (по умолчанию 1: id "local"); id остальных — "a2", "a3"…
+	obs    bool                       // метрики + история + уведомления (telegram_id получателя — obsChatID)
+	mut    func(*config.ServerConfig) // правки конфига сервера до старта
 }
 
 const (
@@ -247,6 +248,9 @@ func newE2E(t *testing.T, o e2eOpts) *e2e {
 	scfg.AccessRules = o.rules
 	if scfg.AccessRules == nil {
 		scfg.AccessRules = []config.AccessRule{localRule("127.0.0.0/8"), keyRule()}
+	}
+	if o.mut != nil {
+		o.mut(scfg)
 	}
 	e.cfg = scfg
 	sopts := ServerOptions{}

@@ -539,3 +539,57 @@ func TestErrorLogRunAndTrim(t *testing.T) {
 	cancel3()
 	l3.Run(c3)
 }
+
+// Отказы доступа: попадают в строку-агрегат (даже без трафика), сворачиваются в 5m и
+// не влияют на RPS/долю ошибок прокси.
+func TestDeniedCollectedRolledAndQueried(t *testing.T) {
+	ctx := context.Background()
+	st := memtest.New()
+	repo := st.History()
+	c := history.NewCollector()
+	s := &history.Sampler{Collector: c, Repo: repo, Roller: history.NewRoller(repo)}
+	for range 3 {
+		c.ObserveDenied("no_rule")
+	}
+	c.ObserveDenied("banned")
+	tick := t0.Add(history.Step5m + time.Second)
+	if err := s.Tick(ctx, tick); err != nil {
+		t.Fatal(err)
+	}
+	at := tick.Truncate(history.Step10s).Add(-history.Step10s)
+	got, _ := repo.Range(ctx, store.Res10s, history.AggregateID, at, at.Add(time.Second))
+	if len(got) != 1 || got[0].Denied["no_rule"] != 3 || got[0].Denied["banned"] != 1 || got[0].OK != 0 {
+		t.Fatalf("aggregate %+v", got)
+	}
+	// следующий тик: счётчики обнулены
+	if err := s.Tick(ctx, tick.Add(history.Step10s)); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := repo.Range(ctx, store.Res10s, history.AggregateID, at.Add(history.Step10s), at.Add(2*history.Step10s))
+	if len(next) != 1 || len(next[0].Denied) != 0 {
+		t.Fatalf("denied not reset: %+v", next)
+	}
+	// rollup 5m суммирует
+	if err := history.NewRoller(repo).Step(ctx, tick.Add(history.Step5m)); err != nil {
+		t.Fatal(err)
+	}
+	q := &history.Query{History: repo, ErrorRepo: st.Errors(), Now: func() time.Time { return tick.Add(history.Step5m) }}
+	ser, err := q.Timeseries(ctx, history.Range24h, "", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total float64
+	for _, p := range ser.Points {
+		total += p.DeniedRPS * 300
+		if p.OKRPS != 0 || p.ErrRPS != 0 {
+			t.Fatalf("denied leaked into proxy counters: %+v", p)
+		}
+	}
+	if total < 3.9 || total > 4.1 {
+		t.Fatalf("denied total %v want 4 (points %+v)", total, ser.Points)
+	}
+	// агентский ряд отказов не содержит
+	if a, _ := q.Timeseries(ctx, history.Range1h, "a", time.Time{}); len(a.Points) != 0 {
+		t.Fatalf("agent series: %+v", a.Points)
+	}
+}

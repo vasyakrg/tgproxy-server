@@ -1,7 +1,7 @@
 package views
 
 // Icon — inline SVG по имени (stroke=currentColor). Неизвестное имя — пусто.
-// Имена: pulse servers shield alert gear logout chevron plus trash edit copy close more drain undrain refresh swap check send upload.
+// Имена: pulse servers shield alert gear logout chevron plus trash edit copy close more drain undrain refresh swap check send upload ban unban.
 templ Icon(name string, size int) {
 	switch name {
 		case "pulse":
@@ -46,6 +46,10 @@ templ Icon(name string, size int) {
 			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"></path></svg>
 		case "send":
 			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"></path></svg>
+		case "ban":
+			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M5.6 5.6l12.8 12.8"></path></svg>
+		case "unban":
+			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.5l3 3 5-6"></path></svg>
 		case "upload":
 			<svg class="icon" aria-hidden="true" width={ sizeStr(size) } height={ sizeStr(size) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"></path></svg>
 	}

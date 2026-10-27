@@ -18,9 +18,9 @@ func (r errorRepo) Append(ctx context.Context, e store.ErrorEvent) (store.ErrorE
 	}
 	e.At = fromMS(ms(e.At))
 	res, err := r.s.w.ExecContext(ctx,
-		`INSERT INTO error_events (at, request_id, bot_id, agent_id, method, phase, code, outcome, description)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
-		ms(e.At), e.RequestID, e.BotID, e.AgentID, e.Method, e.Phase, e.Code, string(e.Outcome), e.Description)
+		`INSERT INTO error_events (at, request_id, bot_id, agent_id, method, phase, code, outcome, description, client_ip, reason)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		ms(e.At), e.RequestID, e.BotID, e.AgentID, e.Method, e.Phase, e.Code, string(e.Outcome), e.Description, e.ClientIP, e.Reason)
 	if err != nil {
 		return store.ErrorEvent{}, mapErr(err)
 	}
@@ -29,7 +29,7 @@ func (r errorRepo) Append(ctx context.Context, e store.ErrorEvent) (store.ErrorE
 }
 
 func (r errorRepo) List(ctx context.Context, q store.ErrorQuery) ([]store.ErrorEvent, error) {
-	query := `SELECT id, at, request_id, bot_id, agent_id, method, phase, code, outcome, description FROM error_events WHERE 1=1`
+	query := `SELECT id, at, request_id, bot_id, agent_id, method, phase, code, outcome, description, client_ip, reason FROM error_events WHERE 1=1`
 	var args []any
 	add := func(cond string, v any) {
 		query += ` AND ` + cond // #nosec G202 -- cond — только константные фрагменты из этой функции
@@ -59,6 +59,12 @@ func (r errorRepo) List(ctx context.Context, q store.ErrorQuery) ([]store.ErrorE
 	if q.RequestID != "" {
 		add("request_id = ?", q.RequestID)
 	}
+	if q.Reason != "" {
+		add("reason = ?", q.Reason)
+	}
+	if q.ClientIP != "" {
+		add("client_ip = ?", q.ClientIP)
+	}
 	query += ` ORDER BY id DESC LIMIT ?`
 	args = append(args, limitOr(q.Limit, 100))
 	rows, err := r.s.r.QueryContext(ctx, query, args...)
@@ -73,7 +79,7 @@ func (r errorRepo) List(ctx context.Context, q store.ErrorQuery) ([]store.ErrorE
 			at      int64
 			outcome string
 		)
-		if err := rows.Scan(&e.ID, &at, &e.RequestID, &e.BotID, &e.AgentID, &e.Method, &e.Phase, &e.Code, &outcome, &e.Description); err != nil {
+		if err := rows.Scan(&e.ID, &at, &e.RequestID, &e.BotID, &e.AgentID, &e.Method, &e.Phase, &e.Code, &outcome, &e.Description, &e.ClientIP, &e.Reason); err != nil {
 			return nil, mapErr(err)
 		}
 		e.At, e.Outcome = fromMS(at), store.ErrorOutcome(outcome)
