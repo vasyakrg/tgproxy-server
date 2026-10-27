@@ -291,3 +291,30 @@ func TestInstallCmd(t *testing.T) {
 		t.Errorf("installed cmd: %q", is.CmdlineInstalled)
 	}
 }
+
+// Отозванный (удалённый из БД) токен не годится ни для /enroll, ни для скачивания пакета,
+// а остальные токены не затронуты; причина отказа не отличается от неизвестного токена.
+func TestRevokedTokenRejected(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	revoked, _ := f.svc.IssueFor(ctx, IssueRequest{Name: "revoked"})
+	other, _ := f.svc.IssueFor(ctx, IssueRequest{Name: "other"})
+	if w := f.getPkg(t, f.debName(), "Bearer "+revoked.Token, "192.0.2.1"); w.Code != http.StatusOK {
+		t.Fatalf("before revoke: %d", w.Code)
+	}
+	if err := f.st.Enrollments().Delete(ctx, revoked.ID); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.getPkg(t, f.debName(), "Bearer "+revoked.Token, "192.0.2.2"); w.Code != http.StatusUnauthorized || strings.TrimSpace(w.Body.String()) != "unauthorized" {
+		t.Errorf("package after revoke: %d %q", w.Code, w.Body)
+	}
+	if w := f.enroll(t, revoked.Token, goodCSR(t)); w.Code != http.StatusUnauthorized {
+		t.Errorf("enroll after revoke: %d", w.Code)
+	}
+	if w := f.getPkg(t, f.debName(), "Bearer "+other.Token, "192.0.2.3"); w.Code != http.StatusOK {
+		t.Errorf("other token after revoke: %d", w.Code)
+	}
+	if w := f.enroll(t, other.Token, goodCSR(t)); w.Code != http.StatusOK {
+		t.Errorf("enroll with other token: %d", w.Code)
+	}
+}

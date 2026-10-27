@@ -150,6 +150,10 @@ func (c *ServerConfig) resolve() error {
 
 func (c *AgentConfig) resolve() error {
 	var errs []error
+	// listen.api без умолчания в reverse (входящих нет); dial/both без явного адреса слушают :8443.
+	if c.Listen.API == "" && c.Mode != AgentModeReverse {
+		c.Listen.API = DefaultAgentAPIListen
+	}
 	if c.Metrics.BearerFile != "" {
 		s, err := readSecret(c.Metrics.BearerFile)
 		if err != nil {

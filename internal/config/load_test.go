@@ -46,6 +46,23 @@ func TestDefaultsAgent(t *testing.T) {
 	}
 }
 
+// listen.api: dial/both по умолчанию слушают :8443, reverse — ничего; прямой ValidateAgent
+// без адреса для dial/both отклоняет конфиг.
+func TestAgentListenAPIByMode(t *testing.T) {
+	for mode, want := range map[string]string{"dial": ":8443", "both": ":8443", "reverse": ""} {
+		c, err := parseAgent(t, baseAgent+"mode: "+mode+"\nserver_url: https://s:8444\nallowed_client_san: tgproxy-server\n")
+		if err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		if c.Listen.API != want {
+			t.Errorf("%s: listen.api = %q, want %q", mode, c.Listen.API, want)
+		}
+	}
+	c := DefaultAgent()
+	c.TLS = TLSFiles{CertFile: "a", KeyFile: "b", CAFile: "c"}
+	wantErr(t, ValidateAgent(c), "listen.api", "mode=dial")
+}
+
 func TestEmptyFileIsDefaults(t *testing.T) {
 	_, err := parseServer(t, "")
 	// пустой файл -> дефолты, которые невалидны только из-за metrics bearer / tls off на ":8080"

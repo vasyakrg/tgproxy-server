@@ -575,10 +575,8 @@ func TestPKIAgentsAPIModesAndWeight(t *testing.T) {
 	}
 }
 
-// checkPackageDownload скачивает пакет с gateway так же, как curl --cacert из команды установки:
-// доверие только CA сервера, проверка имени хоста (IP gateway в SAN), TLS 1.3, токен в Authorization.
-// Токен при этом не расходуется.
-func (e *pkiEnv) checkPackageDownload(token string) {
+// packageGet — GET /enroll/package/<deb> на gateway с заданным Authorization (CA сервера как корень доверия).
+func (e *pkiEnv) packageGet(auth string) (int, []byte) {
 	e.t.Helper()
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(e.srv.Authority().CertPEM()) {
@@ -588,23 +586,29 @@ func (e *pkiEnv) checkPackageDownload(token string) {
 		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13},
 	}}
 	defer cl.CloseIdleConnections()
-	get := func(auth string) (int, []byte) {
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
-			"https://"+e.gwAddr+"/enroll/package/tgproxy_1.2.3_amd64.deb", http.NoBody)
-		if err != nil {
-			e.t.Fatal(err)
-		}
-		if auth != "" {
-			req.Header.Set("Authorization", auth)
-		}
-		resp, err := cl.Do(req)
-		if err != nil {
-			e.t.Fatalf("download: %v\nlogs:\n%s", err, e.logs.String())
-		}
-		defer func() { _ = resp.Body.Close() }()
-		b, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, b
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		"https://"+e.gwAddr+"/enroll/package/tgproxy_1.2.3_amd64.deb", http.NoBody)
+	if err != nil {
+		e.t.Fatal(err)
 	}
+	if auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+	resp, err := cl.Do(req)
+	if err != nil {
+		e.t.Fatalf("download: %v\nlogs:\n%s", err, e.logs.String())
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, b
+}
+
+// checkPackageDownload скачивает пакет с gateway так же, как curl --cacert из команды установки:
+// доверие только CA сервера, проверка имени хоста (IP gateway в SAN), TLS 1.3, токен в Authorization.
+// Токен при этом не расходуется.
+func (e *pkiEnv) checkPackageDownload(token string) {
+	e.t.Helper()
+	get := e.packageGet
 	if code, b := get("Bearer " + token); code != http.StatusOK || string(b) != "DEB-1.2.3" {
 		e.t.Fatalf("download: %d %q", code, b)
 	}
@@ -616,5 +620,49 @@ func (e *pkiEnv) checkPackageDownload(token string) {
 	}
 	if strings.Contains(e.logs.String(), token) {
 		e.t.Fatal("token leaked into server logs")
+	}
+}
+
+// Отзыв токена через API админки: после него и /enroll, и /enroll/package/ отвечают 401,
+// токен в списке не показывается; уже скачанный пакет к этому не относится.
+func TestPKIEnrollmentRevokeViaAPI(t *testing.T) {
+	e := newPKIEnvWith(t, pkiOpts{pkgVersion: "1.2.3"})
+	is, err := e.srv.Enrollment().IssueFor(context.Background(), enroll.IssueRequest{Name: "leaked"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := e.packageGet("Bearer " + is.Token); code != http.StatusOK {
+		t.Fatalf("package before revoke: %d", code)
+	}
+	c := newAdminClient(t, e.adminURL)
+	if resp, _ := c.do("DELETE", "/api/v1/enrollments/"+is.ID+"?confirm=yes", nil, nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoke without session: %d", resp.StatusCode)
+	}
+	c.login()
+	resp, body := c.do("GET", "/api/v1/enrollments", nil, nil)
+	if resp.StatusCode != 200 || !strings.Contains(body, is.ID) || strings.Contains(body, is.Token) {
+		t.Fatalf("list: %d %s", resp.StatusCode, body)
+	}
+	if resp, _ = c.do("DELETE", "/api/v1/enrollments/"+is.ID+"?confirm=yes", map[string]string{"Sec-Fetch-Site": "cross-site"}, nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-site revoke: %d", resp.StatusCode)
+	}
+	if resp, _ = c.do("DELETE", "/api/v1/enrollments/"+is.ID+"?confirm=yes", nil, nil); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("revoke: %d", resp.StatusCode)
+	}
+	if code, _ := e.packageGet("Bearer " + is.Token); code != http.StatusUnauthorized {
+		t.Fatalf("package after revoke: %d", code)
+	}
+	_, err = agent.Enroll(context.Background(), agent.EnrollOptions{
+		Server: "https://" + e.gwAddr, Token: is.Token, CAFingerprint: e.srv.Authority().CAFingerprint(),
+		ConfigPath: filepath.Join(t.TempDir(), "agent.yaml"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid, expired or already used") {
+		t.Fatalf("enroll with revoked token: %v", err)
+	}
+	if resp, body = c.do("GET", "/api/v1/enrollments", nil, nil); strings.Contains(body, is.ID) {
+		t.Fatalf("revoked token still listed: %d %s", resp.StatusCode, body)
+	}
+	if strings.Contains(e.logs.String(), is.Token) {
+		t.Fatal("token leaked into server logs")
 	}
 }

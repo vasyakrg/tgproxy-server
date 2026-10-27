@@ -27,7 +27,7 @@ func (s *showExec) Output(_ context.Context, name string, args ...string) (strin
 	dpkgs := 0
 	s.mu.Lock()
 	for _, c := range s.calls {
-		if strings.HasPrefix(c, "dpkg -i") {
+		if strings.HasPrefix(c, "dpkg --force-confdef --force-confold -i") {
 			dpkgs++
 		}
 	}

@@ -6,6 +6,8 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/views"
 )
 
+var agentHeaderTitles = map[string]string{"Вес": "больше — больше трафика"}
+
 var agentHeaders = []string{"Агент", "Связь", "Статус", "Вес", "rps", "RTT", "In-flight", "Версия", "Сертификат", "Опрос", views.ActionsHeader}
 
 // AgentsPage — экран «Агенты».
@@ -15,6 +17,8 @@ templ AgentsPage(vm AgentsVM) {
 			@views.IconButton("Обновить отстающие до "+vm.UpdateTo, "download", false, templ.Attributes{
 				"hx-get": "/agents/rollout/start", "hx-target": "#agent-modal-body", "hx-swap": "innerHTML", "data-modal-open": "agent-modal",
 			})
+		} else if vm.Lagging > 0 && vm.UpdateBlock != "" {
+			@views.IconButtonDisabled("Обновить отстающие до "+vm.UpdateTo, vm.UpdateBlock, "download")
 		}
 		<a class="btn btn-primary" href="/agents/new">+ Добавить агента</a>
 	}
@@ -72,7 +76,7 @@ templ AgentsBody(vm AgentsVM, oob bool) {
 				@views.EmptyState("Ничего не найдено", "Измените поиск или фильтр по статусу.")
 			}
 		} else {
-			@views.Table("Агенты", agentHeaders) {
+			@views.TableTitled("Агенты", agentHeaders, agentHeaderTitles) {
 				for _, r := range vm.Rows {
 					@agentRow(r, vm)
 				}
@@ -129,6 +133,8 @@ templ agentRow(r AgentRowVM, vm AgentsVM) {
 				}
 				if r.CanUpdate {
 					@views.IconButton("Обновить до "+vm.UpdateTo+": "+r.Name, "download", false, modalOpen("/agents/"+r.ID+"/update"))
+				} else if r.Lagging && r.UpdateBlock != "" && vm.UpdateTo != "" {
+					@views.IconButtonDisabled("Обновить до "+vm.UpdateTo+": "+r.Name, r.UpdateBlock, "download")
 				}
 				@views.IconButton("Ещё действия: "+r.Name, "more", false, modalOpen("/agents/"+r.ID+"/more"))
 			</div>
@@ -279,7 +285,7 @@ templ WeightForm(f WeightFormVM) {
 		@views.Field(views.FieldProps{
 			ID: "agent-weight", Name: "weight", Label: "Вес в балансировке (1–100)", Value: f.Weight, Type: "number",
 			Error: f.Errors["weight"], Required: true,
-			Hint:  "Доля трафика пропорциональна весу; изменение применяется сразу.",
+			Hint:  "Больше вес — больше трафика. При равной скорости агент с весом 100 получает примерно вдвое больше запросов, чем с весом 50; медленный или загруженный агент всё равно получает меньше. Изменение применяется сразу. Чтобы убрать агента из балансировки, используйте «Вывести из балансировки (drain)», а не минимальный вес.",
 			Attrs: templ.Attributes{"min": "1", "max": "100", "step": "1", "inputmode": "numeric", "autocomplete": "off"},
 		})
 		<div class="form-actions">

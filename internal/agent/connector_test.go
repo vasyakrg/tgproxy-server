@@ -495,6 +495,27 @@ func TestConfigValidationAndErrors(t *testing.T) {
 	}
 }
 
+// reverse-агент без listen.api (как после enroll) не может перейти в dial/both: понятная 422,
+// файл и режим не меняются.
+func TestConfigDialRequiresListenAPI(t *testing.T) {
+	r := newRevEnv(t, config.AgentModeReverse, true)
+	c := r.gw.next(t)
+	r.agent.cfg.Listen.API = ""
+	for _, mode := range []string{"dial", "both"} {
+		resp, body := c.do(t, http.MethodPut, "/_agent/config", `{"mode":"`+mode+`","server_url":"`+r.gw.url()+`"}`)
+		if resp.StatusCode != 422 || !strings.Contains(string(body), "listen.api") {
+			t.Fatalf("PUT %s: %d %s", mode, resp.StatusCode, body)
+		}
+	}
+	data, _ := os.ReadFile(r.cfgPath)
+	if !strings.Contains(string(data), "mode: reverse") {
+		t.Fatalf("file changed:\n%s", data)
+	}
+	if st := status(t, c); st["mode"] != "reverse" {
+		t.Fatalf("status: %v", st)
+	}
+}
+
 func TestConfigApplyFailureRollsBack(t *testing.T) {
 	r := newRevEnv(t, config.AgentModeReverse, true)
 	c := r.gw.next(t)

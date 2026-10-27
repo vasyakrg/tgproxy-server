@@ -82,8 +82,10 @@ func TestUpdateButtonsOnlyForLaggingAgents(t *testing.T) {
 	// релиза нет в кэше
 	withRollout(a, false)
 	_, body, _ = a.call("GET", "/agents", nil, false)
-	if strings.Contains(body, "Обновить") {
-		t.Error("кнопки без релиза в кэше")
+	contains(t, "disabled без пакета", body, `aria-disabled="true"`, "Нет пакета v1.4.1 в кэше: выполните deploy.sh в режиме release или загрузите релиз в Система → Обновления",
+		`aria-label="Обновить отстающие до v1.4.1 — недоступно:`, `aria-label="Обновить до v1.4.1: hel-1 — недоступно:`)
+	if strings.Contains(body, `hx-get="/agents/rollout/start"`) || strings.Contains(body, `hx-get="/agents/hel-1/update"`) {
+		t.Error("у недоступных иконок не должно быть hx-get")
 	}
 	// раскатка не настроена
 	a.rh = nil
@@ -96,6 +98,12 @@ func TestUpdateButtonsOnlyForLaggingAgents(t *testing.T) {
 	}
 }
 
+func TestAgentsWeightHints(t *testing.T) {
+	a := newAgFx(t, agOpts{})
+	_, body, _ := a.call("GET", "/agents", nil, false)
+	contains(t, "вес", body, `<th scope="col" title="больше — больше трафика">Вес</th>`)
+}
+
 func TestRolloutBannerAndStop(t *testing.T) {
 	a := newAgFx(t, agOpts{})
 	m := withRollout(a, true)
@@ -103,8 +111,9 @@ func TestRolloutBannerAndStop(t *testing.T) {
 	_, body, _ := a.call("GET", "/agents", nil, true)
 	contains(t, "баннер", body, "Раскатка v1.4.1 · канарейка → батчи по 2", "1 / 3", "канарейка", "выполняется", "таймаут", `aria-label="Остановить раскатку"`)
 	assertStrictCSP(t, body)
-	if strings.Contains(body, `aria-label="Обновить отстающие`) || strings.Contains(body, `aria-label="Обновить до`) {
-		t.Error("обновления во время раскатки недоступны")
+	contains(t, "disabled во время раскатки", body, `aria-disabled="true"`, "Идёт раскатка")
+	if strings.Contains(body, `hx-get="/agents/rollout/start"`) || strings.Contains(body, `/update"`) {
+		t.Error("обновления во время раскатки недоступны (без hx-get)")
 	}
 	_, conf, _ := a.call("GET", "/agents/rollout/stop", nil, true)
 	contains(t, "confirm", conf, "Остановить раскатку?", `name="confirm" value="yes"`)

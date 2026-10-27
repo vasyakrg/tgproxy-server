@@ -34,7 +34,7 @@ type accessScreen struct {
 }
 
 // MountAccess регистрирует экран «Доступ»: GET /access и htmx-ручки
-// (GET /access/new, POST /access, GET /access/{id}/edit, POST /access/{id},
+// (GET /access/list, GET /access/new, POST /access, GET /access/{id}/edit, POST /access/{id},
 // GET|POST /access/{id}/delete). Все маршруты за Protect + RequireAuth.
 func MountAccess(rt AccessRouter, d AccessDeps) {
 	s := &accessScreen{rt: rt, d: d, log: d.Logger, now: d.Now}
@@ -48,6 +48,7 @@ func MountAccess(rt AccessRouter, d AccessDeps) {
 		rt.Mount(pattern, auth.Protect(d.Auth.RequireAuth(h)))
 	}
 	m("GET /access", s.page)
+	m("GET /access/list", s.list)
 	m("GET /access/new", s.newForm)
 	m("POST /access", s.create)
 	m("GET /access/{id}/edit", s.editForm)
@@ -116,6 +117,19 @@ func (s *accessScreen) page(w http.ResponseWriter, r *http.Request) {
 	}
 	vm := AccessVM{BaseURL: s.baseURL(r), Rows: rows, Bots: botRows(s.d.Bots)}
 	renderPage(s.rt, w, r, http.StatusOK, "Доступ", views.NavAccess, AccessPage(vm)) //nolint:contextcheck // templ-компонент получает ctx в Render
+}
+
+// list отдаёт свежие правила и счётчики ботов (OOB) для кнопки «Обновить»; без поллинга.
+func (s *accessScreen) list(w http.ResponseWriter, r *http.Request) {
+	if !htmxOnly(w, r) {
+		return
+	}
+	rows, err := s.rows(r)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	renderFragment(w, r, http.StatusOK, templ.Join(RulesSection(rows, true), BotsSection(botRows(s.d.Bots), true))) //nolint:contextcheck // templ-компонент получает ctx в Render
 }
 
 // htmxOnly: фрагменты и изменения работают только через htmx (модалка требует JS).

@@ -64,6 +64,9 @@ func (s *EnrollService) Configured() bool {
 	return s != nil && s.cfg.Issuer != nil && s.cfg.Enrollments != nil
 }
 
+// storeConfigured — доступно хранилище токенов (список и отзыв не требуют выпускающего сервиса/CA, например в CLI).
+func (s *EnrollService) storeConfigured() bool { return s != nil && s.cfg.Enrollments != nil }
+
 // EnrollInput — ввод выпуска токена.
 type EnrollInput struct {
 	Name   string
@@ -126,7 +129,7 @@ type EnrollmentItem struct {
 
 // List возвращает ожидающие токены.
 func (s *EnrollService) List(ctx context.Context) ([]EnrollmentItem, error) {
-	if !s.Configured() {
+	if !s.storeConfigured() {
 		return nil, ErrNotConfigured
 	}
 	items, err := s.cfg.Enrollments.ListPending(ctx, s.now())
@@ -142,7 +145,7 @@ func (s *EnrollService) List(ctx context.Context) ([]EnrollmentItem, error) {
 
 // Revoke отзывает неиспользованный токен. confirm обязателен.
 func (s *EnrollService) Revoke(ctx context.Context, act Actor, id string, confirm bool) error {
-	if !s.Configured() {
+	if !s.storeConfigured() {
 		return ErrNotConfigured
 	}
 	if !confirm {

@@ -28,7 +28,7 @@ func successCommands(sudo string) []string {
 		"[admin] /usr/bin/dpkg --print-architecture",
 		"[admin] /usr/bin/sha256sum TMP",
 		"[admin] /usr/bin/dpkg-query -W '-f=${db:Status-Abbrev}' tgproxy",
-		"[admin] " + s("/usr/bin/dpkg -i TMP"),
+		"[admin] " + s("/usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/dpkg --force-confdef --force-confold -i TMP"),
 		"[admin] /usr/bin/id -u tgproxy-deploy",
 		"[admin] " + s("/usr/sbin/useradd --system --create-home --home-dir /var/lib/tgproxy-deploy --shell /bin/sh --user-group --password '*' tgproxy-deploy"),
 		"[admin] " + s("/usr/bin/install -d -m 0755 -o root -g root /var/cache/tgproxy/packages"),
@@ -629,7 +629,7 @@ func TestEventsBacklogLiveAndReconnect(t *testing.T) {
 	e := newEnv(t)
 	gate := make(chan struct{})
 	e.host.extraFn = func(_, line string) (string, int, bool) {
-		if strings.HasPrefix(line, "/usr/bin/dpkg -i") {
+		if strings.HasPrefix(line, "/usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/dpkg --force-confdef --force-confold -i") {
 			<-gate // держим задачу на шаге 3
 		}
 		return "", 0, false
@@ -687,7 +687,7 @@ func TestEventsSubscriberCancel(t *testing.T) {
 	e := newEnv(t)
 	gate := make(chan struct{})
 	e.host.extraFn = func(_, line string) (string, int, bool) {
-		if strings.HasPrefix(line, "/usr/bin/dpkg -i") {
+		if strings.HasPrefix(line, "/usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/dpkg --force-confdef --force-confold -i") {
 			<-gate
 		}
 		return "", 0, false

@@ -174,7 +174,7 @@ func TestInstallOK(t *testing.T) {
 	if c := f.main("install", "1.4.1"); c != 0 {
 		t.Fatalf("code %d: %s", c, f.err.String())
 	}
-	want := "/usr/bin/dpkg -i " + f.debFile("1.4.1")
+	want := "/usr/bin/dpkg --force-confdef --force-confold -i " + f.debFile("1.4.1")
 	if len(f.calls) != 2 || f.calls[1] != want {
 		t.Fatalf("calls %v", f.calls)
 	}

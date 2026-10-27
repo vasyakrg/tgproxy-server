@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -82,7 +83,9 @@ type Result struct {
 	OK         bool   `json:"ok"`
 	RolledBack bool   `json:"rolled_back"`
 	Error      string `json:"error"`
-	At         string `json:"at"`
+	// Warning — не фатальное предупреждение (например, новый шаблон конфига .dpkg-dist).
+	Warning string `json:"warning,omitempty"`
+	At      string `json:"at"`
 }
 
 // OutputExecutor — Executor, умеющий вернуть stdout (нужен для `systemctl show`: проверка
@@ -101,8 +104,10 @@ type Config struct {
 	// WorkDir — root-only каталог (RuntimeDirectory юнита) для проверенных копий deb.
 	WorkDir string
 	// Component: "" — брать из request; иначе должен совпасть.
-	Component      string
-	Arch           string // архитектура dpkg: amd64/arm64
+	Component string
+	Arch      string // архитектура dpkg: amd64/arm64
+	// ConfDir — каталог конфигов пакета, где ищутся *.dpkg-dist (по умолчанию /etc/tgproxy).
+	ConfDir        string
 	CurrentVersion string // установленная версия (для prev.deb); "" или dev — бэкапа нет
 
 	Verifier Verifier
@@ -127,7 +132,10 @@ type Config struct {
 }
 
 // Applier применяет обновление.
-type Applier struct{ c Config }
+type Applier struct {
+	c       Config
+	warning string // предупреждение текущего Apply (попадает в result.json)
+}
 
 // New возвращает Applier; пустые поля получают боевые значения по умолчанию.
 func New(c Config) *Applier {
@@ -136,6 +144,9 @@ func New(c Config) *Applier {
 	}
 	if c.PackagesDir == "" {
 		c.PackagesDir = release.DefaultCacheDir
+	}
+	if c.ConfDir == "" {
+		c.ConfDir = "/etc/tgproxy"
 	}
 	if c.WorkDir == "" {
 		c.WorkDir = "/run/tgproxy-update"
@@ -194,6 +205,9 @@ func (a *Applier) Apply(ctx context.Context) error {
 		res.RolledBack, err = a.run(ctx, req)
 	}
 	res.OK = err == nil
+	if err == nil {
+		res.Warning = a.warning
+	}
 	if err != nil {
 		res.Error = err.Error()
 		a.logf("ошибка: %v", err)
@@ -536,9 +550,10 @@ func (a *Applier) backupCurrent() (string, error) {
 }
 
 func (a *Applier) install(ctx context.Context, deb, unit, component string) error {
-	if err := a.c.Exec.Run(ctx, "dpkg", "-i", deb); err != nil {
+	if err := a.c.Exec.Run(ctx, "dpkg", "--force-confdef", "--force-confold", "-i", deb); err != nil {
 		return fmt.Errorf("dpkg -i: %w", err)
 	}
+	a.checkDpkgDist()
 	if err := a.c.Exec.Run(ctx, "systemctl", "restart", unit); err != nil {
 		return fmt.Errorf("systemctl restart %s: %w", unit, err)
 	}
@@ -683,4 +698,21 @@ func fileOwner(fi os.FileInfo) (uint32, bool) {
 		return 0, false
 	}
 	return st.Uid, true
+}
+
+// checkDpkgDist ищет *.dpkg-dist в каталоге конфигов: при --force-confold dpkg оставляет
+// правленый оператором файл, а новый шаблон кладёт рядом. Находки — в лог и result.json.
+func (a *Applier) checkDpkgDist() {
+	matches, err := filepath.Glob(filepath.Join(a.c.ConfDir, "*.dpkg-dist"))
+	if err != nil || len(matches) == 0 {
+		return
+	}
+	sort.Strings(matches)
+	var parts []string
+	for _, m := range matches {
+		parts = append(parts, fmt.Sprintf("новый шаблон конфига: diff %s %s", strings.TrimSuffix(m, ".dpkg-dist"), m))
+	}
+	msg := strings.Join(parts, "; ")
+	a.logf("предупреждение: %s", msg)
+	a.warning = msg
 }

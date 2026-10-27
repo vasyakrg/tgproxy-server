@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,7 +15,11 @@ import (
 
 	"aead.dev/minisign"
 
+	"github.com/vasyakrg/tgproxy-server/internal/app"
 	"github.com/vasyakrg/tgproxy-server/internal/buildinfo"
+	"github.com/vasyakrg/tgproxy-server/internal/config"
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/api"
+	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
 
 func TestPKIDevAgentsIdempotent(t *testing.T) {
@@ -117,5 +122,88 @@ func TestAgentsEnrollToken(t *testing.T) {
 	_, err = run(t, "agents", "enroll-token", "-c", cfg, "--name", "nat3")
 	if err == nil || !strings.Contains(err.Error(), "загрузите релиз 9.9.9 в Система → Обновления") {
 		t.Fatalf("missing package: %v", err)
+	}
+}
+
+func TestAgentsEnrollTokenListRevoke(t *testing.T) {
+	dir := t.TempDir()
+	cfg := writeServerCfg(t, dir, true)
+	writeSignedPackage(t, dir, cfg, "1.2.3")
+	if _, err := run(t, "pki", "init", "-c", cfg); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(t, "agents", "enroll-token", "-c", cfg, "--list"); err != nil || !strings.Contains(out, "ожидающих токенов нет") {
+		t.Fatalf("empty list: %v %q", err, out)
+	}
+	var tokens []string
+	for _, n := range []string{"nat-a", "nat-b", "nat-b"} {
+		out, err := run(t, "agents", "enroll-token", "-c", cfg, "--name", n, "--installed")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens = append(tokens, regexp.MustCompile(`printf %s '([^']+)'`).FindStringSubmatch(out)[1])
+	}
+	out, err := run(t, "agents", "enroll-token", "-c", cfg, "--list")
+	if err != nil || strings.Count(out, "nat-") != 3 || !strings.Contains(out, "cli") {
+		t.Fatalf("list: %v %q", err, out)
+	}
+	for _, tok := range tokens {
+		if strings.Contains(out, tok) {
+			t.Fatalf("list leaks token: %q", out)
+		}
+	}
+	ids := regexp.MustCompile(`(?m)^([0-9a-f]{16})\s+nat-([ab])`).FindAllStringSubmatch(out, -1)
+	if len(ids) != 3 {
+		t.Fatalf("ids: %q", out)
+	}
+	for _, bad := range [][]string{
+		{"--revoke", "nope"},                   // нет такого
+		{"--revoke", "nat-b"},                  // неоднозначное имя
+		{"--revoke", "x", "--list"},            // взаимоисключающие
+		{"--revoke", "nat-a", "--name", "nat"}, // смешение с выпуском
+		{},                                     // ни имени, ни действия
+	} {
+		if _, err := run(t, append([]string{"agents", "enroll-token", "-c", cfg}, bad...)...); err == nil {
+			t.Fatalf("%v must fail", bad)
+		}
+	}
+	if out, err = run(t, "agents", "enroll-token", "-c", cfg, "--revoke", "nat-a"); err != nil || !strings.Contains(out, "отозван") {
+		t.Fatalf("revoke by name: %v %q", err, out)
+	}
+	var bID string
+	for _, m := range ids {
+		if m[2] == "b" {
+			bID = m[1]
+			break
+		}
+	}
+	if _, err = run(t, "agents", "enroll-token", "-c", cfg, "--revoke", bID); err != nil {
+		t.Fatalf("revoke by id: %v", err)
+	}
+	if out, err = run(t, "agents", "enroll-token", "-c", cfg, "--list"); err != nil || strings.Count(out, "nat-") != 1 {
+		t.Fatalf("list after revoke: %v %q", err, out)
+	}
+	// повторный отзыв и аудит
+	if _, err = run(t, "agents", "enroll-token", "-c", cfg, "--revoke", bID); err == nil {
+		t.Fatal("repeated revoke must fail")
+	}
+	sc, err := config.LoadServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := app.OpenSQLite(context.Background(), sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	au, _ := st.Audit().List(context.Background(), store.AuditQuery{})
+	n := 0
+	for _, e := range au {
+		if e.Action == api.AuditEnrollRevoke && strings.HasPrefix(e.Actor, "cli:") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("audit enrollment.revoke: %d (%+v)", n, au)
 	}
 }

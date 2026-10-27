@@ -115,6 +115,21 @@ sudo runuser -u tgproxy -- sqlite3 /var/lib/tgproxy/tgproxy.db \
 
 Если вход невозможен из-за TOTP — `tgproxy totp enroll <user>` и новый `totp_secret_enc` в `users_database.yml` (`SIGHUP`/`systemctl reload tgproxy-server`; сессии пользователя сбросятся).
 
+## Обновление пакета и конфиги (.dpkg-dist)
+
+Все неинтерактивные установки (`update apply`, `deploy-helper install`, мастер установки по SSH, `scripts/deploy.sh`) вызывают `dpkg --force-confdef --force-confold -i` с `DEBIAN_FRONTEND=noninteractive` и пустым stdin: конфиг, правленный оператором (`/etc/tgproxy/server.yaml`, `agent.yaml`), не перезаписывается и dpkg не задаёт вопросов «Y/I/N/O/D/Z». Если шаблон конфига в новом релизе изменился, он ляжет рядом как `*.dpkg-dist`.
+
+После обновления проверьте и при необходимости перенесите новые опции вручную:
+
+```sh
+ls /etc/tgproxy/*.dpkg-dist
+diff /etc/tgproxy/server.yaml /etc/tgproxy/server.yaml.dpkg-dist
+```
+
+При наличии `.dpkg-dist` `update apply` пишет предупреждение в `result.json` (поле `warning`) и в `journalctl -u tgproxy-update-*`, а `scripts/deploy.sh` печатает «ВНИМАНИЕ» с путями. После переноса опций `.dpkg-dist` можно удалить.
+
+Если установка всё же оборвалась и пакет в состоянии `unpacked`/`half-configured`: `sudo dpkg --configure -a` (с теми же `--force-confdef --force-confold`), затем `systemctl restart tgproxy-server`.
+
 ## Нестандартный data_dir (юниты самообновления)
 
 Path-юниты смотрят дефолтные пути: сервер `/var/lib/tgproxy/updates/staged/request`, агент `/var/lib/tgproxy/agent/updates/staged/request` (`data_dir` и `update.staging_dir` из шаблонов конфигов). При другом `data_dir`/`update.staging_dir` `tgproxy config validate` предупредит; нужны drop-in'ы, а основному сервису — запись в новый каталог (`ProtectSystem=strict`):
@@ -152,12 +167,12 @@ ReadWritePaths=/data/tgproxy/agent
 **Reverse-агент не подключается.**
 - С хоста агента: `curl -vk https://<сервер>:8444/` — `:8444` должен быть открыт из сети агента.
 - На сервере `tgp_agent_reverse_conns{agent="<id>"}` должна быть 2; `tgp_enroll_attempts_total{result}` показывает отказы enrollment.
-- Enrollment: токен одноразовый и живёт 1 час — выпустить новый; команда установки работает под root и под пользователем с sudo (на хосте без curl сама ставит его через apt; нужен доступ к apt-репозиториям); «загрузите релиз X в Система → Обновления» — в кэше загрузок сервера нет подписанного пакета версии сервера (на хосте с уже установленным tgproxy: `agents enroll-token --installed`); `curl: (60)` при установке — имя хоста gateway не в SAN сертификата сервера (перезапустите сервер после смены `agent_gateway_url`); ошибка отпечатка CA — взять свежий `tgproxy pki fingerprint`; лимит 5 попыток/мин на IP.
+- Enrollment: токен одноразовый и живёт 1 час — выпустить новый; утёкший токен отозвать: UI «Агенты → Агент за NAT → Ожидающие подключения» или `tgproxy agents enroll-token -c /etc/tgproxy/server.yaml --list` и `--revoke <id|имя>` (SQL-правки БД не нужны; после отзыва `/enroll` и `/enroll/package/*` отвечают 401, в аудите `enrollment.revoke`); если `reverse`-агент нужно перевести в `dial`/`both` (`PUT /_agent/config` → `422 … требует listen.api`), добавьте в `agent.yaml` `listen.api: ":8443"` (`agent enroll` его для `reverse` не пишет) и перезапустите агента; команда установки работает под root и под пользователем с sudo (на хосте без curl сама ставит его через apt; нужен доступ к apt-репозиториям); «загрузите релиз X в Система → Обновления» — в кэше загрузок сервера нет подписанного пакета версии сервера (на хосте с уже установленным tgproxy: `agents enroll-token --installed`); `curl: (60)` при установке — имя хоста gateway не в SAN сертификата сервера (перезапустите сервер после смены `agent_gateway_url`); ошибка отпечатка CA — взять свежий `tgproxy pki fingerprint`; лимит 5 попыток/мин на IP.
 - `server_url` в `agent.yaml` должен быть доступным с агента (на сервере для него есть `server.agent_gateway_url`).
 - Сертификат агента просрочен — повторный enrollment.
 
 **Обновление откатилось.**
-- Итог всегда в `result.json`: сервер `/var/lib/tgproxy/updates/result.json`, агент `/var/lib/tgproxy/agent/updates/result.json` (поля `version`, `ok`, `rolled_back`, `error`, `at`).
+- Итог всегда в `result.json`: сервер `/var/lib/tgproxy/updates/result.json`, агент `/var/lib/tgproxy/agent/updates/result.json` (поля `version`, `ok`, `rolled_back`, `error`, `warning`, `at`).
 - Ход применения: `journalctl -u tgproxy-update-server` (или `-agent`) — подпись, `dpkg -i`, health-проба (сервер: `/healthz` 30 с; агент: за 60 с непрерывно `active` ≥ 15 с без рестартов, и `/healthz` на loopback-metrics).
 - Причина падения самого сервиса: `journalctl -u tgproxy-server` / `-agent` за время обновления.
 - Откат использует `prev.deb` в `/var/cache/tgproxy/packages`; версия, не прошедшая health, удаляется из доверенного кэша. Повторить обновление можно только исправленным релизом.

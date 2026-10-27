@@ -124,6 +124,7 @@ func New(stdout, stderr io.Writer) *Helper {
 
 func execRun(ctx context.Context, stdout, stderr io.Writer, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- name — константа пакета, args построены хелпером
+	cmd.Stdin = nil                                // /dev/null: dpkg не должен ждать ответа на вопросы
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", "DEBIAN_FRONTEND=noninteractive"}
 	return cmd.Run()
@@ -242,7 +243,9 @@ func (h *Helper) install(ctx context.Context, version string) error {
 	if err := h.verifyRelease(version, debName, checksums, sig, f); err != nil {
 		return fmt.Errorf("проверка пакета: %w", err)
 	}
-	return h.Run(ctx, h.Stdout, h.Stderr, dpkgPath, "-i", debPath)
+	// --force-conf*: конфиг, правленный оператором, сохраняется (новый шаблон ляжет рядом
+	// как .dpkg-dist), dpkg не задаёт интерактивных вопросов.
+	return h.Run(ctx, h.Stdout, h.Stderr, dpkgPath, "--force-confdef", "--force-confold", "-i", debPath)
 }
 
 // verifyRelease: подпись → версия → sha256 deb по подписанному checksums.txt.

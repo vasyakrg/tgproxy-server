@@ -41,6 +41,10 @@ func (a *Agent) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeAgentError(w, http.StatusUnprocessableEntity, "", "tgproxy: mode must be dial|reverse|both")
 		return
 	}
+	if wantListener(req.Mode) && a.cfg.Listen.API == "" {
+		writeAgentError(w, http.StatusUnprocessableEntity, "", "tgproxy: режим "+string(req.Mode)+" требует listen.api в agent.yaml (например \":8443\"); задайте его и перезапустите агента")
+		return
+	}
 	url := req.ServerURL
 	if url == "" && !wantConnector(req.Mode) {
 		url = curURL // для dial адрес сервера не обязателен — остаётся прежним

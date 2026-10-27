@@ -64,7 +64,9 @@ type AgentRowVM struct {
 	Seen           string
 	SeenMuted      bool
 	Draining       bool
-	CanUpdate      bool // отстаёт, доступен и релиз есть в кэше
+	CanUpdate      bool   // отстаёт, доступен и релиз есть в кэше
+	Lagging        bool   // версия ≠ серверной (иконка обновления показывается всегда)
+	UpdateBlock    string // причина, по которой обновление сейчас невозможно ("" — можно)
 }
 
 // AgentsVM — модель страницы «Агенты».
@@ -82,6 +84,8 @@ type AgentsVM struct {
 	UpdateTo     string // версия сервера с «v», куда обновляем
 	Lagging      int    // агентов с версией ≠ серверной
 	CanUpdateAll bool
+	// UpdateBlock — почему «Обновить отстающие» недоступна ("" — доступна).
+	UpdateBlock string
 }
 
 // Summary — «N агентов · M в работе · версия сервера vX».

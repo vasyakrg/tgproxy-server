@@ -395,8 +395,15 @@ func (v *validator) ban(b BanConfig) {
 func ValidateAgent(c *AgentConfig) error {
 	v := &validator{}
 
-	v.addr("listen.api", c.Listen.API)
 	v.addr("listen.metrics", c.Listen.Metrics)
+	// listen.api нужен только режимам, где агент принимает входящие (dial/both);
+	// reverse его не использует: пустой допустим, заданный проверяется.
+	switch {
+	case c.Listen.API != "":
+		v.addr("listen.api", c.Listen.API)
+	case c.Mode != AgentModeReverse:
+		v.add("listen.api", "required for mode=%s (host:port: агент принимает входящие от сервера)", c.Mode)
+	}
 
 	switch c.Mode {
 	case AgentModeDial:

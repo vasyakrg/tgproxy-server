@@ -104,7 +104,7 @@ func (e *env) write(rel string, b []byte, mode os.FileMode) {
 
 func (e *env) applier() *Applier {
 	return New(Config{
-		DataDir: e.data, PackagesDir: filepath.Join(e.data, "packages"), WorkDir: e.work, Arch: "amd64", CurrentVersion: "0.1.0",
+		DataDir: e.data, PackagesDir: filepath.Join(e.data, "packages"), WorkDir: e.work, ConfDir: filepath.Join(e.data, "conf"), Arch: "amd64", CurrentVersion: "0.1.0",
 		Verifier: e.ver, Exec: e.ex, Probe: func(ctx context.Context, c string) error { return e.probe(ctx, c) },
 		HealthTimeout: 100 * time.Millisecond, HealthInterval: 5 * time.Millisecond,
 		EUID:        func() int { return 0 },
@@ -137,7 +137,7 @@ func TestApplySuccess(t *testing.T) {
 	if err := e.applier().Apply(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"dpkg -i " + filepath.Join(e.work, "tgproxy_0.2.0_amd64.deb"), "systemctl restart tgproxy-server"}
+	want := []string{"dpkg --force-confdef --force-confold -i " + filepath.Join(e.work, "tgproxy_0.2.0_amd64.deb"), "systemctl restart tgproxy-server"}
 	if strings.Join(e.ex.calls, "|") != strings.Join(want, "|") {
 		t.Fatalf("calls = %v", e.ex.calls)
 	}
@@ -190,8 +190,8 @@ func TestApplyHealthFailureRollsBack(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	want := []string{
-		"dpkg -i " + filepath.Join(e.work, "tgproxy_0.2.0_amd64.deb"), "systemctl restart tgproxy-server",
-		"dpkg -i " + filepath.Join(e.work, "prev.deb"), "systemctl restart tgproxy-server",
+		"dpkg --force-confdef --force-confold -i " + filepath.Join(e.work, "tgproxy_0.2.0_amd64.deb"), "systemctl restart tgproxy-server",
+		"dpkg --force-confdef --force-confold -i " + filepath.Join(e.work, "prev.deb"), "systemctl restart tgproxy-server",
 	}
 	if strings.Join(e.ex.calls, "|") != strings.Join(want, "|") {
 		t.Fatalf("calls = %v", e.ex.calls)
@@ -211,7 +211,7 @@ func TestApplyHealthFailureRollsBack(t *testing.T) {
 
 func TestApplyDpkgFailureRollsBack(t *testing.T) {
 	e := newEnv(t)
-	e.ex.fail["dpkg -i "+filepath.Join(e.work, "tgproxy_0.2.0")] = errors.New("boom")
+	e.ex.fail["dpkg --force-confdef --force-confold -i "+filepath.Join(e.work, "tgproxy_0.2.0")] = errors.New("boom")
 	err := e.applier().Apply(context.Background())
 	if err == nil || !e.result().RolledBack {
 		t.Fatalf("err=%v res=%+v", err, e.result())
@@ -630,5 +630,30 @@ func TestEnsurePackagesDirRefusals(t *testing.T) {
 	a.c.PackagesDir = filepath.Join(f, "sub")
 	if err := a.ensurePackagesDir(); err == nil {
 		t.Error("ожидалась ошибка mkdir")
+	}
+}
+
+func TestApplyWarnsDpkgDist(t *testing.T) {
+	e := newEnv(t)
+	_ = os.MkdirAll(filepath.Join(e.data, "conf"), 0o755)
+	e.write("conf/server.yaml.dpkg-dist", []byte("x"), 0o644)
+	if err := e.applier().Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r := e.result()
+	conf := filepath.Join(e.data, "conf", "server.yaml")
+	want := "новый шаблон конфига: diff " + conf + " " + conf + ".dpkg-dist"
+	if !r.OK || r.Warning != want {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestApplyNoWarningWithoutDpkgDist(t *testing.T) {
+	e := newEnv(t)
+	if err := e.applier().Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w := e.result().Warning; w != "" {
+		t.Fatalf("warning = %q", w)
 	}
 }

@@ -79,7 +79,7 @@ cat <<PLAN
     1. получить deb: $( [ "$MODE" = release ] && echo "скачать $TAG из GitHub Releases, проверить sha256 + minisign (packaging/minisign.pub)" || echo "${DEPLOY_DEB:-make snapshot -> dist/tgproxy_*_amd64.deb}" )
     2. ssh: tgproxy установлен и забутстраплен (/etc/tgproxy/kek), иначе чеклист и выход с ошибкой
     3. защита от даунгрейда (dpkg --compare-versions), scp deb во временный каталог
-    4. sudo dpkg -i, sudo systemctl restart tgproxy-server, сверка версии, очистка
+    4. sudo dpkg --force-confdef --force-confold -i (сохраняет конфиг оператора), sudo systemctl restart tgproxy-server, сверка версии, очистка
     5. $ADMIN_URL/healthz, затем /readyz (>=1 агент up)
     6. агенты: $AGENTS_PLAN
     7. $( [ "$MODE" = release ] && echo "агенты: обновить из UI «Система -> Обновления» (сервер сам скачивает подписанный релиз из GitHub)" || echo "агенты НЕ трогаем: snapshot не подписан, агенты его не примут (так задумано)" )
@@ -175,7 +175,25 @@ rscp "$DEB" "$PROD_SERVER_SSH_USER@$PROD_SERVER_HOST:$REMOTE_DEB"
 
 # ---------- 4. установка ----------
 log "dpkg -i + restart tgproxy-server"
-SRV "sudo -n dpkg -i '$REMOTE_DEB' && sudo -n systemctl restart tgproxy-server"
+# --force-conf*: конфиг оператора сохраняется, новый шаблон ложится рядом как .dpkg-dist, dpkg не
+# задаёт вопросов. env — потому что sudo может сбросить окружение; stdin — /dev/null.
+SRV "sudo -n env DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold -i '$REMOTE_DEB' </dev/null" \
+  || die "dpkg -i не удался (на сервере: sudo dpkg --audit; sudo dpkg --configure -a)"
+pkg_state="$(SRV "dpkg-query -W -f='\${db:Status-Abbrev}' tgproxy" || true)"
+case "$pkg_state" in
+  ii*) ;;
+  *) die "пакет tgproxy в состоянии '$pkg_state' (ожидалось 'ii', install ok installed) — на сервере: sudo dpkg --audit; sudo dpkg --configure -a" ;;
+esac
+SRV "sudo -n systemctl restart tgproxy-server" || die "systemctl restart tgproxy-server не удался"
+dist_files="$(SRV "ls /etc/tgproxy/*.dpkg-dist 2>/dev/null" || true)"
+if [ -n "$dist_files" ]; then
+  warn "в релизе изменился шаблон конфига, ваш файл сохранён. Сверьте и перенесите новые опции:"
+  while IFS= read -r f; do
+    [ -n "$f" ] && warn "  diff ${f%.dpkg-dist} $f"
+  done <<EOF
+$dist_files
+EOF
+fi
 got_ver="$(SRV "dpkg-query -W -f='\${Version}' tgproxy")"
 [ "$got_ver" = "$NEW_VER" ] || die "после установки версия $got_ver, ожидалась $NEW_VER"
 SRV "systemctl is-active --quiet tgproxy-server" || die "tgproxy-server не active (journalctl -u tgproxy-server)"

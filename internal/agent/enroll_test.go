@@ -200,6 +200,10 @@ func TestEnrollCreatesMinimalConfig(t *testing.T) {
 	if !strings.Contains(string(raw), "mode: reverse") || !strings.Contains(string(raw), local.KeyFile) {
 		t.Errorf("minimal config:\n%s", raw)
 	}
+	// reverse-агент входящих не принимает: listen.api не пишется
+	if strings.Contains(string(raw), "api:") {
+		t.Errorf("minimal reverse config has listen.api:\n%s", raw)
+	}
 }
 
 func TestEnrollEmptyDirConfigLoads(t *testing.T) {
@@ -213,8 +217,12 @@ func TestEnrollEmptyDirConfigLoads(t *testing.T) {
 	if err := config.SaveAgentConnection(cfg, config.AgentModeReverse, e.srv.URL); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.LoadAgent(cfg); err != nil {
+	c, err := config.LoadAgent(cfg)
+	if err != nil {
 		t.Fatalf("LoadAgent: %v", err)
+	}
+	if c.Listen.API != "" {
+		t.Errorf("reverse без listen.api получил %q", c.Listen.API)
 	}
 }
 

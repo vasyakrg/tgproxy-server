@@ -178,3 +178,42 @@ func TestEnrollWrapRequiresSession(t *testing.T) {
 		}
 	}
 }
+
+// Реальная обвязка Protect+RequireAuth: без сессии 401, кросс-сайтовые изменяющие запросы 403,
+// отзыв и выпуск не происходят; с сессией отзыв пишет аудит с актором и IP.
+func TestEnrollmentsAPIAuthAndCSRF(t *testing.T) {
+	f := newAcFx(t)
+	fi := &fakeIssuer{repo: f.st.Enrollments()}
+	svc := api.NewEnrollService(api.EnrollConfig{Issuer: fi, Enrollments: f.st.Enrollments(), Audit: f.st.Audit(), Now: func() time.Time { return t0 }})
+	(&api.EnrollAPI{Service: svc, ClientIP: func(*http.Request) string { return "203.0.113.7" }}).Routes(f.mux, f.wrap)
+
+	for _, c := range [][2]string{{"GET", "/api/v1/enrollments"}, {"POST", "/api/v1/enrollments"}, {"DELETE", "/api/v1/enrollments/ab?confirm=yes"}} {
+		if code, _, _ := f.call(c[0], c[1], `{}`, false); code != 401 {
+			t.Errorf("%s %s без сессии: %d", c[0], c[1], code)
+		}
+	}
+	code, body, _ := f.call("POST", "/api/v1/enrollments", `{"name":"nat-x"}`, true)
+	if code != 201 {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	id := decodeMap(t, body)["id"].(string) //nolint:forcetypeassert // тест
+	for _, c := range [][2]string{{"POST", "/api/v1/enrollments"}, {"DELETE", "/api/v1/enrollments/" + id + "?confirm=yes"}} {
+		if code, _, _ := f.call(c[0], c[1], `{"name":"y"}`, true, "Sec-Fetch-Site", "cross-site"); code != 403 {
+			t.Errorf("cross-site %s: %d", c[0], code)
+		}
+	}
+	if p, _ := f.st.Enrollments().ListPending(context.Background(), t0); len(p) != 1 {
+		t.Fatalf("cross-site запросы изменили токены: %+v", p)
+	}
+	code, body, _ = f.call("GET", "/api/v1/enrollments", "", true)
+	if code != 200 || strings.Contains(body, "token_hash") || !strings.Contains(body, `"name":"nat-x"`) || !strings.Contains(body, `"created_by":"alice"`) {
+		t.Fatalf("list: %d %s", code, body)
+	}
+	if code, _, _ = f.call("DELETE", "/api/v1/enrollments/"+id+"?confirm=yes", "", true); code != 204 {
+		t.Fatalf("revoke: %d", code)
+	}
+	au, _ := f.st.Audit().List(context.Background(), store.AuditQuery{})
+	if len(au) != 1 || au[0].Action != api.AuditEnrollRevoke || au[0].Actor != "alice" || au[0].IP != "203.0.113.7" || au[0].Target != id {
+		t.Fatalf("audit: %+v", au)
+	}
+}

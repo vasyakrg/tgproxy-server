@@ -112,7 +112,14 @@ func (s *agentsScreen) rows(ctx context.Context, filterQ, filterStatus string) A
 		row := makeAgentRow(v, s.d.ServerVersion, now)
 		if lagging(v.State, s.d.ServerVersion) {
 			vm.Lagging++
+			row.Lagging = true
 			row.CanUpdate = ro.canUpdate && v.State.Up
+			switch {
+			case ro.block != "":
+				row.UpdateBlock = ro.block
+			case !v.State.Up:
+				row.UpdateBlock = "Агент недоступен"
+			}
 		}
 		if filterStatus != "" && api.StatusOf(v.State) != filterStatus {
 			continue
@@ -123,6 +130,7 @@ func (s *agentsScreen) rows(ctx context.Context, filterQ, filterStatus string) A
 		vm.Rows = append(vm.Rows, row)
 	}
 	vm.CanUpdateAll = ro.canUpdate && vm.Lagging > 0
+	vm.UpdateBlock = ro.block
 	return vm
 }
 

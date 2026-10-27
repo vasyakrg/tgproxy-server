@@ -102,7 +102,10 @@ func cmdVisudoCheck(path string) Command {
 }
 func cmdDpkgInstall(path string) Command {
 	mustPath(path)
-	return fixed(true, "/usr/bin/dpkg", "-i", path)
+	// --force-conf*: конфиги оператора сохраняются, вопросов dpkg не задаёт; env — потому что
+	// sudo может сбросить окружение.
+	return fixed(true, "/usr/bin/env", "DEBIAN_FRONTEND=noninteractive", "/usr/bin/dpkg",
+		"--force-confdef", "--force-confold", "-i", path)
 }
 func cmdDpkgRemove() Command { return fixed(true, "/usr/bin/dpkg", "-r", "tgproxy") }
 func cmdUserAdd() Command {

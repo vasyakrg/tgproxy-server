@@ -70,11 +70,16 @@ func DefaultServer() *ServerConfig {
 	}
 }
 
+// DefaultAgentAPIListen — адрес mTLS-листенера агента dial/both, если listen.api не задан.
+const DefaultAgentAPIListen = ":8443"
+
 // DefaultAgent возвращает конфигурацию агента со значениями по умолчанию.
 func DefaultAgent() *AgentConfig {
 	return &AgentConfig{
 		Listen: AgentListen{
-			API:     ":8443",
+			// API по умолчанию пуст: reverse-агент входящих не принимает. Для dial/both пустой
+			// адрес заменяется на DefaultAgentAPIListen после разбора env (AgentConfig.resolve).
+			API:     "",
 			Metrics: ":9443",
 		},
 		Mode:             AgentModeDial,

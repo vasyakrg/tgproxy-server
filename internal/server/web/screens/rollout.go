@@ -53,7 +53,10 @@ func lagging(st agents.State, server string) bool {
 	return server != "" && st.LastStatus != nil && st.LastStatus.Version != "" && trimV(st.LastStatus.Version) != trimV(server)
 }
 
-type rolloutInfo struct{ canUpdate bool }
+type rolloutInfo struct {
+	canUpdate bool
+	block     string // причина недоступности запуска обновления
+}
 
 func (s *agentsScreen) handle() *RolloutHandle {
 	if s.d.Rollout == nil {
@@ -81,7 +84,13 @@ func (s *agentsScreen) rolloutInfo(ctx context.Context, vm *AgentsVM) rolloutInf
 	case err != nil && !errors.Is(err, store.ErrNotFound):
 		s.log.WarnContext(ctx, "agents: rollout current", "err", redact.Error(err))
 	}
-	return rolloutInfo{canUpdate: !active && h.Packages != nil && h.Packages.Has(trimV(s.d.ServerVersion))}
+	switch {
+	case active:
+		return rolloutInfo{block: "Идёт раскатка"}
+	case h.Packages == nil || !h.Packages.Has(trimV(s.d.ServerVersion)):
+		return rolloutInfo{block: "Нет пакета " + vm.UpdateTo + " в кэше: выполните deploy.sh в режиме release или загрузите релиз в Система → Обновления"}
+	}
+	return rolloutInfo{canUpdate: true}
 }
 
 var stepLabels = map[string]string{

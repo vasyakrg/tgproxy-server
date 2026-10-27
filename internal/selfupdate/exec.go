@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/user"
 	"strconv"
+	"strings"
 )
 
 // Фиксированные пути команд.
@@ -23,6 +24,9 @@ func (e SystemExecutor) Run(ctx context.Context, name string, args ...string) er
 	var path string
 	switch name {
 	case "dpkg":
+		if err := checkDpkgArgs(args); err != nil {
+			return err
+		}
 		path = dpkgPath
 	case "systemctl":
 		path = systemctlPath
@@ -30,6 +34,7 @@ func (e SystemExecutor) Run(ctx context.Context, name string, args ...string) er
 		return fmt.Errorf("команда %q не разрешена", name)
 	}
 	cmd := exec.CommandContext(ctx, path, args...) // #nosec G204 -- path — константа, args строит Applier
+	cmd.Stdin = nil                                // /dev/null: dpkg не должен ждать ответа на вопросы
 	cmd.Stdout, cmd.Stderr = e.Stdout, e.Stderr
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", "DEBIAN_FRONTEND=noninteractive"}
 	return cmd.Run()
@@ -61,4 +66,15 @@ func ServiceIDs() (uid uint32, gid int, err error) {
 		return 0, -1, err
 	}
 	return uint32(id), g, nil
+}
+
+// checkDpkgArgs: из --force-* допустимы только --force-confdef/--force-confold
+// (сохранить конфиг оператора без вопросов); остальные force-опции могут сломать систему.
+func checkDpkgArgs(args []string) error {
+	for _, a := range args {
+		if strings.HasPrefix(a, "--force") && a != "--force-confdef" && a != "--force-confold" {
+			return fmt.Errorf("опция dpkg %q не разрешена", a)
+		}
+	}
+	return nil
 }

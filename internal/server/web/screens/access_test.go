@@ -224,6 +224,35 @@ func TestAccessPageEmptyStatsAndBaseFallback(t *testing.T) {
 	}
 }
 
+func TestAccessRefresh(t *testing.T) {
+	a := newAccessFx(t, accEnv{base: "https://x.test"})
+	a.seed()
+	a.bots.Observe(6123450001, "office", 200)
+	// кнопка в шапке: htmx без поллинга
+	_, page, _ := a.call("GET", "/access", nil, false)
+	for _, want := range []string{`aria-label="Обновить"`, `hx-get="/access/list"`, `hx-indicator="#rules-section, #bots-section"`, `id="bots-section"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("страница: нет %q", want)
+		}
+	}
+	if strings.Contains(page, "every ") {
+		t.Error("поллинга быть не должно")
+	}
+	code, body, _ := a.call("GET", "/access/list", nil, true)
+	if code != 200 || strings.Contains(body, "<html") {
+		t.Fatalf("code=%d, ожидался фрагмент", code)
+	}
+	assertStrictCSP(t, body)
+	for _, want := range []string{`id="rules-section"`, `id="bots-section"`, `hx-swap-oob="true"`, ">office", "6123450001"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("фрагмент: нет %q", want)
+		}
+	}
+	if code, _, h := a.call("GET", "/access/list", nil, false); code != 303 || h.Get("Location") != "/access" {
+		t.Errorf("без htmx: %d", code)
+	}
+}
+
 func TestAccessFormsAreFragments(t *testing.T) {
 	a := newAccessFx(t, accEnv{base: "https://x.test"})
 	net, _, _ := a.seed()
@@ -499,6 +528,8 @@ func TestAccessGolden(t *testing.T) {
 	cases := map[string]templ.Component{
 		"access_rules_table":   screens.RulesSection(rows, false),
 		"access_rules_empty":   screens.RulesSection(nil, true),
+		"access_bots_oob":      screens.BotsSection([]screens.BotRow{{BotID: "6123450001", Rule: "office", Requests: "3", Errors: "0", R429: "1", Limited: true}}, true),
+		"access_bots_empty":    screens.BotsSection(nil, false),
 		"access_form_new":      screens.RuleForm(screens.RuleFormVM{}),
 		"access_form_net_key":  screens.RuleForm(screens.RuleFormVM{WithKey: true, CIDRs: "10.20.0.0/16"}),
 		"access_form_errors":   screens.RuleForm(screens.RuleFormVM{Name: "x", CIDRs: "0.0.0.0/0", Errors: api.FieldErrors{"cidrs": "открытый прокси"}}),

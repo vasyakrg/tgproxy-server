@@ -13,6 +13,9 @@ var ruleHeaders = []string{"Правило", "Тип", "Сети", "Ключ", "
 // AccessPage — экран «Доступ».
 templ AccessPage(v AccessVM) {
 	@views.PageHeader("Доступ", "Откуда разрешено слать трафик. Боты не регистрируются: запросы уходят в api.telegram.org как есть.") {
+		@views.IconButton("Обновить", "refresh", false, templ.Attributes{
+			"hx-get": "/access/list", "hx-swap": "none", "hx-indicator": "#rules-section, #bots-section", "hx-disabled-elt": "this",
+		})
 		<button type="button" class="btn btn-primary" data-modal-open="rule-modal" hx-get="/access/new" hx-target="#rule-modal-body" hx-swap="innerHTML">+ Новое правило</button>
 	}
 	<section class="howto" aria-label="Как подключить бота">
@@ -26,7 +29,7 @@ templ AccessPage(v AccessVM) {
 		</div>
 	</section>
 	@RulesSection(v.Rows, false)
-	@botsSection(v.Bots)
+	@BotsSection(v.Bots, false)
 	@RuleModal(false)
 }
 
@@ -115,8 +118,16 @@ templ ruleRow(r RuleRow) {
 	</tr>
 }
 
-templ botsSection(bots []BotRow) {
-	<section class="card" aria-label="Активные боты за 24 часа">
+// BotsSection — активные боты за 24 часа. С oob=true подменяет секцию на странице (htmx out-of-band).
+templ BotsSection(bots []BotRow, oob bool) {
+	<section
+		id="bots-section"
+		class="card"
+		aria-label="Активные боты за 24 часа"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
 		<div class="card-head">
 			<h2 class="card-title">Активные боты за 24 часа</h2>
 			<span class="muted small">по трафику, без регистрации; токены не хранятся</span>

@@ -337,8 +337,10 @@ func agentTLSFiles(cfgPath string) (files config.TLSFiles, exists bool, err erro
 
 func writeMinimalAgentConfig(path string, f config.TLSFiles, cfgOwner *fileOwner) error {
 	doc := map[string]any{
-		"mode":   string(config.AgentModeReverse),
-		"listen": map[string]string{"api": "127.0.0.1:8443", "metrics": "127.0.0.1:9101"},
+		"mode": string(config.AgentModeReverse),
+		// listen.api не пишем: reverse-агент сам дозванивается и входящих не принимает.
+		// Для перехода в dial/both адрес задаётся вручную (см. docs/operations.md).
+		"listen": map[string]string{"metrics": "127.0.0.1:9101"},
 		"tls":    f,
 	}
 	data, err := yaml.Marshal(doc)

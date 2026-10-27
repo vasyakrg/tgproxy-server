@@ -159,6 +159,8 @@ func TestAgentValidation(t *testing.T) {
 		{"no tls", "listen:\n  metrics: '127.0.0.1:9443'\n", []string{"tls.cert_file", "tls.key_file", "tls.ca_file"}},
 		{"no data dir", baseAgent + "data_dir: ''\n", []string{"data_dir"}},
 		{"bad listen", strings.Replace(baseAgent, "listen:", "listen:\n  api: x", 1), []string{"listen.api"}},
+		{"reverse without listen.api", baseAgent + "mode: reverse\nserver_url: https://s:8444\n", nil},
+		{"reverse bad listen.api", strings.Replace(baseAgent, "listen:", "listen:\n  api: x", 1) + "mode: reverse\nserver_url: https://s:8444\n", []string{"listen.api"}},
 		{"metrics public needs bearer", strings.Replace(baseAgent, "127.0.0.1:9443", ":9443", 1), []string{"metrics.bearer_file"}},
 		{"bad logging", baseAgent + "logging:\n  format: yaml\n", []string{"logging.format"}},
 	}

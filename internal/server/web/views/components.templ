@@ -34,6 +34,13 @@ const ActionsHeader = "Действия"
 // Table — таблица с горизонтальным скроллом. Строки (<tr>) передаются как children.
 // caption — доступное имя области прокрутки.
 templ Table(caption string, headers []string) {
+	@TableTitled(caption, headers, nil) {
+		{ children... }
+	}
+}
+
+// TableTitled — Table с подсказками (title) у заголовков колонок: titles[заголовок].
+templ TableTitled(caption string, headers []string, titles map[string]string) {
 	<div class="table-wrap" role="region" aria-label={ caption } tabindex="0">
 		<table class="table">
 			<thead>
@@ -42,7 +49,12 @@ templ Table(caption string, headers []string) {
 						if h == ActionsHeader {
 							<th scope="col" class="col-actions">{ h }</th>
 						} else {
-							<th scope="col">{ h }</th>
+							<th
+								scope="col"
+								if titles[h] != "" {
+									title={ titles[h] }
+								}
+							>{ h }</th>
 						}
 					}
 				</tr>
@@ -111,6 +123,13 @@ templ Button(label string, kind ButtonKind, attrs templ.Attributes) {
 // IconButton — квадратная 36px кнопка-иконка; label обязателен (aria-label + title).
 templ IconButton(label, icon string, danger bool, attrs templ.Attributes) {
 	<button type="button" class={ "icon-btn", templ.KV("icon-btn-danger", danger) } aria-label={ label } title={ label } { attrs... }>
+		@Icon(icon, 18)
+	</button>
+}
+
+// IconButtonDisabled — недоступное действие: без hx-атрибутов, причина — в aria-label и title.
+templ IconButtonDisabled(label, reason, icon string) {
+	<button type="button" class="icon-btn icon-btn-disabled" aria-disabled="true" aria-label={ label + " — недоступно: " + reason } title={ reason }>
 		@Icon(icon, 18)
 	</button>
 }
