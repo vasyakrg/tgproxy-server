@@ -52,7 +52,7 @@
 - [x] **M9-T4 · Агент: эндпоинт `/_agent/mtproto/dc/{dc}`** (S-agent)
   - Файлы: `internal/agent/mtproto.go` (handler, релей `r.Body` ↔ TCP ↔ `ResponseWriter` + `http.ResponseController.Flush`), `internal/agent/mtproto_dial.go` (dialer с `Control` по образцу `egressDialControl`, `internal/agent/egress.go:73`, + allowlist `tgapi.TelegramPrefixes`), регистрация в `internal/agent/server.go:11` (`Handler`), учёт в `drain.go`.
   - Тесты первыми (fake-DC — локальный TCP через тест-оверрайд таблицы): 200 приходит до первого байта от DC; байты идут в обе стороны без буферизации (эхо 5 МБ); `{dc}` ≠ `X-TGP-DC` → 400; неизвестный DC → 403; DC недоступен → 502 `X-TGP-Error-Phase: dial`, таймаут → `timeout`; `max_streams` → 503; drain → 503 для новых, живой стрим продолжается; `idle_timeout`/`max_duration` закрывают стрим; dial-control отвергает loopback/private вне тест-оверрайда; клиент без SAN `tgproxy-server` → отказ; `mtproto.enabled: false` → 404; goleak после закрытия.
-- [ ] **M9-T5 · Агент: пробы DC и capabilities** (S-agent)
+- [x] **M9-T5 · Агент: пробы DC и capabilities** (S-agent)
   - Файлы: `internal/agent/mtproto_probe.go` (TCP-connect к одному адресу каждого DC раз в `dc_probe_interval`, джиттер), `internal/agent/status.go:26` (`capabilities`, `mtproto{streams, dc{up, rtt_ms}}`), `internal/transport/client.go` (`AgentStatus.Capabilities []string`, `AgentStatus.MTProto *MTProtoStatus`), `internal/agent/config_endpoint.go` (приём `dc_probe_interval` от сервера).
   - Тесты первыми: статус содержит `mtproto/1` только при `enabled`; недоступный DC → `up:false` через одну пробу, восстановление — через одну; RTT > 0; старый JSON статуса (без полей) парсится сервером без ошибки.
 - [x] **M9-T6 · `StreamTransport` (dial)** (S-agent)

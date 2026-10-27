@@ -114,7 +114,15 @@ type AgentMTProtoConfig struct {
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
 	MaxDuration time.Duration `yaml:"max_duration"`
 	IPv6        bool          `yaml:"ipv6"`
+	// DCProbeInterval — период TCP-проб DC; сервер может менять его через PUT /_agent/config.
+	DCProbeInterval time.Duration `yaml:"dc_probe_interval"`
 }
+
+// Границы dc_probe_interval агента (YAML и PUT /_agent/config).
+const (
+	MinDCProbeInterval = time.Second
+	MaxDCProbeInterval = time.Hour
+)
 
 // Shared сообщает, что MTProto делит листенер с прокси ботов.
 func (m MTProtoConfig) Shared() bool { return m.Listen == MTProtoListenShared }
@@ -292,6 +300,9 @@ func (v *validator) agentMTProto(m AgentMTProtoConfig) {
 	v.positive("mtproto.dial_timeout", m.DialTimeout)
 	v.positive("mtproto.idle_timeout", m.IdleTimeout)
 	v.positive("mtproto.max_duration", m.MaxDuration)
+	if m.DCProbeInterval < MinDCProbeInterval || m.DCProbeInterval > MaxDCProbeInterval {
+		v.add("mtproto.dc_probe_interval", "must be in %s..%s, got %s", MinDCProbeInterval, MaxDCProbeInterval, m.DCProbeInterval)
+	}
 	if m.IdleTimeout > 0 && m.MaxDuration > 0 && m.IdleTimeout > m.MaxDuration {
 		v.add("mtproto.idle_timeout", "must not exceed mtproto.max_duration (%s), got %s", m.MaxDuration, m.IdleTimeout)
 	}

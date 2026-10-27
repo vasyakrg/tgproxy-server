@@ -75,7 +75,7 @@ func TestMTProtoServerDefaults(t *testing.T) {
 func TestMTProtoAgentDefaults(t *testing.T) {
 	d := DefaultAgent().MTProto
 	want := AgentMTProtoConfig{Enabled: true, MaxStreams: 10000, DialTimeout: 5 * time.Second,
-		IdleTimeout: 5 * time.Minute, MaxDuration: 24 * time.Hour}
+		IdleTimeout: 5 * time.Minute, MaxDuration: 24 * time.Hour, DCProbeInterval: 30 * time.Second}
 	if d != want {
 		t.Fatalf("defaults = %+v, want %+v", d, want)
 	}
@@ -247,6 +247,10 @@ func TestMTProtoAgentValidation(t *testing.T) {
 		{"idle zero", "mtproto:\n  idle_timeout: -1s\n", "mtproto.idle_timeout"},
 		{"max_duration zero", "mtproto:\n  max_duration: 0s\n", "mtproto.max_duration"},
 		{"idle > max_duration", "mtproto:\n  idle_timeout: 2h\n  max_duration: 1h\n", "mtproto.idle_timeout"},
+		{"probe zero", "mtproto:\n  dc_probe_interval: 0s\n", "mtproto.dc_probe_interval"},
+		{"probe too small", "mtproto:\n  dc_probe_interval: 500ms\n", "mtproto.dc_probe_interval"},
+		{"probe too large", "mtproto:\n  dc_probe_interval: 2h\n", "mtproto.dc_probe_interval"},
+		{"probe ok", "mtproto:\n  dc_probe_interval: 10s\n", ""},
 		{"unknown", "mtproto:\n  bogus: 1\n", "mtproto.bogus: unknown field"},
 		{"ipv6", "mtproto:\n  ipv6: true\n", ""},
 	}

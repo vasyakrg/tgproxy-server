@@ -107,6 +107,8 @@ func DefaultAgent() *AgentConfig {
 			DialTimeout: 5 * time.Second,
 			IdleTimeout: 5 * time.Minute,
 			MaxDuration: 24 * time.Hour,
+
+			DCProbeInterval: 30 * time.Second,
 		},
 		Logging:        LoggingConfig{Level: "info", Format: "json"},
 		telegramAPIURL: DefaultTelegramAPIURL,

@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/config"
@@ -45,4 +46,29 @@ type AgentStatus struct {
 	UpstreamRTTMs float64           `json:"upstream_rtt_ms"`
 	Draining      bool              `json:"draining"`
 	CertNotAfter  time.Time         `json:"cert_not_after"`
+	// Capabilities — возможности агента ("mtproto/1"); у старых агентов поля нет.
+	Capabilities []string `json:"capabilities,omitempty"`
+	// MTProto — состояние релея MTProto; nil, если агент его не публикует.
+	MTProto *MTProtoStatus `json:"mtproto,omitempty"`
+}
+
+// CapMTProto — capability агента: поддержка POST /_agent/mtproto/dc/{dc}.
+const CapMTProto = "mtproto/1"
+
+// HasCapability сообщает, объявил ли агент возможность c.
+func (s *AgentStatus) HasCapability(c string) bool {
+	return s != nil && slices.Contains(s.Capabilities, c)
+}
+
+// MTProtoStatus — раздел mtproto в /_agent/status.
+type MTProtoStatus struct {
+	Streams int `json:"streams"`
+	// DC — результат последней TCP-пробы по номеру DC ("2").
+	DC map[string]DCStatus `json:"dc"`
+}
+
+// DCStatus — доступность DC с агента.
+type DCStatus struct {
+	Up    bool    `json:"up"`
+	RTTMs float64 `json:"rtt_ms"`
 }

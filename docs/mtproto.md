@@ -232,6 +232,7 @@ mtproto:
   idle_timeout: 5m
   max_duration: 24h
   ipv6: false
+  dc_probe_interval: 30s       # 1s..1h; сервер может менять через PUT /_agent/config
 ```
 
 Правила: `enabled`/`listen`/`fronting_domain` — только рестарт; лимиты и таймауты — SIGHUP. Таблицу DC через YAML не подменить; для тестов — неэкспортируемый оверрайд, как `OverrideTelegramAPIURL` (`internal/config/defaults.go:123`). Валидация — `internal/config/validate.go` (`ValidateServer`, `ValidateAgent`): `fronting_domain` — FQDN без порта; `listen=shared` требует `tls.mode ≠ off`; dedicated `listen` не совпадает с `listen.proxy/admin/metrics/agent_gateway`; `time_skew` ∈ [30s, 10m]; `replay_cache` ∈ [1MiB, 256MiB]; `enabled: true` требует `pki.kek_file`.

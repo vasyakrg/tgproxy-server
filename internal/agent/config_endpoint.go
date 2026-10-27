@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/config"
 )
@@ -14,6 +15,8 @@ const maxConfigBody = 4 << 10
 type configRequest struct {
 	Mode      config.AgentMode `json:"mode"`
 	ServerURL string           `json:"server_url"`
+	// DCProbeInterval — необязательный период проб DC ("30s"); применяется на лету, не сохраняется в файл.
+	DCProbeInterval string `json:"dc_probe_interval,omitempty"`
 }
 
 // handleConfig — PUT /_agent/config {mode, server_url}: смена режима связи без
@@ -29,6 +32,15 @@ func (a *Agent) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if err := dec.Decode(&req); err != nil {
 		writeAgentError(w, http.StatusBadRequest, "", "tgproxy: bad config json")
 		return
+	}
+	var probe time.Duration
+	if req.DCProbeInterval != "" {
+		d, err := time.ParseDuration(req.DCProbeInterval)
+		if err != nil || d < config.MinDCProbeInterval || d > config.MaxDCProbeInterval {
+			writeAgentError(w, http.StatusUnprocessableEntity, "", fmt.Sprintf("tgproxy: dc_probe_interval must be a duration in %s..%s", config.MinDCProbeInterval, config.MaxDCProbeInterval))
+			return
+		}
+		probe = d
 	}
 	m := a.mgr
 	m.opMu.Lock()
@@ -73,6 +85,9 @@ func (a *Agent) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		writeAgentError(w, http.StatusConflict, "", "tgproxy: cannot apply config: "+err.Error())
 		return
+	}
+	if probe > 0 {
+		a.SetDCProbeInterval(probe)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": req.Mode, "server_url": url})
