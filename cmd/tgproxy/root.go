@@ -21,6 +21,7 @@ func newRootCmd() *cobra.Command {
 		newAgentCmd(),
 		newAccessCmd(),
 		newBanCmd(),
+		newMTProtoCmd(),
 		newAgentsCmd(),
 		newHostKeysCmd(),
 		newConfigCmd(),

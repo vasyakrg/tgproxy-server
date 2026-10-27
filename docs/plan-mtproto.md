@@ -138,7 +138,7 @@
 - [x] **M12-T2 · Stats API** (S-web) · зависит от M10-T5, M11-T5
   - Файлы: `internal/server/web/api/stats.go` (`GET /api/v1/mtproto/stats`: agent×dc streams/rtt/up/errors, итоги), ряды `mtproto_conns`, `mtproto_bps` в `stats/timeseries`, фильтр `phase=mtproto` в `errors`.
   - Тесты первыми: форма JSON; пустая матрица при `enabled:false`; ряды в timeseries.
-- [ ] **M12-T3 · CLI** (S-wire) · зависит от M12-T1
+- [x] **M12-T3 · CLI** (S-wire) · зависит от M12-T1
   - Файлы: `cmd/tgproxy/mtproto.go` (`mtproto secret add|list|delete|rotate|link`, `mtproto probe --link [--dc] [--timeout]`), тесты команд по образцу `ban_test.go`.
   - Тесты первыми: `list` не печатает ключ; `link` без KEK → понятная ошибка; `probe` код возврата 0/1, ссылка из аргумента/`--link-stdin` не печатается в лог.
 - [ ] **M12-T4 · UI: вкладка «MTProto»** (S-web) · зависит от M12-T1, M12-T2
