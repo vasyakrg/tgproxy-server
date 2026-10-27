@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 
@@ -18,13 +19,17 @@ var ErrModeUnsupported = errors.New("transport: agent mode unsupported")
 // Registry выбирает реализацию AgentTransport по AgentRef.Mode и сам
 // реализует AgentTransport.
 type Registry struct {
-	mu    sync.RWMutex
-	impls map[config.AgentMode]AgentTransport
+	mu      sync.RWMutex
+	impls   map[config.AgentMode]AgentTransport
+	streams map[config.AgentMode]StreamTransport
 }
 
 // NewRegistry создаёт реестр; ключи — режимы связи.
 func NewRegistry(impls map[config.AgentMode]AgentTransport) *Registry {
-	r := &Registry{impls: make(map[config.AgentMode]AgentTransport, len(impls))}
+	r := &Registry{
+		impls:   make(map[config.AgentMode]AgentTransport, len(impls)),
+		streams: make(map[config.AgentMode]StreamTransport),
+	}
 	for m, t := range impls {
 		r.impls[m] = t
 	}
@@ -66,12 +71,42 @@ func (r *Registry) Status(ctx context.Context, a AgentRef) (*AgentStatus, error)
 	return t.Status(ctx, a)
 }
 
+// RegisterStream добавляет/заменяет StreamTransport режима (reverse — M11-T1).
+func (r *Registry) RegisterStream(mode config.AgentMode, t StreamTransport) {
+	r.mu.Lock()
+	r.streams[mode] = t
+	r.mu.Unlock()
+}
+
+// OpenMTProto делегирует StreamTransport режима агента. Для reverse без
+// зарегистрированной реализации — ErrNotSupported (до M11-T1), для остальных
+// режимов — ErrModeUnsupported.
+func (r *Registry) OpenMTProto(ctx context.Context, a AgentRef, dc int) (net.Conn, error) {
+	r.mu.RLock()
+	t, ok := r.streams[a.Mode]
+	r.mu.RUnlock()
+	if !ok || t == nil {
+		if a.Mode == config.AgentModeReverse {
+			return nil, fmt.Errorf("%w: reverse (agent %s)", ErrNotSupported, a.ID)
+		}
+		return nil, fmt.Errorf("%w: %q (agent %s)", ErrModeUnsupported, a.Mode, a.ID)
+	}
+	return t.OpenMTProto(ctx, a, dc)
+}
+
+var _ StreamTransport = (*Registry)(nil)
+
 // Close закрывает все реализации, реализующие io.Closer.
 func (r *Registry) Close() error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var errs []error
 	for _, t := range r.impls {
+		if c, ok := t.(io.Closer); ok {
+			errs = append(errs, c.Close())
+		}
+	}
+	for _, t := range r.streams {
 		if c, ok := t.(io.Closer); ok {
 			errs = append(errs, c.Close())
 		}

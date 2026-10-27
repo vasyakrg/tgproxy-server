@@ -39,7 +39,8 @@ type Agent struct {
 	mgr      *manager
 	connOpts []ConnectorOption
 	saveConn func(path string, mode config.AgentMode, serverURL string) error
-	upd      selfUpdater // самообновление (selfupdate.go)
+	upd      selfUpdater   // самообновление (selfupdate.go)
+	mtp      *mtprotoRelay // релей MTProto (mtproto.go)
 
 	transport *http.Transport
 	proxy     *proxy
@@ -126,6 +127,7 @@ func New(cfg *config.AgentConfig, logger *slog.Logger, opts ...Option) (*Agent, 
 	a.started = a.now()
 	a.transport = newUpstreamTransport(a.upTLS)
 	a.proxy = newProxy(a)
+	a.mtp = newMTProtoRelay(a)
 	a.health = newHealthProbe(a.probeUpstream, a.now)
 	return a, nil
 }

@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 
 	"github.com/vasyakrg/tgproxy-server/internal/tgapi"
@@ -12,12 +13,41 @@ import (
 // (Dial), а если до агента не достучаться и он держит обратные соединения —
 // запрос уходит по ним (Reverse). Запрос повторяется на другом канале только
 // если в Telegram он точно не ушёл (tgapi.PhaseNotSent) и тело можно переиграть.
+//
+// DialStream/ReverseStream — то же для StreamTransport (MTProto-стримы);
+// ReverseStream необязателен: без него ошибка dial возвращается как есть.
 type Both struct {
-	Dial    AgentTransport
-	Reverse AgentTransport
+	Dial          AgentTransport
+	Reverse       AgentTransport
+	DialStream    StreamTransport
+	ReverseStream StreamTransport
 }
 
-var _ AgentTransport = Both{}
+var (
+	_ AgentTransport  = Both{}
+	_ StreamTransport = Both{}
+)
+
+// OpenMTProto реализует StreamTransport: сначала dial; если стрим точно не
+// открыт (tgapi.PhaseNotSent) и есть reverse-реализация — повтор по ней.
+func (b Both) OpenMTProto(ctx context.Context, agent AgentRef, dc int) (net.Conn, error) {
+	if b.DialStream == nil {
+		return nil, ErrNotSupported
+	}
+	conn, err := b.DialStream.OpenMTProto(ctx, agent, dc)
+	if err == nil || ctx.Err() != nil || b.ReverseStream == nil {
+		return conn, err
+	}
+	var pe *PhaseError
+	if !errors.As(err, &pe) || !tgapi.PhaseNotSent(pe.Phase) {
+		return conn, err
+	}
+	rconn, rerr := b.ReverseStream.OpenMTProto(ctx, agent, dc)
+	if errors.Is(rerr, ErrNoReverseConn) || errors.Is(rerr, ErrNotSupported) {
+		return conn, err
+	}
+	return rconn, rerr
+}
 
 // RoundTrip реализует AgentTransport.
 func (b Both) RoundTrip(ctx context.Context, agent AgentRef, req *http.Request) (*http.Response, error) {

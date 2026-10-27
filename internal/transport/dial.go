@@ -39,6 +39,7 @@ type dialOpts struct {
 	pingTimeout      time.Duration
 	clientCert       func(*tls.CertificateRequestInfo) (*tls.Certificate, error)
 	peerChecks       []pki.Check
+	streamWindow     int
 }
 
 // Option настраивает Dial.
@@ -92,17 +93,22 @@ type Dial struct {
 	closed bool
 }
 
-// NewDial создаёт транспорт: cert — клиентский сертификат сервера, ca — пул
-// доверия проекта.
-func NewDial(cert tls.Certificate, ca *x509.CertPool, opts ...Option) *Dial {
-	o := dialOpts{
+func defaultDialOpts() dialOpts {
+	return dialOpts{
 		dialTimeout:      5 * time.Second,
 		handshakeTimeout: 5 * time.Second,
 		idleConnTimeout:  90 * time.Second,
 		statusTimeout:    5 * time.Second,
-		pingEvery:        15 * time.Second,
+		pingEvery:        DefaultPingEvery,
 		pingTimeout:      10 * time.Second,
+		streamWindow:     DefaultStreamWindow,
 	}
+}
+
+// NewDial создаёт транспорт: cert — клиентский сертификат сервера, ca — пул
+// доверия проекта.
+func NewDial(cert tls.Certificate, ca *x509.CertPool, opts ...Option) *Dial {
+	o := defaultDialOpts()
 	for _, f := range opts {
 		f(&o)
 	}
@@ -124,13 +130,9 @@ func (d *Dial) transportFor(a AgentRef) (*http.Transport, error) {
 		}
 		c.tr.CloseIdleConnections() // агент переехал на другой адрес
 	}
-	cfg, err := pki.ClientTLSConfig(d.cert, d.ca, pki.VerifyAgentPeer(d.ca, a.ID, d.opts.peerChecks...))
+	cfg, err := agentTLSConfig(d.cert, d.ca, &d.opts, a.ID)
 	if err != nil {
 		return nil, err
-	}
-	if d.opts.clientCert != nil {
-		cfg.Certificates = nil
-		cfg.GetClientCertificate = d.opts.clientCert
 	}
 	tr := &http.Transport{
 		// Прокси не используем: канал server → agent прямой.
@@ -149,6 +151,20 @@ func (d *Dial) transportFor(a AgentRef) (*http.Transport, error) {
 	}
 	d.conns[a.ID] = &agentConn{host: a.URL.Host, tr: tr}
 	return tr, nil
+}
+
+// agentTLSConfig — клиентский TLS к агенту id: клиентский сертификат сервера
+// (статический или динамический), пиннинг SAN агента, denylist.
+func agentTLSConfig(cert tls.Certificate, ca *x509.CertPool, o *dialOpts, id string) (*tls.Config, error) {
+	cfg, err := pki.ClientTLSConfig(cert, ca, pki.VerifyAgentPeer(ca, id, o.peerChecks...))
+	if err != nil {
+		return nil, err
+	}
+	if o.clientCert != nil {
+		cfg.Certificates = nil
+		cfg.GetClientCertificate = o.clientCert
+	}
+	return cfg, nil
 }
 
 // Close закрывает простаивающие соединения и запрещает новые запросы.

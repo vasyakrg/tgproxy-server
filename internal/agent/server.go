@@ -15,6 +15,7 @@ func (a *Agent) Handler() http.Handler {
 	mux.HandleFunc("GET /_agent/status", a.handleStatus)
 	mux.HandleFunc("POST /_agent/drain", a.handleDrain(true))
 	mux.HandleFunc("DELETE /_agent/drain", a.handleDrain(false))
+	mux.HandleFunc("POST /_agent/mtproto/dc/{dc}", a.handleMTProto)
 	mux.Handle("/_agent/egress", newEgressHandler())
 	mux.HandleFunc("POST /_agent/update", a.handleUpdate)
 	mux.HandleFunc("GET /_agent/update", a.handleUpdateStatus)
