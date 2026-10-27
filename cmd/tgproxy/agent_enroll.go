@@ -57,6 +57,7 @@ func newAgentEnrollCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&tokenStdin, "token-stdin", false, "прочитать токен из stdin (первая строка); по умолчанию, если stdin не терминал")
 	cmd.Flags().StringVar(&o.CAFingerprint, "ca-fingerprint", "", "отпечаток CA сервера, SHA256:...")
 	cmd.Flags().StringVarP(&o.ConfigPath, "config", "c", agent.DefaultAgentConfigPath, "путь к agent.yaml")
+	cmd.Flags().StringVar(&o.ServiceUser, "service-user", agent.DefaultServiceUser, "пользователь юнита tgproxy-agent: от root ему отдаются конфиг (root:группа) и данные")
 	_ = cmd.MarkFlagRequired("server")
 	_ = cmd.MarkFlagRequired("ca-fingerprint")
 	return cmd

@@ -8,9 +8,11 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -191,7 +193,7 @@ func TestEnrollCreatesMinimalConfig(t *testing.T) {
 		t.Fatalf("defaults: %+v %v %v", files, exists, err)
 	}
 	local := config.TLSFiles{CertFile: filepath.Join(dir, "c.crt"), KeyFile: filepath.Join(dir, "k.key"), CAFile: filepath.Join(dir, "ca.crt")}
-	if err := writeMinimalAgentConfig(e.cfg, local); err != nil {
+	if err := writeMinimalAgentConfig(e.cfg, local, nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(e.cfg)
@@ -205,7 +207,7 @@ func TestEnrollEmptyDirConfigLoads(t *testing.T) {
 	dir := t.TempDir()
 	local := config.TLSFiles{CertFile: filepath.Join(dir, "c.crt"), KeyFile: filepath.Join(dir, "k.key"), CAFile: filepath.Join(dir, "ca.crt")}
 	cfg := filepath.Join(dir, "etc", "agent.yaml")
-	if err := writeMinimalAgentConfig(cfg, local); err != nil {
+	if err := writeMinimalAgentConfig(cfg, local, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := config.SaveAgentConnection(cfg, config.AgentModeReverse, e.srv.URL); err != nil {
@@ -341,15 +343,15 @@ func TestWriteEnrollFileErrors(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "file")
 	_ = os.WriteFile(f, nil, 0o600)
-	if err := writeEnrollFile(filepath.Join(f, "x"), []byte("a"), 0o600); err == nil {
+	if err := writeEnrollFile(filepath.Join(f, "x"), []byte("a"), 0o600, nil); err == nil {
 		t.Error("write under a file accepted")
 	}
-	if err := writeEnrollFile(filepath.Join(dir, "d", "ok"), []byte("a"), 0o600); err != nil {
+	if err := writeEnrollFile(filepath.Join(dir, "d", "ok"), []byte("a"), 0o600, nil); err != nil {
 		t.Error(err)
 	}
 	// rename поверх каталога
 	_ = os.Mkdir(filepath.Join(dir, "isdir"), 0o750)
-	if err := writeEnrollFile(filepath.Join(dir, "isdir"), []byte("a"), 0o600); err == nil {
+	if err := writeEnrollFile(filepath.Join(dir, "isdir"), []byte("a"), 0o600, nil); err == nil {
 		t.Error("rename over dir accepted")
 	}
 }
@@ -370,5 +372,107 @@ func TestSecretKeyUnique(t *testing.T) {
 	k2, _ := os.ReadFile(r2.KeyFile)
 	if string(k1) == string(k2) {
 		t.Error("same key reused")
+	}
+}
+
+func fakeOwnerOps(euid int, users map[string]*user.User) (*ownerOps, *[]string) {
+	var calls []string
+	return &ownerOps{
+		geteuid: func() int { return euid },
+		lookup: func(n string) (*user.User, error) {
+			if u, ok := users[n]; ok {
+				return u, nil
+			}
+			return nil, user.UnknownUserError(n)
+		},
+		fchown: func(_ *os.File, uid, gid int) error {
+			calls = append(calls, fmt.Sprintf("fchown %d:%d", uid, gid))
+			return nil
+		},
+		lchown: func(p string, uid, gid int) error {
+			calls = append(calls, fmt.Sprintf("lchown %s %d:%d", filepath.Base(p), uid, gid))
+			return nil
+		},
+	}, &calls
+}
+
+func TestOwnerResolve(t *testing.T) {
+	users := map[string]*user.User{"tgproxy": {Uid: "990", Gid: "991"}, "svc": {Uid: "5", Gid: "6"}}
+
+	ops, calls := fakeOwnerOps(1000, users)
+	own, err := ops.resolve("")
+	if err != nil || own.config() != nil || own.data() != nil {
+		t.Fatalf("non-root: %v %+v", err, own)
+	}
+	d := t.TempDir()
+	if err := writeEnrollFile(filepath.Join(d, "x"), []byte("a"), 0o600, own.data()); err != nil {
+		t.Fatal(err)
+	}
+	if err := own.ensureDir(filepath.Join(d, "sub"), true, own.data()); err != nil {
+		t.Fatal(err)
+	}
+	if err := own.chownFile(filepath.Join(d, "x"), own.config()); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("chown вызван не от root: %v", *calls)
+	}
+
+	ops, _ = fakeOwnerOps(0, users)
+	own, err = ops.resolve("")
+	if err != nil || own.config().uid != 0 || own.config().gid != 991 || own.data().uid != 990 || own.data().gid != 991 {
+		t.Fatalf("root default: %v %+v", err, own)
+	}
+	if own, err = ops.resolve("svc"); err != nil || own.data().uid != 5 || own.config().gid != 6 || own.config().uid != 0 {
+		t.Fatalf("root --service-user: %v %+v", err, own)
+	}
+	if _, err = ops.resolve("nobody-here"); err == nil || !strings.Contains(err.Error(), "nobody-here") {
+		t.Errorf("нет пользователя: err=%v", err)
+	}
+	bad, _ := fakeOwnerOps(0, map[string]*user.User{"tgproxy": {Uid: "x", Gid: "1"}})
+	if _, err = bad.resolve(""); err == nil {
+		t.Error("нечисловой uid принят")
+	}
+}
+
+func TestOwnerApply(t *testing.T) {
+	ops, calls := fakeOwnerOps(0, map[string]*user.User{"tgproxy": {Uid: "990", Gid: "991"}})
+	own, err := ops.resolve("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := t.TempDir()
+	if err := writeEnrollFile(filepath.Join(d, "agent.key"), []byte("k"), 0o600, own.data()); err != nil {
+		t.Fatal(err)
+	}
+	if got := (*calls)[len(*calls)-1]; got != "fchown 990:991" {
+		t.Errorf("fchown: %q", got)
+	}
+	// существующий каталог: при force=false не трогаем, при force=true чиним
+	n := len(*calls)
+	if err := own.ensureDir(d, false, own.data()); err != nil || len(*calls) != n {
+		t.Errorf("force=false: %v %v", err, *calls)
+	}
+	if err := own.ensureDir(d, true, own.data()); err != nil || len(*calls) != n+1 {
+		t.Errorf("force=true: %v %v", err, *calls)
+	}
+	// новый каталог chown-им даже без force
+	n = len(*calls)
+	if err := own.ensureDir(filepath.Join(d, "new"), false, own.config()); err != nil || (*calls)[n] != "lchown new 0:991" {
+		t.Errorf("new dir: %v %v", err, *calls)
+	}
+	// симлинк и не-каталог отвергаются
+	link := filepath.Join(d, "link")
+	if err := os.Symlink(d, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := own.ensureDir(link, true, own.data()); err == nil {
+		t.Error("симлинк вместо каталога принят")
+	}
+	if err := own.chownFile(link, own.config()); err == nil {
+		t.Error("симлинк вместо файла принят")
+	}
+	if err := own.chownFile(filepath.Join(d, "agent.key"), own.config()); err != nil || (*calls)[len(*calls)-1] != "lchown agent.key 0:991" {
+		t.Errorf("chownFile: %v %v", err, *calls)
 	}
 }

@@ -18,7 +18,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,9 +33,11 @@ import (
 // Умолчания enrollment.
 const (
 	DefaultAgentConfigPath = "/etc/tgproxy/agent.yaml"
-	defaultAgentTLSDir     = "/var/lib/tgproxy/agent"
-	enrollTimeout          = 30 * time.Second
-	maxEnrollResponse      = 1 << 20
+	// DefaultServiceUser — системный пользователь юнита tgproxy-agent (User=/Group=).
+	DefaultServiceUser = "tgproxy"
+	defaultAgentTLSDir = "/var/lib/tgproxy/agent"
+	enrollTimeout      = 30 * time.Second
+	maxEnrollResponse  = 1 << 20
 )
 
 // EnrollOptions — параметры `tgproxy agent enroll`.
@@ -42,7 +46,10 @@ type EnrollOptions struct {
 	Token         string
 	CAFingerprint string // SHA256:<base64 raw>, как печатает сервер
 	ConfigPath    string // по умолчанию /etc/tgproxy/agent.yaml
-	Timeout       time.Duration
+	// ServiceUser — пользователь/группа юнита агента; от root файлы отдаются ему
+	// (по умолчанию DefaultServiceUser). Не от root — игнорируется.
+	ServiceUser string
+	Timeout     time.Duration
 }
 
 // EnrollResult — итог enrollment.
@@ -88,6 +95,11 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Владелец определяется до сетевого запроса: нет пользователя — токен не сжигаем.
+	own, err := defaultOwnerOps.resolve(opts.ServiceUser)
+	if err != nil {
+		return nil, err
+	}
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = enrollTimeout
@@ -119,6 +131,18 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 		return nil, fmt.Errorf("enroll: marshal key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	// Каталоги: TLS — данные сервиса (при повторном enroll права чинятся);
+	// каталог конфига создаём root:<группа сервиса>, существующий не трогаем.
+	if !cfgExists {
+		if err := own.ensureDir(filepath.Dir(cfgPath), false, own.config()); err != nil {
+			return nil, err
+		}
+	}
+	for _, p := range []string{files.KeyFile, files.CertFile, files.CAFile} {
+		if err := own.ensureDir(filepath.Dir(p), true, own.data()); err != nil {
+			return nil, err
+		}
+	}
 	// Ключ первым: если дальше что-то упадёт, пара «ключ без серта» безвредна.
 	for _, f := range []struct {
 		path string
@@ -129,17 +153,22 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 		{files.CertFile, []byte(resp.Cert), 0o644},
 		{files.CAFile, []byte(resp.CA), 0o644},
 	} {
-		if err := writeEnrollFile(f.path, f.data, f.perm); err != nil {
+		if err := writeEnrollFile(f.path, f.data, f.perm, own.data()); err != nil {
 			return nil, err
 		}
 	}
 	if !cfgExists {
-		if err := writeMinimalAgentConfig(cfgPath, files); err != nil {
+		if err := writeMinimalAgentConfig(cfgPath, files, own.config()); err != nil {
 			return nil, err
 		}
 	}
 	if err := config.SaveAgentConnection(cfgPath, config.AgentModeReverse, srv.String()); err != nil {
 		return nil, fmt.Errorf("enroll: save config: %w", err)
+	}
+	// SaveAgentConnection пересоздаёт файл через temp+rename (владелец root) —
+	// возвращаем root:<группа сервиса>.
+	if err := own.chownFile(cfgPath, own.config()); err != nil {
+		return nil, err
 	}
 	return &EnrollResult{AgentID: resp.AgentID, CertFile: files.CertFile, KeyFile: files.KeyFile, CAFile: files.CAFile, ConfigPath: cfgPath}, nil
 }
@@ -306,10 +335,7 @@ func agentTLSFiles(cfgPath string) (files config.TLSFiles, exists bool, err erro
 	return t, true, nil
 }
 
-func writeMinimalAgentConfig(path string, f config.TLSFiles) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return fmt.Errorf("enroll: %w", err)
-	}
+func writeMinimalAgentConfig(path string, f config.TLSFiles, cfgOwner *fileOwner) error {
 	doc := map[string]any{
 		"mode":   string(config.AgentModeReverse),
 		"listen": map[string]string{"api": "127.0.0.1:8443", "metrics": "127.0.0.1:9101"},
@@ -319,11 +345,128 @@ func writeMinimalAgentConfig(path string, f config.TLSFiles) error {
 	if err != nil {
 		return err
 	}
-	return writeEnrollFile(path, data, 0o640)
+	return writeEnrollFile(path, data, 0o640, cfgOwner)
 }
 
-// writeEnrollFile пишет файл через temp+rename с заданными правами.
-func writeEnrollFile(path string, data []byte, perm os.FileMode) error {
+// fileOwner — uid/gid, которые выставляются на файл или каталог.
+type fileOwner struct {
+	uid, gid int
+	fchown   func(f *os.File, uid, gid int) error
+}
+
+// ownerOps — внедряемые системные вызовы (в тестах подменяются, root не нужен).
+type ownerOps struct {
+	geteuid func() int
+	lookup  func(name string) (*user.User, error)
+	fchown  func(f *os.File, uid, gid int) error
+	lchown  func(path string, uid, gid int) error
+}
+
+var defaultOwnerOps = &ownerOps{
+	geteuid: os.Geteuid,
+	lookup:  user.Lookup,
+	fchown:  func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) },
+	lchown:  os.Lchown,
+}
+
+// enrollOwners — результат resolve; nil-значение (не root) ничего не меняет.
+type enrollOwners struct {
+	ops           *ownerOps
+	root, service fileOwner
+	active        bool
+}
+
+// resolve: от root ищет пользователя сервиса (ошибка, если его нет), иначе
+// возвращает «пустой» результат — владелец не трогается (dev/тесты).
+func (o *ownerOps) resolve(serviceUser string) (*enrollOwners, error) {
+	if o.geteuid() != 0 {
+		return &enrollOwners{ops: o}, nil
+	}
+	if serviceUser == "" {
+		serviceUser = DefaultServiceUser
+	}
+	u, err := o.lookup(serviceUser)
+	if err != nil {
+		return nil, fmt.Errorf("enroll: service user %q not found (пакет tgproxy не установлен? для нестандартной установки задайте --service-user): %w", serviceUser, err)
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return nil, fmt.Errorf("enroll: bad uid %q of user %q", u.Uid, serviceUser)
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return nil, fmt.Errorf("enroll: bad gid %q of user %q", u.Gid, serviceUser)
+	}
+	return &enrollOwners{ops: o, active: true, root: fileOwner{0, gid, o.fchown}, service: fileOwner{uid, gid, o.fchown}}, nil
+}
+
+// config — владелец agent.yaml и его каталога: root:<группа сервиса>.
+func (e *enrollOwners) config() *fileOwner {
+	if !e.active {
+		return nil
+	}
+	return &e.root
+}
+
+// data — владелец data_dir и TLS-файлов: <сервис>:<группа сервиса>.
+func (e *enrollOwners) data() *fileOwner {
+	if !e.active {
+		return nil
+	}
+	return &e.service
+}
+
+// chownFile меняет владельца обычного файла по пути (не симлинк).
+func (e *enrollOwners) chownFile(path string, own *fileOwner) error {
+	if own == nil {
+		return nil
+	}
+	st, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("enroll: %w", err)
+	}
+	if !st.Mode().IsRegular() {
+		return fmt.Errorf("enroll: %s is not a regular file", path)
+	}
+	if err := e.ops.lchown(path, own.uid, own.gid); err != nil {
+		return fmt.Errorf("enroll: chown %s: %w", path, err)
+	}
+	return nil
+}
+
+// ensureDir создаёт каталог (0750) и выставляет владельца. Существующий каталог
+// должен быть именно каталогом, не симлинком; его владелец меняется только при
+// force (data_dir — чиним при повторном enroll; системные каталоги не трогаем).
+func (e *enrollOwners) ensureDir(dir string, force bool, own *fileOwner) error {
+	st, err := os.Lstat(dir)
+	created := false
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return fmt.Errorf("enroll: %w", err)
+		}
+		created = true
+		if st, err = os.Lstat(dir); err != nil {
+			return fmt.Errorf("enroll: %w", err)
+		}
+	case err != nil:
+		return fmt.Errorf("enroll: %w", err)
+	}
+	if !st.IsDir() {
+		return fmt.Errorf("enroll: %s is not a directory", dir)
+	}
+	if own == nil || (!created && !force) {
+		return nil
+	}
+	if err := e.ops.lchown(dir, own.uid, own.gid); err != nil {
+		return fmt.Errorf("enroll: chown %s: %w", dir, err)
+	}
+	return nil
+}
+
+// writeEnrollFile пишет файл через temp+rename с заданными правами. Если own != nil,
+// владелец выставляется fchown на дескрипторе temp-файла до rename (без гонок и симлинков).
+func writeEnrollFile(path string, data []byte, perm os.FileMode, own *fileOwner) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("enroll: %w", err)
@@ -342,6 +485,12 @@ func writeEnrollFile(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("enroll: %w", err)
+	}
+	if own != nil {
+		if err := own.fchown(tmp, own.uid, own.gid); err != nil {
+			_ = tmp.Close()
+			return fmt.Errorf("enroll: chown: %w", err)
+		}
 	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
