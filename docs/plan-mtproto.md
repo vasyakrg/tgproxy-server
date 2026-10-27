@@ -141,11 +141,11 @@
 - [x] **M12-T3 · CLI** (S-wire) · зависит от M12-T1
   - Файлы: `cmd/tgproxy/mtproto.go` (`mtproto secret add|list|delete|rotate|link`, `mtproto probe --link [--dc] [--timeout]`), тесты команд по образцу `ban_test.go`.
   - Тесты первыми: `list` не печатает ключ; `link` без KEK → понятная ошибка; `probe` код возврата 0/1, ссылка из аргумента/`--link-stdin` не печатается в лог.
-- [ ] **M12-T4 · UI: вкладка «MTProto»** (S-web) · зависит от M12-T1, M12-T2
+- [x] **M12-T4 · UI: вкладка «MTProto»** (S-web) · зависит от M12-T1, M12-T2
   - Файлы: `internal/server/web/screens/mtproto.templ|.go|_deps.go`, навигация в `shell.go`; макет — `docs/design/MTProto.dc.html` (создаётся ролью `ui` до задачи).
   - Содержимое: таблица секретов (имя, префикс, статус, соединения, действия), создание (ссылка показывается один раз), модалка «Ссылка + QR» (`renderQR`, `internal/server/web/auth/qr.go:10`; запрос TOTP при несвежем), отзыв с подтверждением, ротация, матрица агент×DC.
   - Тесты первыми: golden-рендер; QR-модалка не рендерится без свежего TOTP; htmx-действия с CSRF.
-- [ ] **M12-T5 · UI: интеграция в существующие экраны** (S-web) · параллельно с M12-T4
+- [x] **M12-T5 · UI: интеграция в существующие экраны** (S-web) · параллельно с M12-T4
   - Файлы: `screens/agents.templ` (чип `mtproto/1`, статус DC), `screens/overview.templ` (KPI «MTProto: соединения, полоса», ряды на графике), `screens/errors.templ` (фаза `mtproto`).
   - Тесты первыми: golden-рендер с/без capability; KPI скрыт при `enabled:false`.
 - [ ] **M12-T6 · Wiring** (S-wire): маршруты API/UI, зависимость `Manager` → stats.

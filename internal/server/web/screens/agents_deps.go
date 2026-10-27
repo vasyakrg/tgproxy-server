@@ -69,6 +69,15 @@ type AgentRowVM struct {
 	Lagging        bool   // версия ≠ серверной (иконка обновления показывается всегда)
 	UpdateBlock    string // причина, по которой обновление сейчас невозможно ("" — можно)
 	New            bool   // только что подключённый агент (?highlight=): строка подсвечивается
+	MTProto        bool   // агент объявил capability mtproto/1: показывается чип «MTProto»
+	DC             []DCVM // состояние DC (последняя проба агента), по возрастанию номера; в деталях агента
+}
+
+// DCVM — доступность одного DC Telegram с агента.
+type DCVM struct {
+	Name string // «DC2»
+	Up   bool
+	RTT  string // «34 мс» (только для Up)
 }
 
 // AgentsVM — модель страницы «Агенты».

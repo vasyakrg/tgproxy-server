@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/auth"
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/views"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
+	"github.com/vasyakrg/tgproxy-server/internal/transport"
 )
 
 // AgentsRouter — то, что нужно экрану от *web.Router.
@@ -184,8 +186,39 @@ func makeAgentRow(v api.AgentView, serverVersion string, now time.Time) AgentRow
 		if !ls.CertNotAfter.IsZero() {
 			row.Cert, row.CertTone = certLeft(now, ls.CertNotAfter)
 		}
+		row.MTProto = ls.HasCapability(transport.CapMTProto)
+		if row.MTProto && st.Up {
+			row.DC = dcViews(ls.MTProto)
+		}
 	}
 	return row
+}
+
+// dcViews — состояние DC из статуса агента по возрастанию номера; нечисловые ключи пропускаются.
+func dcViews(m *transport.MTProtoStatus) []DCVM {
+	if m == nil {
+		return nil
+	}
+	nums := make([]int, 0, len(m.DC))
+	byNum := make(map[int]transport.DCStatus, len(m.DC))
+	for k, v := range m.DC {
+		n, err := strconv.Atoi(k)
+		if err != nil {
+			continue
+		}
+		nums = append(nums, n)
+		byNum[n] = v
+	}
+	sort.Ints(nums)
+	out := make([]DCVM, 0, len(nums))
+	for _, n := range nums {
+		d := DCVM{Name: "DC" + strconv.Itoa(n), Up: byNum[n].Up}
+		if d.Up {
+			d.RTT = fmtMs(byNum[n].RTTMs)
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // certLeft: «71 д», подсветка за 14 дней до конца, «истёк» после.

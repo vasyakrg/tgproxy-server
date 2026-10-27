@@ -375,6 +375,8 @@ html.sb-collapsed { --sb-w: var(--sb-w-collapsed); }
 .legend-err { background: var(--orange); }
 .legend-r429 { background: var(--tg); }
 .legend-denied { background: var(--err); }
+.legend-mt { background: var(--warn); }
+.legend-mtbps { background: var(--link); }
 .ov-tip { min-height: 20px; font-size: 12px; color: var(--muted); }
 .ov-tip[data-active="true"] { color: var(--text); }
 .chart { position: relative; height: 240px; min-width: 0; }
@@ -633,3 +635,7 @@ html.sb-collapsed { --sb-w: var(--sb-w-collapsed); }
 .key-hint { display: none; color: var(--warn); }
 .key-hint[data-active],
 .rule-form:has(#rule-with-key:checked):has(#rule-cidrs:not(:placeholder-shown)) .key-hint { display: block; }
+
+/* ---------- MTProto ---------- */
+.qr-box { width: min(240px, 100%); margin: 0 auto; padding: 8px; border-radius: 8px; background: #fff; }
+.qr-box svg { display: block; width: 100%; height: auto; }

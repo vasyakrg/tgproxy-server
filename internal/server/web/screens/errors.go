@@ -108,7 +108,7 @@ type ErrorsVM struct {
 }
 
 var (
-	phaseOptions = []string{tgapi.PhaseAccess, tgapi.PhaseDial, tgapi.PhaseTLS, tgapi.PhasePreSend, tgapi.PhaseWrite, tgapi.PhaseRead, tgapi.PhaseTimeout, "telegram", "server"}
+	phaseOptions = []string{tgapi.PhaseAccess, tgapi.PhaseDial, tgapi.PhaseTLS, tgapi.PhasePreSend, tgapi.PhaseWrite, tgapi.PhaseRead, tgapi.PhaseTimeout, "telegram", "server", phaseMTProto}
 	codeOptions  = []string{"200", "403", "429", "502", "503", "504"}
 )
 
@@ -119,7 +119,13 @@ var reasonLabels = []ReasonOpt{
 	{string(access.ReasonBadKey), "неверный ключ"},
 	{string(access.ReasonRateLimited), "лимит правила"},
 	{string(access.ReasonBanned), "в бане"},
+	{string(access.ReasonMTProtoReplay), "MTProto: повтор рукопожатия"},
+	{string(access.ReasonMTProtoConnLimit), "MTProto: лимит соединений"},
+	{string(access.ReasonMTProtoBadSecret), "MTProto: неверный секрет"},
 }
+
+// phaseMTProto — фаза отказов MTProto-входа в журнале ошибок.
+const phaseMTProto = "mtproto"
 
 func reasonView(reason string) (string, views.Tone) {
 	for _, o := range reasonLabels {
@@ -285,7 +291,7 @@ func phaseTone(p string) string {
 		return "warn"
 	case tgapi.PhaseWrite, tgapi.PhaseRead, tgapi.PhaseTimeout:
 		return "err"
-	case "telegram", "server", tgapi.PhaseAccess:
+	case "telegram", "server", tgapi.PhaseAccess, phaseMTProto:
 		return "tg"
 	}
 	return ""
@@ -335,7 +341,7 @@ loop:
 func (c *phaseCounts) add(e store.ErrorEvent) {
 	retried := e.Outcome == store.OutcomeRetried
 	switch {
-	case e.Phase == tgapi.PhaseAccess:
+	case e.Phase == tgapi.PhaseAccess || e.Phase == phaseMTProto:
 		c.denied++
 	case e.Code == 429:
 		c.r429++

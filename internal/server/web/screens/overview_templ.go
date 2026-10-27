@@ -724,72 +724,92 @@ func chartCard(vm OverviewVM) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "</span></button> <span class=\"mono ov-updated\" data-updated>обновлено 0 с назад</span><ul class=\"legend\" aria-label=\"Серии графика\"><li><span class=\"legend-sw legend-ok\" aria-hidden=\"true\"></span>успешные</li><li><span class=\"legend-sw legend-err\" aria-hidden=\"true\"></span>ошибки прокси</li><li><span class=\"legend-sw legend-r429\" aria-hidden=\"true\"></span>429 Telegram</li><li><span class=\"legend-sw legend-denied\" aria-hidden=\"true\"></span>отказы</li></ul></div><div class=\"mono ov-tip\" data-chart-tip>Наведите на график, чтобы увидеть значения</div><div class=\"chart\" data-chart data-range=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "</span></button> <span class=\"mono ov-updated\" data-updated>обновлено 0 с назад</span><ul class=\"legend\" aria-label=\"Серии графика\"><li><span class=\"legend-sw legend-ok\" aria-hidden=\"true\"></span>успешные</li><li><span class=\"legend-sw legend-err\" aria-hidden=\"true\"></span>ошибки прокси</li><li><span class=\"legend-sw legend-r429\" aria-hidden=\"true\"></span>429 Telegram</li><li><span class=\"legend-sw legend-denied\" aria-hidden=\"true\"></span>отказы</li>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if vm.MTProto {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "<li><span class=\"legend-sw legend-mt\" aria-hidden=\"true\"></span>MTProto, соед.</li><li><span class=\"legend-sw legend-mtbps\" aria-hidden=\"true\"></span>MTProto, полоса</li>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 58, "</ul></div><div class=\"mono ov-tip\" data-chart-tip>Наведите на график, чтобы увидеть значения</div><div class=\"chart\" data-chart data-range=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var40 string
 		templ_7745c5c3_Var40, templ_7745c5c3_Err = templruntime.NewAttributeExpression(string(vm.Range)).Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 136, Col: 32}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 140, Col: 32}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var40)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "\" data-poll-ms=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 59, "\" data-poll-ms=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var41 string
 		templ_7745c5c3_Var41, templ_7745c5c3_Err = templruntime.NewAttributeExpression(strconv.Itoa(vm.PollMS)).Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 137, Col: 41}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 141, Col: 41}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var41)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 58, "\" data-url=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "\" data-url=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var42 string
 		templ_7745c5c3_Var42, templ_7745c5c3_Err = templruntime.NewAttributeExpression(vm.TimeseriesURL).ResolveURL(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 138, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 142, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var42)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 59, "\" data-summary-url=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "\" data-summary-url=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var43 string
 		templ_7745c5c3_Var43, templ_7745c5c3_Err = templruntime.NewAttributeExpression(vm.SummaryURL).ResolveURL(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 139, Col: 35}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 143, Col: 35}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var43)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "\" role=\"img\" aria-label=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 62, "\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if vm.MTProto {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 63, " data-mtproto=\"1\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 64, " role=\"img\" aria-label=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var44 string
 		templ_7745c5c3_Var44, templ_7745c5c3_Err = templruntime.NewAttributeExpression("График запросов в секунду за выбранный период, обновляется каждые " + strconv.Itoa(vm.PollSec) + " с").Resolve(ctx)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 141, Col: 175}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/server/web/screens/overview.templ`, Line: 148, Col: 175}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var44)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "\"><div class=\"chart-plot\" data-chart-plot></div><div class=\"chart-empty\" data-chart-empty hidden>Данных пока нет</div></div></section>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, "\"><div class=\"chart-plot\" data-chart-plot></div><div class=\"chart-empty\" data-chart-empty hidden>Данных пока нет</div></div></section>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

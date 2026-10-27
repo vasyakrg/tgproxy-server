@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,12 @@ type LiveInflight interface {
 	LiveInflight() int
 }
 
+// MTProtoLive — живые показатели MTProto для KPI «Обзора». Реализует wiring (активные соединения
+// и полоса из journal/истории). enabled=false (mtproto.enabled: false) скрывает KPI и ряды графика.
+type MTProtoLive interface {
+	MTProtoLive() (enabled bool, conns int, bytesPerSec float64)
+}
+
 // Event — уведомление для ленты «События» (обычно строка outbox).
 type Event struct {
 	At      time.Time
@@ -63,6 +70,7 @@ type OverviewDeps struct {
 	Agents        AgentLister    // nil — таблица пуста
 	Events        EventSource    // nil — лента пуста
 	Live          LiveInflight   // nil — берётся последний снимок истории
+	MTProto       MTProtoLive    // nil или enabled=false — KPI и ряды MTProto скрыты
 	ServerVersion string         // версия агента ≠ серверной подсвечивается
 	PollInterval  time.Duration  // 0 → 5 с; зажимается в [2 с, 5 с]
 	Location      *time.Location // nil → time.Local
@@ -152,6 +160,7 @@ type OverviewVM struct {
 	Agents                    []AgentRow
 	Events                    []EventRow
 	TimeseriesURL, SummaryURL string
+	MTProto                   bool // MTProto включён: KPI уже в KPIs, на графике — ряды соединений и полосы
 }
 
 var rangeLabels = []RangeOpt{{Value: "1h", Label: "1ч"}, {Value: "6h", Label: "6ч"}, {Value: "24h", Label: "24ч"}, {Value: "7d", Label: "7д"}}
@@ -188,6 +197,12 @@ func (o *overview) build(ctx context.Context, rng history.Range) OverviewVM {
 		}
 	}
 	vm.KPIs = kpiViews(kpi, up, len(states))
+	if o.MTProto != nil {
+		if on, conns, bps := o.MTProto.MTProtoLive(); on {
+			vm.MTProto = true
+			vm.KPIs = append(vm.KPIs, KPIView{"mtproto", "MTProto: соединения, полоса", fmtInt(int64(conns)), "полоса " + fmtBitrate(bps), views.ToneNeutral})
+		}
+	}
 	vm.Agents = o.agentRows(ctx, states, now)
 	vm.Events = o.eventRows(ctx)
 	return vm
@@ -219,6 +234,18 @@ func kpiViews(k history.KPI, up, total int) []KPIView {
 		{"agents", "Агенты в работе", fmtInt(int64(up)) + " / " + fmtInt(int64(total)), agentsHint, agentsTone},
 		{"inflight", "In-flight сейчас", fmtInt(int64(k.Inflight)), "запросов в полёте", views.ToneNeutral},
 	}
+}
+
+// fmtBitrate — полоса из байт/с в бит/с: «850 кбит/с», «10,0 Мбит/с».
+func fmtBitrate(bytesPerSec float64) string {
+	bits := bytesPerSec * 8
+	switch {
+	case bits >= 1e9:
+		return comma(strconv.FormatFloat(bits/1e9, 'f', 1, 64)) + " Гбит/с"
+	case bits >= 1e6:
+		return comma(strconv.FormatFloat(bits/1e6, 'f', 1, 64)) + " Мбит/с"
+	}
+	return strconv.FormatFloat(bits/1e3, 'f', 0, 64) + " кбит/с"
 }
 
 func peakHint(peak float64) string { return "пик за 24 ч: " + fmtRPS(peak) }

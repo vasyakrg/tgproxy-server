@@ -6,6 +6,7 @@ const (
 	NavAgents   = "agents"
 	NavAccess   = "access"
 	NavBans     = "bans"
+	NavMTProto  = "mtproto"
 	NavErrors   = "errors"
 	NavSystem   = "system"
 )
@@ -28,6 +29,7 @@ var navItems = []navItem{
 	{NavAgents, "/agents", "Агенты", "servers"},
 	{NavAccess, "/access", "Доступ", "shield"},
 	{NavBans, "/bans", "Баны", "ban"},
+	{NavMTProto, "/mtproto", "MTProto", "send"},
 	{NavErrors, "/errors", "Ошибки", "alert"},
 	{NavSystem, "/system", "Система", "gear"},
 }

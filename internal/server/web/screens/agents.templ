@@ -95,6 +95,9 @@ templ agentRow(r AgentRowVM, vm AgentsVM) {
 		</td>
 		<td>
 			@views.Chip(r.LinkLabel, r.LinkTone)
+			if r.MTProto {
+				@views.Chip("MTProto", views.ToneTG)
+			}
 			if r.LinkConns != "" {
 				<span class="muted small">{ r.LinkConns }</span>
 			}
@@ -216,6 +219,24 @@ templ MoreCard(m MoreVM) {
 			<dd class="mono">{ m.Row.Cert }</dd>
 			<dt>Версия</dt>
 			<dd class="mono">{ m.Row.Version }</dd>
+			if m.Row.MTProto {
+				<dt>MTProto</dt>
+				<dd>
+					if len(m.Row.DC) == 0 {
+						<span class="muted">нет данных по DC</span>
+					}
+					for _, d := range m.Row.DC {
+						<span class="mono">
+							{ d.Name }
+							if d.Up {
+								@views.Chip(d.RTT, views.ToneOK)
+							} else {
+								@views.Chip("недоступен", views.ToneErr)
+							}
+						</span>
+					}
+				</dd>
+			}
 		</dl>
 		<div class="form-actions">
 			<button type="button" class="btn" data-modal-close>Закрыть</button>

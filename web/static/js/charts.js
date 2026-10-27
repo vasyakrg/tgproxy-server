@@ -3,6 +3,7 @@
 // Разметка:  [data-chart] data-range data-poll-ms data-url data-summary-url
 //   внутри:  [data-chart-plot] (холст), [data-chart-empty] (пустое состояние)
 // Рядом (в секции .ov-chart): [data-live-toggle], [data-live-label], [data-updated], [data-chart-tip];
+// MTProto: [data-chart][data-mtproto="1"] добавляет ряды mtproto_conns / mtproto_bps и обновляет KPI [data-kpi="mtproto"].
 // KPI на странице: [data-kpi="rps|err_pct|r429|agents|inflight"], [data-kpi-hint="rps|agents"].
 (function () {
   'use strict';
@@ -48,6 +49,23 @@
   function ease(t) { return 1 - Math.pow(1 - t, 3); }
   function setText(el, text) { if (el && el.textContent !== text) { el.textContent = text; } }
 
+  // Полоса: байт/с → «850 кбит/с», «10,0 Мбит/с».
+  function fmtBitrate(bytesPerSec) {
+    var bits = bytesPerSec * 8;
+    if (bits >= 1e9) { return num(bits / 1e9, 1) + ' Гбит/с'; }
+    if (bits >= 1e6) { return num(bits / 1e6, 1) + ' Мбит/с'; }
+    return Math.round(bits / 1e3) + ' кбит/с';
+  }
+
+  // KPI MTProto — по последней точке графика.
+  Chart.prototype.updateMTKPI = function () {
+    var d = this.data, n = d[0].length;
+    if (!this.mt || !n) { return; }
+    var doc = this.root.ownerDocument;
+    setKPI(doc, 'mtproto', String(Math.round(d[5][n - 1])));
+    setHint(doc, 'mtproto', 'полоса ' + fmtBitrate(d[6][n - 1]));
+  };
+
   function toNum(v) { var n = Number(v); return isFinite(n) ? n : 0; }
 
   // ---- график ----
@@ -69,7 +87,9 @@
     this.summaryUrl = el.getAttribute('data-summary-url') || '';
     this.defaultTip = this.tipEl ? this.tipEl.textContent : '';
 
-    this.data = [[], [], [], [], []]; // t, ok, err, r429, denied
+    this.mt = el.getAttribute('data-mtproto') === '1'; // MTProto включён: ряды mtproto_conns / mtproto_bps
+    this.data = [[], [], [], [], []]; // t, ok, err, r429, denied[, mt_conns, mt_bps]
+    if (this.mt) { this.data.push([], []); }
     this.denyBy = []; // разбивка отказов по причинам для тултипа, параллельно data[0]
     this.stepSec = 0;
     this.live = true;
@@ -159,6 +179,7 @@
       self.stepSec = toNum(s.step_sec);
       self.append(s.points || []);
       self.create();
+      self.updateMTKPI();
       self.markOk();
       self.pollSummary();
       self.schedule();
@@ -177,12 +198,14 @@
         var k = d[0].length - 1;
         d[1][k] = toNum(p.ok_rps); d[2][k] = toNum(p.err_rps); d[3][k] = toNum(p.r429_rps);
         d[4][k] = toNum(p.denied_rps); this.denyBy[k] = p.denied_by || null;
+        if (this.mt) { d[5][k] = toNum(p.mtproto_conns); d[6][k] = toNum(p.mtproto_bps); }
         added++;
         continue;
       }
       if (t < last) { continue; }
       d[0].push(t); d[1].push(toNum(p.ok_rps)); d[2].push(toNum(p.err_rps)); d[3].push(toNum(p.r429_rps));
       d[4].push(toNum(p.denied_rps)); this.denyBy.push(p.denied_by || null);
+      if (this.mt) { d[5].push(toNum(p.mtproto_conns)); d[6].push(toNum(p.mtproto_bps)); }
       last = t; added++;
     }
     return added;
@@ -194,7 +217,7 @@
     var cutoff = d[0][n - 1] - this.windowSec - this.stepSec; // одна точка запаса слева — линия не обрывается
     var k = 0;
     while (k < n - 1 && d[0][k] < cutoff) { k++; }
-    if (k > 0) { for (var s = 0; s < 5; s++) { d[s].splice(0, k); } this.denyBy.splice(0, k); }
+    if (k > 0) { for (var s = 0; s < d.length; s++) { d[s].splice(0, k); } this.denyBy.splice(0, k); }
   };
 
   Chart.prototype.target = function () {
@@ -217,6 +240,10 @@
     function ser(label, color) {
       return { label: label, stroke: color, width: 2, fill: rgba(color, 0.12), points: { show: false } };
     }
+    var cMT = css('--warn', '#FBBF24'), cBps = css('--link', '#5EEAD4');
+    function dashed(label, color, scale) {
+      return { label: label, stroke: color, width: 1.5, dash: [5, 4], scale: scale, points: { show: false } };
+    }
     var opts = {
       width: Math.max(this.plotEl.clientWidth, 200),
       height: this.plotEl.clientHeight || CHART_H,
@@ -224,7 +251,9 @@
       cursor: { drag: { x: false, y: false }, y: false, points: { size: 7 } },
       scales: {
         x: { time: true, range: function () { return [self.view.min, self.view.max]; } },
-        y: { range: function (u, min, max) { return [0, Math.max(1, (max || 0) * 1.15)]; } }
+        y: { range: function (u, min, max) { return [0, Math.max(1, (max || 0) * 1.15)]; } },
+        mt: { range: function (u, min, max) { return [0, Math.max(1, (max || 0) * 1.15)]; } },
+        mtbps: { range: function (u, min, max) { return [0, Math.max(1, (max || 0) * 1.15)]; } }
       },
       axes: [
         {
@@ -251,6 +280,13 @@
       ],
       hooks: { setCursor: [function (u) { self.onCursor(u); }] }
     };
+    if (this.mt) {
+      opts.series.push(dashed('MTProto, соед.', cMT, 'mt'), dashed('MTProto, полоса', cBps, 'mtbps'));
+      opts.axes.push({
+        scale: 'mt', side: 1, stroke: muted, font: font, size: 48, grid: { show: false }, ticks: { show: false },
+        values: function (u, vals) { return vals.map(function (v) { return v === Math.round(v) ? String(v) : ''; }); }
+      });
+    }
     this.plotEl.textContent = '';
     this.u = new window.uPlot(opts, this.data, this.plotEl);
   };
@@ -279,7 +315,8 @@
       ' · успешные ' + fmtRPS(d[1][i]) + ' rps' +
       ' · ошибки ' + fmtRPS(d[2][i]) +
       ' · 429: ' + fmtRPS(d[3][i]) +
-      ' · отказы ' + fmtRPS(d[4][i]) + this.denyDetail(i);
+      ' · отказы ' + fmtRPS(d[4][i]) + this.denyDetail(i) +
+      (this.mt ? ' · MTProto ' + Math.round(d[5][i]) + ' соед., ' + fmtBitrate(d[6][i]) : '');
     setText(this.tipEl, txt);
     this.tipEl.setAttribute('data-active', 'true');
   };
@@ -340,7 +377,7 @@
     var signal = this.abort.signal;
     this.getJSON(this.seriesURL(last), signal).then(function (s) {
       if (!self.alive()) { return; }
-      if (self.append(s.points || []) > 0) { self.apply(); }
+      if (self.append(s.points || []) > 0) { self.apply(); self.updateMTKPI(); }
       self.markOk();
     }).catch(function (e) {
       if (e && e.name === 'AbortError') { return; }

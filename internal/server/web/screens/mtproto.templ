@@ -1,0 +1,328 @@
+package screens
+
+import (
+	"strconv"
+
+	"github.com/vasyakrg/tgproxy-server/internal/server/web/views"
+)
+
+var mtHeaders = []string{"Секрет", "Префикс", "Статус", "Сети", "Соединения", views.ActionsHeader}
+
+func mtURL(id int64, tail string) string { return "/mtproto/" + strconv.FormatInt(id, 10) + "/" + tail }
+
+// MTProtoPage — экран «MTProto».
+templ MTProtoPage(v MTProtoVM) {
+	@views.PageHeader("MTProto", "Прокси для клиентов Telegram: секреты, ссылки и состояние каналов к дата-центрам.") {
+		@views.IconButton("Обновить", "refresh", false, templ.Attributes{
+			"hx-get": "/mtproto/list", "hx-swap": "none", "hx-indicator": "#mt-secrets, #mt-matrix", "hx-disabled-elt": "this",
+		})
+		<button type="button" class="btn btn-primary" data-modal-open="mt-modal" hx-get="/mtproto/new" hx-target="#mt-modal-body" hx-swap="innerHTML">+ Новый секрет</button>
+	}
+	if v.Disabled {
+		<div class="alert alert-warn" role="status">MTProto выключен в server.yaml — секреты можно подготовить заранее.</div>
+	}
+	if v.NoEndpoint {
+		<div class="alert alert-warn" role="status">Не заданы mtproto.fronting_domain и public_host (или public_base_url): ссылки и QR недоступны, пока адрес не настроен.</div>
+	}
+	@MTSecretsSection(v.Rows, false)
+	@MTMatrixSection(v.Matrix, v.Disabled, false)
+	@MTModal(false)
+}
+
+// MTModal — диалог секрета (тело подгружается htmx). С oob=true заменяет открытый диалог закрытым.
+templ MTModal(oob bool) {
+	<div
+		id="mt-modal-wrap"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		@views.Modal("mt-modal", "Секрет MTProto") {
+			<div id="mt-modal-body"></div>
+		}
+	</div>
+}
+
+// MTSecretsSection — таблица секретов. Ключ не рендерится.
+templ MTSecretsSection(rows []MTSecretRow, oob bool) {
+	<section
+		id="mt-secrets"
+		class="card card-flush"
+		aria-label="Секреты MTProto"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		if len(rows) == 0 {
+			@views.EmptyState("Секретов пока нет", "Создайте секрет: по нему клиент Telegram подключится к прокси через ссылку или QR-код.")
+		} else {
+			@views.Table("Секреты MTProto", mtHeaders) {
+				for _, r := range rows {
+					@mtRow(r)
+				}
+			}
+		}
+	</section>
+}
+
+templ mtRow(r MTSecretRow) {
+	<tr>
+		<td class="cell-name">{ r.Name }</td>
+		<td class="mono">{ r.Prefix }</td>
+		<td>@views.Chip(r.StatusText, r.StatusTone)</td>
+		<td class="col-wrap">
+			if len(r.CIDRs) == 0 {
+				<span class="muted">любые</span>
+			} else {
+				<div class="chips">
+					for _, c := range r.CIDRs {
+						<span class="chip chip-mono">{ c }</span>
+					}
+				</div>
+			}
+		</td>
+		<td class="mono">{ r.Conns }</td>
+		<td class="col-actions">
+			<div class="row-actions">
+				if r.CanLink {
+					@views.IconButton("Ссылка и QR секрета "+r.Name, "send", false, templ.Attributes{
+						"hx-get": mtURL(r.ID, "link"), "hx-target": "#mt-modal-body", "hx-swap": "innerHTML", "data-modal-open": "mt-modal",
+					})
+				}
+				if r.CanRotate {
+					@views.IconButton("Повернуть секрет "+r.Name, "swap", false, templ.Attributes{
+						"hx-get": mtURL(r.ID, "rotate"), "hx-target": "#mt-modal-body", "hx-swap": "innerHTML", "data-modal-open": "mt-modal",
+					})
+				}
+				if r.CanRevoke {
+					@views.IconButton("Отозвать секрет "+r.Name, "trash", true, templ.Attributes{
+						"hx-get": mtURL(r.ID, "revoke"), "hx-target": "#mt-modal-body", "hx-swap": "innerHTML", "data-modal-open": "mt-modal",
+					})
+				}
+			</div>
+		</td>
+	</tr>
+}
+
+// MTMatrixSection — матрица агент×DC: RTT, потоки, доступность.
+templ MTMatrixSection(m MTMatrixVM, disabled, oob bool) {
+	<section
+		id="mt-matrix"
+		class="card"
+		aria-label="Агенты и дата-центры"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		<div class="card-head">
+			<h2 class="card-title">Агенты × дата-центры</h2>
+			<span class="muted small">RTT и число потоков до DC Telegram</span>
+		</div>
+		if disabled {
+			<p class="muted">MTProto выключен: матрица появится после включения.</p>
+		} else if len(m.Agents) == 0 {
+			<p class="muted">Нет агентов с поддержкой mtproto/1.</p>
+		} else {
+			@views.Table("Агенты и дата-центры", mtMatrixHeaders(m)) {
+				for _, a := range m.Agents {
+					<tr>
+						<td class="cell-name">
+							{ a.ID }
+							if !a.Capable {
+								@views.Chip("без mtproto/1", views.ToneWarn)
+							}
+						</td>
+						<td class="mono">{ a.Streams }</td>
+						for _, c := range a.Cells {
+							<td class="mono">
+								if !c.Present {
+									<span class="muted">{ c.Text }</span>
+								} else if c.Up {
+									@views.Chip(c.Text, views.ToneOK)
+								} else {
+									@views.Chip(c.Text, views.ToneErr)
+								}
+							</td>
+						}
+					</tr>
+				}
+			}
+		}
+	</section>
+}
+
+func mtMatrixHeaders(m MTMatrixVM) []string {
+	h := []string{"Агент", "Потоки"}
+	for _, dc := range m.DCs {
+		h = append(h, "DC "+strconv.Itoa(dc))
+	}
+	return h
+}
+
+// MTCreateForm — форма создания секрета.
+templ MTCreateForm(f MTFormVM) {
+	<form
+		class="stack"
+		method="post"
+		action="/mtproto"
+		hx-post="/mtproto"
+		hx-target="#mt-modal-body"
+		hx-swap="innerHTML"
+		hx-disabled-elt="find button[type=submit]"
+		novalidate
+	>
+		<h3 class="form-title">Новый секрет</h3>
+		if f.Errors["_"] != "" {
+			<div class="alert alert-err" role="alert">{ f.Errors["_"] }</div>
+		}
+		@views.Field(views.FieldProps{
+			ID: "mt-name", Name: "name", Label: "Название", Value: f.Name, Error: f.Errors["name"],
+			Hint: "Буквы, цифры, пробел, «.», «_», «-»", Required: true,
+			Attrs: templ.Attributes{"maxlength": "64", "autocomplete": "off", "spellcheck": "false"},
+		})
+		<div class={ "field", templ.KV("field-invalid", f.Errors["cidrs"] != "") }>
+			<label class="field-label" for="mt-cidrs">Сети клиентов, CIDR по одному в строке (пусто — любые)</label>
+			<textarea
+				class="textarea mono"
+				id="mt-cidrs"
+				name="cidrs"
+				rows="3"
+				spellcheck="false"
+				placeholder="203.0.113.0/24"
+				if f.Errors["cidrs"] != "" {
+					aria-invalid="true"
+					aria-describedby="mt-cidrs-error"
+				}
+			>{ f.CIDRs }</textarea>
+			if f.Errors["cidrs"] != "" {
+				<div class="field-error" id="mt-cidrs-error" role="alert">{ f.Errors["cidrs"] }</div>
+			}
+		</div>
+		@views.Field(views.FieldProps{
+			ID: "mt-max-conns", Name: "max_conns", Label: "Лимит соединений", Value: f.MaxConns, Error: f.Errors["max_conns"],
+			Hint: "0 или пусто — без лимита",
+			Attrs: templ.Attributes{"inputmode": "numeric", "autocomplete": "off", "maxlength": "7"},
+		})
+		<p class="form-note">Ссылка и QR будут показаны один раз сразу после создания. Позже их можно открыть повторно по коду TOTP.</p>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-primary">Создать секрет</button>
+		</div>
+	</form>
+}
+
+// MTLinkPanel — ссылка и QR. Единственное место, где виден ключ секрета.
+templ MTLinkPanel(v MTLinkVM) {
+	<div class="stack">
+		<h3 class="form-title">{ v.Title }</h3>
+		if v.Fresh {
+			<div class="alert alert-warn" role="status">Ссылка показана один раз. Позже её можно открыть повторно по коду TOTP.</div>
+		} else {
+			<div class="alert alert-warn" role="status">Ссылка содержит ключ секрета: не публикуйте её. Открытие записано в аудит.</div>
+		}
+		if v.Note != "" {
+			<p class="hint">{ v.Note }</p>
+		}
+		if v.Err != "" {
+			<div class="alert alert-err" role="alert">{ v.Err }</div>
+		} else {
+			if v.QR != "" {
+				<div class="qr-box" role="img" aria-label={ "QR-код ссылки для " + v.Name }>
+					@templ.Raw(v.QR)
+				</div>
+			}
+			<div class="field">
+				<span class="field-label">Ссылка для приложения Telegram (tg://)</span>
+				<div class="copy-row">
+					<code class="mono code-box" id="mt-link-tg">{ v.TG }</code>
+					@views.IconButton("Копировать tg-ссылку", "copy", false, templ.Attributes{"data-copy": "mt-link-tg"})
+				</div>
+			</div>
+			<div class="field">
+				<span class="field-label">Ссылка https://t.me</span>
+				<div class="copy-row">
+					<code class="mono code-box" id="mt-link-https">{ v.HTTPS }</code>
+					@views.IconButton("Копировать https-ссылку", "copy", false, templ.Attributes{"data-copy": "mt-link-https"})
+				</div>
+			</div>
+		}
+		<div class="form-actions">
+			<button type="button" class="btn btn-primary" data-modal-close>Готово</button>
+		</div>
+	</div>
+}
+
+// MTTOTPPrompt — запрос кода TOTP перед показом ссылки (ключа нет в разметке).
+templ MTTOTPPrompt(v MTTOTPVM) {
+	<form
+		class="stack"
+		method="post"
+		action={ templ.SafeURL(mtURL(v.ID, "link")) }
+		hx-post={ mtURL(v.ID, "link") }
+		hx-target="#mt-modal-body"
+		hx-swap="innerHTML"
+		hx-disabled-elt="find button[type=submit]"
+		novalidate
+	>
+		<h3 class="form-title">Подтвердите вход</h3>
+		<p>Ссылка секрета <strong>{ v.Name }</strong> содержит его ключ. Введите текущий код из приложения-аутентификатора.</p>
+		@views.Field(views.FieldProps{
+			ID: "mt-totp", Name: "code", Label: "Код TOTP", Error: v.Error, Required: true,
+			Attrs: templ.Attributes{"inputmode": "numeric", "autocomplete": "one-time-code", "maxlength": "8", "spellcheck": "false"},
+		})
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-primary">Показать ссылку</button>
+		</div>
+	</form>
+}
+
+// MTRotateForm — ротация: новый ключ, старый живёт grace.
+templ MTRotateForm(v MTRotateVM) {
+	<form
+		class="stack"
+		method="post"
+		action={ templ.SafeURL(mtURL(v.ID, "rotate")) }
+		hx-post={ mtURL(v.ID, "rotate") }
+		hx-target="#mt-modal-body"
+		hx-swap="innerHTML"
+		hx-disabled-elt="find button[type=submit]"
+		novalidate
+	>
+		<h3 class="form-title">Повернуть секрет?</h3>
+		<p>Для <strong>{ v.Name }</strong> будет создан новый ключ. Клиентам понадобится новая ссылка.</p>
+		if v.Errors["_"] != "" {
+			<div class="alert alert-err" role="alert">{ v.Errors["_"] }</div>
+		}
+		<div class={ "field", templ.KV("field-invalid", v.Errors["grace"] != "") }>
+			<label class="field-label" for="mt-grace">Сколько ещё принимать старый ключ</label>
+			<select class="select" id="mt-grace" name="grace">
+				for _, o := range mtGraceOptions {
+					<option value={ o.Value } selected?={ o.Value == v.Grace }>{ o.Label }</option>
+				}
+			</select>
+			if v.Errors["grace"] != "" {
+				<div class="field-error" role="alert">{ v.Errors["grace"] }</div>
+			}
+		</div>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-primary">Повернуть</button>
+		</div>
+	</form>
+}
+
+// MTRevokeConfirm — подтверждение отзыва.
+templ MTRevokeConfirm(v MTRevokeVM) {
+	<div class="stack">
+		<h3 class="form-title">Отозвать секрет?</h3>
+		<p>Секрет <strong>{ v.Name }</strong> будет отозван, активные соединения по нему оборвутся.</p>
+		<p class="muted">Клиенты с этой ссылкой перестанут подключаться. Действие нельзя отменить.</p>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			@views.Button("Отозвать", views.ButtonDanger, templ.Attributes{
+				"hx-post": mtURL(v.ID, "revoke"), "hx-target": "#mt-modal-body", "hx-swap": "innerHTML",
+			})
+		</div>
+	</div>
+}

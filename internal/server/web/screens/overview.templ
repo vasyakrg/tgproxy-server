@@ -127,6 +127,10 @@ templ chartCard(vm OverviewVM) {
 				<li><span class="legend-sw legend-err" aria-hidden="true"></span>ошибки прокси</li>
 				<li><span class="legend-sw legend-r429" aria-hidden="true"></span>429 Telegram</li>
 				<li><span class="legend-sw legend-denied" aria-hidden="true"></span>отказы</li>
+				if vm.MTProto {
+					<li><span class="legend-sw legend-mt" aria-hidden="true"></span>MTProto, соед.</li>
+					<li><span class="legend-sw legend-mtbps" aria-hidden="true"></span>MTProto, полоса</li>
+				}
 			</ul>
 		</div>
 		<div class="mono ov-tip" data-chart-tip>Наведите на график, чтобы увидеть значения</div>
@@ -137,6 +141,9 @@ templ chartCard(vm OverviewVM) {
 			data-poll-ms={ strconv.Itoa(vm.PollMS) }
 			data-url={ vm.TimeseriesURL }
 			data-summary-url={ vm.SummaryURL }
+			if vm.MTProto {
+				data-mtproto="1"
+			}
 			role="img"
 			aria-label={ "График запросов в секунду за выбранный период, обновляется каждые " + strconv.Itoa(vm.PollSec) + " с" }
 		>
