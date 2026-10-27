@@ -240,6 +240,11 @@ templ MoreCard(m MoreVM) {
 		</dl>
 		<div class="form-actions">
 			<button type="button" class="btn" data-modal-close>Закрыть</button>
+			if m.CanReissue {
+				@views.Button("Новый токен подключения…", views.ButtonSecondary, templ.Attributes{
+					"hx-get": "/agents/" + m.Row.ID + "/enroll-token", "hx-target": "#agent-modal-body", "hx-swap": "innerHTML",
+				})
+			}
 			if m.CanEmergency {
 				@views.Button("Аварийное обновление по SSH…", views.ButtonDanger, templ.Attributes{
 					"hx-get": "/agents/" + m.Row.ID + "/emergency", "hx-target": "#agent-modal-body", "hx-swap": "innerHTML",
@@ -252,6 +257,47 @@ templ MoreCard(m MoreVM) {
 			}
 		</div>
 	</div>
+}
+
+// ReissueForm — выпуск нового токена подключения для существующего агента (переустановка хоста,
+// перенос сервера, сломанный конфиг): агент, вес и история сохраняются.
+templ ReissueForm(f ReissueFormVM) {
+	<form
+		class="stack"
+		method="post"
+		action={ templ.SafeURL("/agents/" + f.ID + "/enroll-token") }
+		hx-post={ "/agents/" + f.ID + "/enroll-token" }
+		hx-target="#agent-modal-body"
+		hx-swap="innerHTML"
+		hx-include="#agents-filter"
+		hx-disabled-elt="find button[type=submit]"
+		novalidate
+	>
+		<h3 class="form-title">Новый токен подключения: { f.Name }</h3>
+		if f.Errors["_"] != "" {
+			<div class="alert alert-err" role="alert">{ f.Errors["_"] }</div>
+		}
+		<p>Токен нужен, чтобы заново подключить этого же агента: после переустановки хоста, переноса сервера или при сломанном конфиге. Вес и история сохранятся, агент не создаётся заново.</p>
+		<p class="muted">При подключении по токену на хосте будет создан новый ключ, а все ранее выпущенные сертификаты агента отзовутся (denylist), живые соединения оборвутся.</p>
+		if f.ToReverse {
+			<div class="alert alert-warn" role="alert">Агент будет переведён в режим reverse: он сам подключается к серверу, адрес агента (dial) сбрасывается.</div>
+		}
+		<div class={ "field", templ.KV("field-invalid", f.Errors["ttl"] != "") }>
+			<label class="field-label" for="r-ttl">Срок действия токена</label>
+			<select class="select" id="r-ttl" name="ttl">
+				for _, o := range ttlOpts {
+					<option value={ strconv.Itoa(o.Minutes) } selected?={ o.Minutes == f.TTL }>{ o.Label }</option>
+				}
+			</select>
+			if f.Errors["ttl"] != "" {
+				<div class="field-error" role="alert">{ f.Errors["ttl"] }</div>
+			}
+		</div>
+		<div class="form-actions">
+			<button type="button" class="btn" data-modal-close>Отмена</button>
+			<button type="submit" class="btn btn-primary">Выпустить токен</button>
+		</div>
+	</form>
 }
 
 // ModeForm — смена режима связи агента.

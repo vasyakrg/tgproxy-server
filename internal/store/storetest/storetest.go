@@ -825,6 +825,24 @@ func testEnrollments(t *testing.T, s store.Store) {
 		t.Fatalf("revoked token consumed: %v", err)
 	}
 
+	// токен перевыпуска: agent_id сохраняется при Create/Get/Consume/ListPending
+	re := mk("e6", "reissue", time.Hour)
+	re.AgentID = "ag-1"
+	ok(t, r.Create(ctx, re))
+	if g, err := r.Get(ctx, "e6"); err != nil || g.AgentID != "ag-1" {
+		t.Fatalf("get reissue: %+v %v", g, err)
+	}
+	if g, err := r.Get(ctx, "e4"); err != nil || g.AgentID != "" {
+		t.Fatalf("plain token has agent id: %+v %v", g, err)
+	}
+	pend, _ = r.ListPending(ctx, now)
+	if len(pend) != 1 || pend[0].ID != "e6" || pend[0].AgentID != "ag-1" {
+		t.Fatalf("pending reissue %+v", pend)
+	}
+	if c, err := r.Consume(ctx, hash("reissue"), now); err != nil || c.AgentID != "ag-1" || c.UsedAt == nil {
+		t.Fatalf("consume reissue: %+v %v", c, err)
+	}
+
 	// Get: использованный и неизвестный
 	if g, err := r.Get(ctx, "e1"); err != nil || g.UsedAt == nil || g.ID != "e1" {
 		t.Fatalf("get used: %+v %v", g, err)

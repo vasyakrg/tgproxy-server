@@ -157,6 +157,17 @@ type MoreVM struct {
 	CertNotice string
 	// CanEmergency — доступно аварийное обновление по SSH (у агента есть SSH-цель).
 	CanEmergency bool
+	// CanReissue — доступен выпуск нового токена подключения (токены NAT настроены).
+	CanReissue bool
+}
+
+// ReissueFormVM — форма выпуска нового токена подключения для существующего агента.
+type ReissueFormVM struct {
+	ID, Name string
+	TTL      int // минуты
+	// ToReverse — агент сейчас не в режиме reverse: после подключения по токену он будет переведён в reverse.
+	ToReverse bool
+	Errors    api.FieldErrors
 }
 
 // ConfirmVM — диалог подтверждения опасного действия.

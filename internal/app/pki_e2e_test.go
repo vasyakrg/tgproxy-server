@@ -688,3 +688,64 @@ func TestPKIEnrollmentRevokeViaAPI(t *testing.T) {
 		t.Fatal("token leaked into server logs")
 	}
 }
+
+// Перевыпуск токена для существующего агента: старый сертификат отзывается, живое соединение
+// со старым ключом рвётся, агент (id, вес) сохраняется и работает с новым ключом.
+func TestPKIReenrollExistingAgentEndToEnd(t *testing.T) {
+	e := newPKIEnv(t)
+	files := e.issue("keep-me")
+	e.addAgent("keep-me", store.ModeReverse, "")
+	oldSerial := certSerialFromFile(t, files.CertFile)
+	e.startReverse("keep-me", e.agentConfig(files, config.AgentModeReverse))
+	e.waitFor(10*time.Second, "agent up", func() bool { return e.up("keep-me") })
+	if e.srv.pki.pool.Conns("keep-me") == 0 {
+		t.Fatal("нет живого соединения до перевыпуска")
+	}
+
+	is, err := e.srv.Enrollment().IssueFor(context.Background(), enroll.IssueRequest{AgentID: "keep-me", InstalledOnly: true, CreatedBy: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "agent.yaml")
+	body := "mode: dial\ntls:\n  cert_file: " + filepath.Join(dir, "agent.crt") + "\n  key_file: " + filepath.Join(dir, "agent.key") +
+		"\n  ca_file: " + filepath.Join(dir, "ca.crt") + "\ndata_dir: " + dir + "\nlisten:\n  metrics: \"127.0.0.1:19444\"\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := agent.Enroll(context.Background(), agent.EnrollOptions{
+		Server: "https://" + e.gwAddr, Token: is.Token, CAFingerprint: e.srv.Authority().CAFingerprint(), ConfigPath: cfgPath,
+	})
+	if err != nil {
+		t.Fatalf("reenroll: %v\nlogs:\n%s", err, e.logs.String())
+	}
+	if res.AgentID != "keep-me" {
+		t.Fatalf("agent id %q", res.AgentID)
+	}
+	if !e.srv.Denylist().IsDenied(oldSerial) {
+		t.Fatal("старый сертификат не отозван")
+	}
+	if all, _ := e.srv.st.Agents().List(context.Background()); len(all) != 1 || all[0].Weight != 1 {
+		t.Fatalf("агенты: %+v", all)
+	}
+	// старый процесс агента переподключиться не может: его сертификат отозван
+	e.waitFor(10*time.Second, "old connection dropped", func() bool { return e.srv.pki.pool.Conns("keep-me") == 0 })
+	time.Sleep(300 * time.Millisecond)
+	if n := e.srv.pki.pool.Conns("keep-me"); n != 0 {
+		t.Fatalf("старый ключ переподключился: %d", n)
+	}
+
+	acfg, err := config.LoadAgent(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acfg.Listen.Metrics = "127.0.0.1:0"
+	if err := acfg.OverrideTelegramAPIURL(e.tg.URL); err != nil {
+		t.Fatal(err)
+	}
+	e.startReverse("keep-me", acfg)
+	e.waitFor(10*time.Second, "agent up with new key", func() bool { return e.srv.pki.pool.Conns("keep-me") > 0 && e.up("keep-me") })
+	if code, err := e.getMe(); err != nil || code != http.StatusOK {
+		t.Fatalf("getMe через перевыпущенного агента: %d %v", code, err)
+	}
+}

@@ -39,6 +39,18 @@ type Authority interface {
 	CAFingerprint() string
 }
 
+// AgentRevoker отзывает сертификаты агента, кроме только что выданного (*pki.Denylist).
+type AgentRevoker interface {
+	RevokeAgentExcept(ctx context.Context, agentID, keepSerial, reason string) (int, error)
+}
+
+// ErrReenrollUnavailable — перевыпуск токена для существующего агента не настроен
+// (нет отзыва сертификатов): токен, который не сможет отозвать старый ключ, не выпускается.
+var ErrReenrollUnavailable = errors.New("enroll: перевыпуск токена для существующего агента не настроен")
+
+// ReasonReenroll — причина denylist при перевыпуске (повторном enrollment) агента.
+const ReasonReenroll = "reenroll"
+
 // Config — зависимости Service.
 type Config struct {
 	Enrollments store.EnrollmentRepo
@@ -57,8 +69,15 @@ type Config struct {
 	// Notify вызывается после успешного enrollment (алерт agent_enrolled).
 	Notify func(ctx context.Context, agentID, name string)
 	// Observe получает результат попытки (enroll_attempts_total{result}):
-	// ok, rate_limited, bad_request, bad_csr, denied, error.
+	// ok, rate_limited, bad_request, bad_csr, denied, agent_gone, error.
 	Observe func(result string)
+	// Revoker отзывает старые сертификаты агента при повторном enrollment. nil — токены для
+	// существующих агентов (IssueRequest.AgentID) не выпускаются.
+	Revoker AgentRevoker
+	// DropConns рвёт живые соединения агента после отзыва (старый ключ мог утечь).
+	DropConns func(agentID string)
+	// Refresh применяет изменение реестра агентов (смена режима на reverse); nil — не вызывается.
+	Refresh func(ctx context.Context) error
 }
 
 // Service выпускает токены и принимает enrollment.
@@ -106,6 +125,9 @@ type IssueRequest struct {
 	// InstalledOnly — выдать только короткую команду для хоста, где tgproxy уже
 	// установлен (пакет из кэша не требуется).
 	InstalledOnly bool
+	// AgentID — токен для существующего агента (перевыпуск): Name и Weight берутся из агента,
+	// при погашении агент не создаётся, а получает новый сертификат на тот же id.
+	AgentID string
 }
 
 // Issued — результат выпуска.
@@ -131,7 +153,17 @@ func (s *Service) Issue(ctx context.Context, name string, ttl time.Duration) (to
 
 // IssueFor выпускает токен: 32 байта crypto/rand; в БД только SHA-256.
 func (s *Service) IssueFor(ctx context.Context, req IssueRequest) (Issued, error) {
-	name := strings.TrimSpace(req.Name)
+	name, weight := strings.TrimSpace(req.Name), req.Weight
+	if req.AgentID != "" {
+		if s.cfg.Revoker == nil {
+			return Issued{}, ErrReenrollUnavailable
+		}
+		a, err := s.cfg.Agents.Get(ctx, req.AgentID)
+		if err != nil {
+			return Issued{}, fmt.Errorf("enroll: agent %q: %w", req.AgentID, err)
+		}
+		name, weight = a.ID, a.Weight
+	}
 	if name == "" || len(name) > MaxNameLen {
 		return Issued{}, fmt.Errorf("%w: enrollment name must be 1..%d chars", store.ErrInvalid, MaxNameLen)
 	}
@@ -142,8 +174,7 @@ func (s *Service) IssueFor(ctx context.Context, req IssueRequest) (Issued, error
 	if ttl > MaxTTL {
 		return Issued{}, fmt.Errorf("%w: ttl exceeds %s", store.ErrInvalid, MaxTTL)
 	}
-	weight := req.Weight
-	if weight == 0 {
+	if weight == 0 && req.AgentID == "" {
 		weight = DefaultWeight
 	}
 	// Пакет проверяется до выпуска токена: нерабочая команда (и висящий токен) не выдаются.
@@ -170,12 +201,16 @@ func (s *Service) IssueFor(ctx context.Context, req IssueRequest) (Issued, error
 	now := s.now()
 	e := store.Enrollment{
 		ID: hex.EncodeToString(idRaw), TokenHash: hash[:], Name: name, Weight: weight,
-		CreatedBy: req.CreatedBy, CreatedAt: now, ExpiresAt: now.Add(ttl),
+		CreatedBy: req.CreatedBy, CreatedAt: now, ExpiresAt: now.Add(ttl), AgentID: req.AgentID,
 	}
 	if err := s.cfg.Enrollments.Create(ctx, e); err != nil {
 		return Issued{}, fmt.Errorf("enroll: create: %w", err)
 	}
-	s.audit(ctx, req.CreatedBy, "enrollment.create", name, "", "id="+e.ID)
+	detail := "id=" + e.ID
+	if req.AgentID != "" {
+		detail += " agent=" + req.AgentID
+	}
+	s.audit(ctx, req.CreatedBy, "enrollment.create", name, "", detail)
 	installed := s.enrollCmd(token)
 	cmd := installed
 	if !req.InstalledOnly {

@@ -134,6 +134,7 @@ type agIssuer struct {
 	repo store.EnrollmentRepo
 	n    int
 	err  error
+	reqs []enroll.IssueRequest
 }
 
 func (f *agIssuer) IssueFor(ctx context.Context, r enroll.IssueRequest) (enroll.Issued, error) {
@@ -141,10 +142,15 @@ func (f *agIssuer) IssueFor(ctx context.Context, r enroll.IssueRequest) (enroll.
 		return enroll.Issued{}, f.err
 	}
 	f.n++
+	f.reqs = append(f.reqs, r)
 	h := sha256.Sum256([]byte(fmt.Sprintf("%s-%d", wToken, f.n)))
 	id := fmt.Sprintf("%016x", f.n)
 	exp := agNow.Add(r.TTL)
-	err := f.repo.Create(ctx, store.Enrollment{ID: id, TokenHash: h[:], Name: r.Name, Weight: r.Weight, CreatedBy: r.CreatedBy, CreatedAt: agNow, ExpiresAt: exp})
+	name := r.Name
+	if r.AgentID != "" {
+		name = r.AgentID
+	}
+	err := f.repo.Create(ctx, store.Enrollment{ID: id, TokenHash: h[:], Name: name, Weight: r.Weight, CreatedBy: r.CreatedBy, CreatedAt: agNow, ExpiresAt: exp, AgentID: r.AgentID})
 	return enroll.Issued{ID: id, Token: wToken, Cmdline: "sudo TGP_ENROLL_TOKEN=" + wToken + " tgproxy agent enroll --server https://srv:8444 --ca-fingerprint SHA256:ca",
 		CmdlineInstalled: "printf %s 'x' | sudo tgproxy agent enroll --token-stdin", ExpiresAt: exp}, err
 }

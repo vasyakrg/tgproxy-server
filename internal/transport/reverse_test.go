@@ -223,6 +223,35 @@ func TestReverseOneOfTwoDropsZeroErrors(t *testing.T) {
 	eventually(t, "conns==1", func() bool { return p.Conns("a1") == 1 })
 }
 
+func TestReverseDropAgent(t *testing.T) {
+	var down []string
+	var mu sync.Mutex
+	p := newPool(t, WithOnDown(func(id string) { mu.Lock(); down = append(down, id); mu.Unlock() }))
+	attachAgent(t, p, "a1", okHandler)
+	attachAgent(t, p, "a1", okHandler)
+	attachAgent(t, p, "other", okHandler)
+	if n := p.DropAgent("a1"); n != 2 {
+		t.Fatalf("dropped %d", n)
+	}
+	if p.Conns("a1") != 0 || p.Conns("other") != 1 {
+		t.Fatalf("conns a1=%d other=%d", p.Conns("a1"), p.Conns("other"))
+	}
+	if _, err := rtGet(t, p, "a1", "/tg/x"); err == nil {
+		t.Fatal("запрос через сброшенного агента прошёл")
+	}
+	if st, err := rtGet(t, p, "other", "/tg/x"); err != nil || st != 200 {
+		t.Fatalf("чужой агент затронут: %d %v", st, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(down) != 1 || down[0] != "a1" {
+		t.Fatalf("onDown: %v", down)
+	}
+	if n := p.DropAgent("a1"); n != 0 {
+		t.Fatalf("повторный drop: %d", n)
+	}
+}
+
 func TestReverseAllDownThenReconnect(t *testing.T) {
 	var down atomic.Int32
 	var detach atomic.Int32

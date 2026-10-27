@@ -49,12 +49,12 @@ func newAgentsCmd() *cobra.Command {
 
 func newAgentsEnrollTokenCmd() *cobra.Command {
 	var (
-		cfgPath, name, gatewayURL string
-		ttl                       time.Duration
-		weight                    int
-		installed                 bool
-		list                      bool
-		revoke                    string
+		cfgPath, name, gatewayURL, agentID string
+		ttl                                time.Duration
+		weight                             int
+		installed                          bool
+		list                               bool
+		revoke                             string
 	)
 	cmd := &cobra.Command{
 		Use:   "enroll-token",
@@ -62,20 +62,27 @@ func newAgentsEnrollTokenCmd() *cobra.Command {
 		Long: "То же, что кнопка «Агент за NAT» в UI. Токен показывается один раз; в БД хранится только SHA-256.\n" +
 			"Требуется инициализированный CA (tgproxy pki init). Основная команда ставит пакет с самого сервера (нужен подписанный релиз\n" +
 			"версии сервера в кэше загрузок, иначе токен не выдаётся) и подключает агента; --installed — только подключение.\n" +
-			"--list показывает неиспользованные токены, --revoke <id|имя> отзывает токен (после отзыва /enroll отвечает 401).",
+			"--list показывает неиспользованные токены, --revoke <id|имя> отзывает токен (после отзыва /enroll отвечает 401).\n" +
+			"--agent <id> выпускает токен перевыпуска для СУЩЕСТВУЮЩЕГО агента (переустановка хоста, перенос сервера): агент не создаётся заново,\n" +
+			"вес и история сохраняются; при подключении по токену все его прежние сертификаты отзываются, режим становится reverse.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if list || revoke != "" {
 				if list && revoke != "" {
 					return errors.New("--list и --revoke взаимоисключающие")
 				}
-				if name != "" || installed || weight != 0 || ttl != 0 {
+				if name != "" || agentID != "" || installed || weight != 0 || ttl != 0 {
 					return errors.New("--list/--revoke не сочетаются с параметрами выпуска токена")
 				}
 				return enrollTokenAdmin(cmd, cfgPath, list, revoke)
 			}
-			if name == "" {
-				return errors.New("укажите --name (или --list / --revoke)")
+			switch {
+			case name != "" && agentID != "":
+				return errors.New("--name и --agent взаимоисключающие")
+			case agentID != "" && weight != 0:
+				return errors.New("--weight не сочетается с --agent: вес берётся у агента")
+			case name == "" && agentID == "":
+				return errors.New("укажите --name или --agent (или --list / --revoke)")
 			}
 			cfg, st, err := openAdminStore(cmd, cfgPath)
 			if err != nil {
@@ -106,16 +113,25 @@ func newAgentsEnrollTokenCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Отзыв прежних сертификатов выполняет сервер при погашении токена; здесь Revoker нужен
+			// только как признак, что перевыпуск настроен.
+			deny, err := pki.NewDenylist(cmd.Context(), st.Certs())
+			if err != nil {
+				return err
+			}
 			svc, err := enroll.New(enroll.Config{
 				Enrollments: st.Enrollments(), Agents: st.Agents(), Audit: st.Audit(), CA: auth, GatewayURL: url,
-				Packages: pkgs,
+				Packages: pkgs, Revoker: deny,
 			})
 			if err != nil {
 				return err
 			}
 			is, err := svc.IssueFor(cmd.Context(), enroll.IssueRequest{
-				Name: name, Weight: weight, CreatedBy: "cli", TTL: ttl, InstalledOnly: installed,
+				Name: name, Weight: weight, CreatedBy: "cli", TTL: ttl, InstalledOnly: installed, AgentID: agentID,
 			})
+			if errors.Is(err, store.ErrNotFound) && agentID != "" {
+				return fmt.Errorf("агент %q не найден (список: tgproxy agents list)", agentID)
+			}
 			if err != nil {
 				return err
 			}
@@ -132,6 +148,7 @@ func newAgentsEnrollTokenCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&cfgPath, "config", "c", "", "путь к server.yaml")
 	cmd.Flags().StringVar(&name, "name", "", "имя агента (из него строится id)")
+	cmd.Flags().StringVar(&agentID, "agent", "", "id существующего агента: выпустить токен перевыпуска (агент сохраняется, сертификаты отзываются при подключении)")
 	cmd.Flags().IntVar(&weight, "weight", 0, "вес в балансировке (0 — по умолчанию)")
 	cmd.Flags().DurationVar(&ttl, "ttl", 0, "срок токена (по умолчанию 1h, максимум 24h)")
 	cmd.Flags().BoolVar(&installed, "installed", false, "tgproxy уже установлен на хосте: вывести только команду подключения (без установки пакета)")

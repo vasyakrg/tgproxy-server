@@ -174,6 +174,9 @@ type Enrollment struct {
 	CreatedAt time.Time
 	ExpiresAt time.Time
 	UsedAt    *time.Time
+	// AgentID — токен перевыпуска для существующего агента: при погашении агент не
+	// создаётся, а получает новый сертификат на тот же id. Пусто — токен нового агента.
+	AgentID string
 }
 
 // ErrorOutcome — чем закончился запрос с ошибкой.

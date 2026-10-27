@@ -104,17 +104,30 @@ func (d *Denylist) Revoke(ctx context.Context, serial, reason string) error {
 // RevokeAgent отзывает все выпущенные сертификаты агента; возвращает число
 // отозванных серийников.
 func (d *Denylist) RevokeAgent(ctx context.Context, agentID, reason string) (int, error) {
+	return d.RevokeAgentExcept(ctx, agentID, "", reason)
+}
+
+// RevokeAgentExcept отзывает все сертификаты агента, кроме keepSerial (только что выданный
+// при перевыпуске); пустой keepSerial — отзываются все. Возвращает число отозванных.
+func (d *Denylist) RevokeAgentExcept(ctx context.Context, agentID, keepSerial, reason string) (int, error) {
 	recs, err := d.repo.ListByAgent(ctx, agentID)
 	if err != nil {
 		return 0, fmt.Errorf("pki: list certs: %w", err)
 	}
+	keep := normalizeSerial(keepSerial)
+	n := 0
 	for _, r := range recs {
-		e := store.DeniedCert{Serial: normalizeSerial(r.Serial), AgentID: agentID, Reason: reason, NotAfter: r.NotAfter, DeniedAt: nowFunc()}
+		serial := normalizeSerial(r.Serial)
+		if keep != "" && serial == keep {
+			continue
+		}
+		e := store.DeniedCert{Serial: serial, AgentID: agentID, Reason: reason, NotAfter: r.NotAfter, DeniedAt: nowFunc()}
 		if err := d.deny(ctx, e); err != nil {
 			return 0, err
 		}
+		n++
 	}
-	return len(recs), nil
+	return n, nil
 }
 
 func (d *Denylist) deny(ctx context.Context, e store.DeniedCert) error {

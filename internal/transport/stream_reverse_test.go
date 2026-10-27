@@ -285,6 +285,27 @@ func TestReverseStreamConnDropKillsOnlyItsStreams(t *testing.T) {
 	_ = botAgent
 }
 
+func TestReverseStreamDropAgent(t *testing.T) {
+	ag := newMTAgentSide()
+	s := newRS(t, WithMTProtoSignalInterval(time.Hour))
+	attachMT(t, s, "a1", ag.handler("c1"))
+	attachMT(t, s, "other", ag.handler("o1"))
+	st := open(t, s, revRef("a1"), 2)
+	if n := s.DropAgent("a1"); n != 1 {
+		t.Fatalf("dropped %d", n)
+	}
+	_ = st.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := st.Read(make([]byte, 1)); err == nil {
+		t.Fatal("стрим сброшенного агента жив")
+	}
+	if s.Conns("a1") != 0 || s.Conns("other") != 1 {
+		t.Fatalf("conns a1=%d other=%d", s.Conns("a1"), s.Conns("other"))
+	}
+	if n := s.DropAgent("a1"); n != 0 {
+		t.Fatalf("повторный drop: %d", n)
+	}
+}
+
 func TestReverseStreamFailsOverToLiveConn(t *testing.T) {
 	ag := newMTAgentSide()
 	s := newRS(t, WithMTProtoSignalInterval(time.Hour))

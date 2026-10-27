@@ -10,17 +10,19 @@ import (
 
 type enrollmentRepo struct{ s *Store }
 
-const enrollCols = `id, token_hash, name, weight, created_by, created_at, expires_at, used_at`
+const enrollCols = `id, token_hash, name, weight, created_by, created_at, expires_at, used_at, agent_id`
 
 func scanEnroll(r scanner) (store.Enrollment, error) {
 	var (
 		e      store.Enrollment
 		c, exp int64
 		usedAt sql.NullInt64
+		agent  sql.NullString
 	)
-	if err := r.Scan(&e.ID, &e.TokenHash, &e.Name, &e.Weight, &e.CreatedBy, &c, &exp, &usedAt); err != nil {
+	if err := r.Scan(&e.ID, &e.TokenHash, &e.Name, &e.Weight, &e.CreatedBy, &c, &exp, &usedAt, &agent); err != nil {
 		return store.Enrollment{}, mapErr(err)
 	}
+	e.AgentID = agent.String
 	e.CreatedAt, e.ExpiresAt, e.UsedAt = fromMS(c), fromMS(exp), ptrTime(usedAt)
 	return e, nil
 }
@@ -33,8 +35,8 @@ func (r enrollmentRepo) Create(ctx context.Context, e store.Enrollment) error {
 		e.CreatedAt = time.Now()
 	}
 	_, err := r.s.w.ExecContext(ctx,
-		`INSERT INTO enrollments (`+enrollCols+`) VALUES (?,?,?,?,?,?,?,NULL)`,
-		e.ID, e.TokenHash, e.Name, e.Weight, e.CreatedBy, ms(e.CreatedAt), ms(e.ExpiresAt))
+		`INSERT INTO enrollments (`+enrollCols+`) VALUES (?,?,?,?,?,?,?,NULL,?)`,
+		e.ID, e.TokenHash, e.Name, e.Weight, e.CreatedBy, ms(e.CreatedAt), ms(e.ExpiresAt), nullStr(e.AgentID))
 	return mapErr(err)
 }
 

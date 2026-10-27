@@ -243,6 +243,18 @@ func (p *ReversePool) detach(agentID string, rc *revConn) {
 	}
 }
 
+// DropAgent рвёт все соединения агента (отзыв сертификата: уже установленные соединения
+// иначе дожили бы до обрыва). Возвращает число закрытых соединений.
+func (p *ReversePool) DropAgent(agentID string) int {
+	p.mu.Lock()
+	list := slices.Clone(p.conns[agentID])
+	p.mu.Unlock()
+	for _, rc := range list {
+		p.detach(agentID, rc)
+	}
+	return len(list)
+}
+
 // Conns — число соединений агента (для метрики agent_reverse_conns).
 func (p *ReversePool) Conns(agentID string) int {
 	p.mu.Lock()

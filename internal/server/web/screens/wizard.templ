@@ -234,8 +234,13 @@ templ NATForm(f NATFormVM) {
 
 templ natIssued(v NATIssuedVM) {
 	<div class="stack">
-		<h2 class="form-title">Токен для «{ v.Name }» выпущен</h2>
-		<div class="alert alert-warn" role="status">Команда содержит токен и показана один раз. Токен одноразовый, действует до { v.Expires }.</div>
+		if v.Reissue {
+			<h3 class="form-title">Новый токен для «{ v.Name }» выпущен</h3>
+			<div class="alert alert-warn" role="status">Команда содержит токен и показана один раз. Токен одноразовый, действует до { v.Expires }. После подключения прежние сертификаты агента будут отозваны.</div>
+		} else {
+			<h2 class="form-title">Токен для «{ v.Name }» выпущен</h2>
+			<div class="alert alert-warn" role="status">Команда содержит токен и показана один раз. Токен одноразовый, действует до { v.Expires }.</div>
+		}
 		<div class="field">
 			<span class="field-label">Выполните на хосте агента (установит пакет и подключит агента)</span>
 			<div class="copy-row">
@@ -254,12 +259,51 @@ templ natIssued(v NATIssuedVM) {
 		}
 		@NATStatus(v.Status)
 		<div class="form-actions">
-			<a class="btn" href="/agents/new?mode=nat">Выпустить ещё</a>
-			@views.IconButton("Отозвать токен: "+v.Name, "trash", true, templ.Attributes{
-				"hx-get": "/agents/enroll/" + v.ID + "/revoke", "hx-target": "#wiz-modal-body", "hx-swap": "innerHTML", "data-modal-open": "wiz-modal",
-			})
+			if v.Reissue {
+				<button type="button" class="btn" data-modal-close>Закрыть</button>
+				@views.IconButton("Отозвать токен: "+v.Name, "trash", true, templ.Attributes{
+					"hx-get": "/agents/enroll/" + v.ID + "/revoke?from=agent", "hx-target": "#reissue-revoke", "hx-swap": "innerHTML",
+				})
+			} else {
+				<a class="btn" href="/agents/new?mode=nat">Выпустить ещё</a>
+				@views.IconButton("Отозвать токен: "+v.Name, "trash", true, templ.Attributes{
+					"hx-get": "/agents/enroll/" + v.ID + "/revoke", "hx-target": "#wiz-modal-body", "hx-swap": "innerHTML", "data-modal-open": "wiz-modal",
+				})
+			}
 		</div>
+		if v.Reissue {
+			<div id="reissue-revoke"></div>
+		}
 	</div>
+}
+
+// ReissueRevokeConfirm — подтверждение отзыва токена перевыпуска прямо под выпущенной командой:
+// отмена убирает только подтверждение, команда остаётся на экране.
+templ ReissueRevokeConfirm(id string) {
+	<form
+		class="stack"
+		method="post"
+		action={ templ.SafeURL("/agents/enroll/" + id + "/revoke") }
+		hx-post={ "/agents/enroll/" + id + "/revoke" }
+		hx-target="#agent-modal-body"
+		hx-swap="innerHTML"
+		hx-include="#agents-filter"
+		hx-disabled-elt="find button[type=submit]"
+	>
+		<input type="hidden" name="confirm" value="yes"/>
+		<input type="hidden" name="from" value="agent"/>
+		<div class="alert alert-warn" role="alert">Отозвать токен? Агент, который ещё не успел подключиться по нему, получит отказ. Уже действующие сертификаты агента не затрагиваются.</div>
+		<div class="form-actions">
+			<button
+				type="button"
+				class="btn"
+				hx-get={ "/agents/enroll/" + id + "/revoke?from=agent&cancel=1" }
+				hx-target="#reissue-revoke"
+				hx-swap="innerHTML"
+			>Не отзывать</button>
+			<button type="submit" class="btn btn-danger">Отозвать</button>
+		</div>
+	</form>
 }
 
 // NATStatus — отслеживание подключения агента по выпущенному токену. Пока агент не подключился
@@ -289,24 +333,32 @@ templ NATStatus(v EnrollStatusVM) {
 			case "connected":
 				@views.Icon("check", 18)
 				<span>Агент «{ v.Name }» подключился</span>
-				<a href={ templ.SafeURL(v.agentsURL()) }>К списку агентов</a>
-				<span hx-get={ v.url("1") } hx-trigger="load delay:2s" hx-swap="none"></span>
+				if v.Reissue {
+					<button type="button" class="btn" data-modal-close>Закрыть</button>
+				} else {
+					<a href={ templ.SafeURL(v.agentsURL()) }>К списку агентов</a>
+					<span hx-get={ v.url("1") } hx-trigger="load delay:2s" hx-swap="none"></span>
+				}
 			case "expired":
 				@views.Icon("alert", 18)
 				<span>Токен для «{ v.Name }» истёк, агент не подключился.</span>
-				@natNewToken()
+				@natNewToken(v.Reissue)
 			default:
 				@views.Icon("alert", 18)
 				<span>Токен отозван или удалён.</span>
-				@natNewToken()
+				@natNewToken(v.Reissue)
 		}
 	</div>
 }
 
-templ natNewToken() {
-	<a class="icon-btn" href="/agents/new?mode=nat" aria-label="Выпустить новый токен" title="Выпустить новый токен">
-		@views.Icon("refresh", 18)
-	</a>
+templ natNewToken(reissue bool) {
+	if reissue {
+		<span class="muted small">Новый токен — в меню агента «⋯».</span>
+	} else {
+		<a class="icon-btn" href="/agents/new?mode=nat" aria-label="Выпустить новый токен" title="Выпустить новый токен">
+			@views.Icon("refresh", 18)
+		</a>
+	}
 }
 
 // NATPending — ожидающие токены; обновляется опросом. С oob=true заменяет список на странице.
@@ -330,7 +382,12 @@ templ NATPending(rows []PendingRowVM, oob bool) {
 			@views.Table("Ожидающие токены", pendingHeaders) {
 				for _, r := range rows {
 					<tr>
-						<td class="cell-name">{ r.Name }</td>
+						<td class="cell-name">
+							{ r.Name }
+							if r.Reissue {
+								<span class="muted small">перевыпуск</span>
+							}
+						</td>
 						<td class="mono">{ r.Weight }</td>
 						<td class="mono">{ r.Expires } <span class="muted small">{ r.Left }</span></td>
 						<td class="col-actions">

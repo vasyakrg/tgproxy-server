@@ -91,6 +91,8 @@ IP Geolocation by [DB-IP](https://db-ip.com) — база «IP to Country Lite»
 
   Если tgproxy на хосте уже установлен, там же показана короткая команда (`printf %s '<токен>' | sudo tgproxy agent enroll --token-stdin --server https://<сервер>:8444 --ca-fingerprint SHA256:...`; в CLI — `agents enroll-token --installed`, пакет в кэше не нужен), затем `systemctl enable tgproxy-agent` + `systemctl restart tgproxy-agent`. Отпечаток CA: `tgproxy pki fingerprint -c /etc/tgproxy/server.yaml`.
 
+  Переподключить уже существующего агента (переустановка хоста, перенос сервера, сломанный конфиг) можно без удаления — вес и история сохраняются: «Агенты → ⋯ → Новый токен подключения», `POST /api/v1/agents/{id}/enroll-token` или `tgproxy agents enroll-token -c /etc/tgproxy/server.yaml --agent <id>`. Команда на хосте та же; при подключении по такому токену агент создаётся не заново, а получает новый сертификат на тот же id, **все его прежние сертификаты отзываются** (denylist), живые соединения рвутся, режим становится `reverse` (для `dial`/`both` UI предупреждает), в аудит пишется `agent.reenroll`. Если агент удалён до подключения по токену, `/enroll` отвечает `410`, а токен считается использованным.
+
 ## Порты
 
 | Процесс | Порт | Назначение |

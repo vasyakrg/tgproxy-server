@@ -3,6 +3,7 @@ package screens
 import (
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/vasyakrg/tgproxy-server/internal/server/web/api"
@@ -73,6 +74,8 @@ type NATIssuedVM struct {
 	CmdlineInstalled string
 	Expires          string
 	Status           EnrollStatusVM // начальное состояние блока отслеживания (waiting)
+	// Reissue — токен для существующего агента, показан в диалоге на экране «Агенты».
+	Reissue bool
 }
 
 // EnrollStatusVM — блок «Ожидаем подключения агента». Секретов не содержит по построению.
@@ -80,6 +83,8 @@ type EnrollStatusVM struct {
 	ID, State, Name string
 	AgentID         string
 	Left            string // «42 мин» — сколько ещё действует неиспользованный токен
+	// Reissue — токен перевыпуска для существующего агента (блок живёт в диалоге на /agents).
+	Reissue bool
 }
 
 func (v EnrollStatusVM) polling() bool {
@@ -98,8 +103,15 @@ func (v EnrollStatusVM) tone() string {
 
 func (v EnrollStatusVM) url(goFlag string) string {
 	u := "/agents/enroll/" + v.ID + "/status"
+	var q []string
 	if goFlag != "" {
-		u += "?go=1"
+		q = append(q, "go=1")
+	}
+	if v.Reissue {
+		q = append(q, "reissue=1") // для отозванного токена записи нет, а блок живёт в диалоге агента
+	}
+	if len(q) > 0 {
+		u += "?" + strings.Join(q, "&")
 	}
 	return u
 }
@@ -115,13 +127,14 @@ func (v EnrollStatusVM) agentsURL() string {
 // PendingRowVM — ожидающий токен.
 type PendingRowVM struct {
 	ID, Name, Weight, Expires, Left string
+	Reissue                         bool // токен перевыпуска для существующего агента
 }
 
 func pendingRows(items []api.EnrollmentItem, now time.Time) []PendingRowVM {
 	out := make([]PendingRowVM, 0, len(items))
 	for _, e := range items {
 		out = append(out, PendingRowVM{
-			ID: e.ID, Name: e.Name, Weight: strconv.Itoa(e.Weight),
+			ID: e.ID, Name: e.Name, Weight: strconv.Itoa(e.Weight), Reissue: e.AgentID != "",
 			Expires: e.ExpiresAt.Local().Format("15:04"), Left: leftRu(e.ExpiresAt.Sub(now)),
 		})
 	}

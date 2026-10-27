@@ -291,7 +291,7 @@ func (s *agentsScreen) enrollStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Внутренняя ошибка", http.StatusInternalServerError)
 		return
 	}
-	vm := EnrollStatusVM{ID: id, State: st.State, Name: st.Name, AgentID: st.AgentID, Left: leftRu(st.Left)}
+	vm := EnrollStatusVM{ID: id, State: st.State, Name: st.Name, AgentID: st.AgentID, Left: leftRu(st.Left), Reissue: st.Reissue || r.URL.Query().Get("reissue") == "1"}
 	if st.State == api.EnrollConnected {
 		if r.URL.Query().Get("go") == "1" {
 			w.Header().Set("HX-Redirect", vm.agentsURL())
@@ -320,6 +320,14 @@ func (s *agentsScreen) revokeConfirm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if r.URL.Query().Get("from") == "agent" {
+		if r.URL.Query().Get("cancel") == "1" {
+			renderFragment(w, r, http.StatusOK, templ.NopComponent) //nolint:contextcheck // templ
+			return
+		}
+		renderFragment(w, r, http.StatusOK, ReissueRevokeConfirm(id)) //nolint:contextcheck // templ
+		return
+	}
 	renderFragment(w, r, http.StatusOK, ConfirmDialog(ConfirmVM{ //nolint:contextcheck // templ
 		Title: "Отозвать токен?", Text: "Агент, который ещё не успел подключиться по этому токену, получит отказ.",
 		Note: "Уже подключённых агентов это не затрагивает.", Action: "/agents/enroll/" + id + "/revoke", Label: "Отозвать", Danger: true,
@@ -336,9 +344,14 @@ func (s *agentsScreen) revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.d.Enroll.Revoke(r.Context(), s.actor(r), id, r.PostFormValue("confirm") == api.ConfirmYes)
+	fromAgent := r.PostFormValue("from") == "agent"
+	var used *api.EnrollUsedError
 	switch {
 	case errors.Is(err, api.ErrConfirmRequired):
 		http.Error(w, "требуется подтверждение", http.StatusBadRequest)
+		return
+	case errors.As(err, &used):
+		renderFragment(w, r, http.StatusUnprocessableEntity, ModalError("Токен уже использован: агент «"+used.AgentName+"» зарегистрирован. Если он не подключается — перезапустите tgproxy-agent на хосте или выпустите новый токен в меню агента.")) //nolint:contextcheck // templ
 		return
 	case errors.Is(err, store.ErrNotFound):
 		renderFragment(w, r, http.StatusUnprocessableEntity, ModalError("Токен не найден: он уже использован, истёк или отозван.")) //nolint:contextcheck // templ
@@ -346,6 +359,10 @@ func (s *agentsScreen) revoke(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		s.log.ErrorContext(r.Context(), "wizard: revoke enrollment", "err", redact.Error(err))
 		renderFragment(w, r, http.StatusUnprocessableEntity, ModalError("Не удалось отозвать токен.")) //nolint:contextcheck // templ
+		return
+	}
+	if fromAgent {
+		s.closeAndRefresh(w, r, "Токен отозван") //nolint:contextcheck // templ-компонент получает ctx в Render
 		return
 	}
 	toast(w, "ok", "Токен отозван")

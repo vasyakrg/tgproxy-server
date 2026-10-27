@@ -121,6 +121,37 @@ func (s *EnrollService) Issue(ctx context.Context, act Actor, in EnrollInput) (I
 	return Issued{ID: is.ID, Cmdline: is.Cmdline, CmdlineInstalled: is.CmdlineInstalled, ExpiresAt: is.ExpiresAt}, nil
 }
 
+// errReissueTTL — срок токена перевыпуска вне допустимого диапазона.
+var errReissueTTL = FieldErrors{FieldTTL: "От 1 минуты до 24 часов"}
+
+// IssueForAgent выпускает токен перевыпуска для существующего агента: агент остаётся (вес, история),
+// при подключении по токену его прежние сертификаты отзываются, режим становится reverse.
+// store.ErrNotFound — агента нет.
+func (s *EnrollService) IssueForAgent(ctx context.Context, act Actor, agentID string, ttl time.Duration) (Issued, error) {
+	if !s.Configured() {
+		return Issued{}, ErrNotConfigured
+	}
+	if !ValidAgentID(agentID) {
+		return Issued{}, store.ErrNotFound
+	}
+	if ttl < time.Minute || ttl > enroll.MaxTTL {
+		return Issued{}, &ValidationError{Fields: errReissueTTL}
+	}
+	is, err := s.cfg.Issuer.IssueFor(ctx, enroll.IssueRequest{AgentID: agentID, CreatedBy: act.User, TTL: ttl})
+	if err != nil {
+		switch {
+		case errors.Is(err, enroll.ErrReenrollUnavailable):
+			return Issued{}, ErrNotConfigured
+		case errors.Is(err, store.ErrInvalid):
+			return Issued{}, &ValidationError{Fields: FieldErrors{FieldGeneral: "Некорректные параметры токена"}}
+		case errors.Is(err, enroll.ErrPackageUnavailable):
+			return Issued{}, &ValidationError{Fields: FieldErrors{FieldGeneral: err.Error()}}
+		}
+		return Issued{}, err
+	}
+	return Issued{ID: is.ID, Cmdline: is.Cmdline, CmdlineInstalled: is.CmdlineInstalled, ExpiresAt: is.ExpiresAt}, nil
+}
+
 // EnrollmentItem — выпущенные, но не использованные и не просроченные токены (без самих токенов).
 type EnrollmentItem struct {
 	ID        string
@@ -129,6 +160,8 @@ type EnrollmentItem struct {
 	CreatedBy string
 	CreatedAt time.Time
 	ExpiresAt time.Time
+	// AgentID — токен перевыпуска для существующего агента; пусто — токен нового агента.
+	AgentID string
 }
 
 // List возвращает ожидающие токены.
@@ -142,7 +175,7 @@ func (s *EnrollService) List(ctx context.Context) ([]EnrollmentItem, error) {
 	}
 	out := make([]EnrollmentItem, 0, len(items))
 	for _, e := range items {
-		out = append(out, EnrollmentItem{ID: e.ID, Name: e.Name, Weight: e.Weight, CreatedBy: e.CreatedBy, CreatedAt: e.CreatedAt, ExpiresAt: e.ExpiresAt})
+		out = append(out, EnrollmentItem{ID: e.ID, Name: e.Name, Weight: e.Weight, CreatedBy: e.CreatedBy, CreatedAt: e.CreatedAt, ExpiresAt: e.ExpiresAt, AgentID: e.AgentID})
 	}
 	return out, nil
 }
@@ -158,9 +191,11 @@ const (
 
 // EnrollStatus — состояние токена для отслеживания подключения. Ни токена, ни хеша здесь нет.
 type EnrollStatus struct {
-	State     string
-	Name      string // имя из токена (пусто для revoked)
-	AgentID   string // id агента (enrolled и connected)
+	State   string
+	Name    string // имя из токена (пусто для revoked)
+	AgentID string // id агента (enrolled и connected; для токена перевыпуска — с самого выпуска)
+	// Reissue — токен перевыпуска для существующего агента.
+	Reissue   bool
 	ExpiresAt time.Time
 	Left      time.Duration // сколько жить неиспользованному токену (waiting); иначе 0
 }
@@ -177,7 +212,10 @@ func (s *EnrollService) Status(ctx context.Context, id string) (EnrollStatus, er
 	if err != nil {
 		return EnrollStatus{}, err
 	}
-	st := EnrollStatus{Name: e.Name, ExpiresAt: e.ExpiresAt}
+	st := EnrollStatus{Name: e.Name, ExpiresAt: e.ExpiresAt, AgentID: e.AgentID, Reissue: e.AgentID != ""}
+	if a, ok := s.cfg.agentByID(e.AgentID); ok && e.AgentID != "" {
+		st.Name = agentTitle(a.Agent) // у токена перевыпуска имя — id, в UI показываем имя агента
+	}
 	if e.UsedAt == nil {
 		now := s.now()
 		if !e.ExpiresAt.After(now) {
@@ -190,6 +228,14 @@ func (s *EnrollService) Status(ctx context.Context, id string) (EnrollStatus, er
 	// Токен использован: агент создаётся сразу после гашения, id — slug имени (возможно с суффиксом),
 	// поэтому ищем по имени среди агентов, созданных не раньше выпуска токена.
 	st.State = EnrollEnrolled
+	if e.AgentID != "" {
+		// Перевыпуск: агент уже существовал, поэтому «подключился» — первое успешное
+		// наблюдение ПОСЛЕ погашения токена (иначе сработало бы старое соединение).
+		if a, ok := s.cfg.agentByID(e.AgentID); ok && a.Up && a.LastSeen.After(*e.UsedAt) {
+			st.State = EnrollConnected
+		}
+		return st, nil
+	}
 	if a, ok := s.enrolledAgent(e); ok {
 		st.AgentID = a.Agent.ID
 		if a.Up {
@@ -197,6 +243,13 @@ func (s *EnrollService) Status(ctx context.Context, id string) (EnrollStatus, er
 		}
 	}
 	return st, nil
+}
+
+func (c EnrollConfig) agentByID(id string) (agents.State, bool) {
+	if c.Agents == nil {
+		return agents.State{}, false
+	}
+	return c.Agents.Get(id)
 }
 
 // enrolledAgent находит агента, созданного по токену; при нескольких предпочитает работающего.
@@ -227,10 +280,51 @@ func (s *EnrollService) Revoke(ctx context.Context, act Actor, id string, confir
 		return ErrConfirmRequired
 	}
 	if err := s.cfg.Enrollments.Delete(ctx, id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return s.revokeNotFound(ctx, id, err)
+		}
 		return err
 	}
 	s.record(ctx, act, AuditEnrollRevoke, id, "")
 	return nil
+}
+
+// EnrollUsedError — отзыв токена, который уже использован, а агент по нему зарегистрирован.
+// Unwrap даёт store.ErrNotFound: для вызывающих без различения случаев поведение прежнее.
+type EnrollUsedError struct {
+	AgentID   string
+	AgentName string
+}
+
+func (e *EnrollUsedError) Error() string {
+	return "токен уже использован: агент «" + e.AgentName + "» зарегистрирован"
+}
+
+func (e *EnrollUsedError) Unwrap() error { return store.ErrNotFound }
+
+// revokeNotFound отличает «токен уже использован, агент зарегистрирован» от «не найден, истёк или отозван».
+func (s *EnrollService) revokeNotFound(ctx context.Context, id string, notFound error) error {
+	e, err := s.cfg.Enrollments.Get(ctx, id)
+	if err != nil || e.UsedAt == nil {
+		return notFound
+	}
+	if e.AgentID != "" {
+		if a, ok := s.cfg.agentByID(e.AgentID); ok {
+			return &EnrollUsedError{AgentID: a.Agent.ID, AgentName: agentTitle(a.Agent)}
+		}
+		return notFound
+	}
+	if a, ok := s.enrolledAgent(e); ok {
+		return &EnrollUsedError{AgentID: a.Agent.ID, AgentName: agentTitle(a.Agent)}
+	}
+	return notFound
+}
+
+func agentTitle(a store.Agent) string {
+	if a.Name != "" {
+		return a.Name
+	}
+	return a.ID
 }
 
 func (s *EnrollService) record(ctx context.Context, act Actor, action, target, detail string) {
@@ -262,6 +356,7 @@ func (a *EnrollAPI) Routes(m Registrar, wrap Wrap) {
 	m.Handle("GET /api/v1/enrollments", wrap.apply(http.HandlerFunc(a.list)))
 	m.Handle("POST /api/v1/enrollments", wrap.apply(http.HandlerFunc(a.create)))
 	m.Handle("DELETE /api/v1/enrollments/{id}", wrap.apply(http.HandlerFunc(a.revoke)))
+	m.Handle("POST /api/v1/agents/{id}/enroll-token", wrap.apply(http.HandlerFunc(a.reissue)))
 }
 
 type enrollJSON struct {
@@ -282,9 +377,12 @@ type enrollCreatedJSON struct {
 
 func (a *EnrollAPI) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var ve *ValidationError
+	var used *EnrollUsedError
 	switch {
 	case errors.As(err, &ve):
 		writeJSON(w, http.StatusUnprocessableEntity, errorJSON{Error: "validation", Message: "ошибка валидации", Fields: ve.Fields})
+	case errors.As(err, &used):
+		writeJSON(w, http.StatusNotFound, errorJSON{Error: "not_found", Message: used.Error()})
 	case errors.Is(err, store.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, errorJSON{Error: "not_found"})
 	case errors.Is(err, ErrConfirmRequired):
@@ -335,6 +433,31 @@ func (a *EnrollAPI) create(w http.ResponseWriter, r *http.Request) {
 	is, err := a.Service.Issue(r.Context(), actorOf(r, a.ClientIP), EnrollInput{
 		Name: in.Name, Weight: in.Weight, TTL: time.Duration(in.TTLMinutes) * time.Minute,
 	})
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/api/v1/enrollments/"+is.ID)
+	writeJSON(w, http.StatusCreated, enrollCreatedJSON{ID: is.ID, Cmdline: is.Cmdline, Installed: is.CmdlineInstalled, ExpiresAt: is.ExpiresAt.UTC().Format(time.RFC3339)})
+}
+
+// reissue — POST /api/v1/agents/{id}/enroll-token: токен перевыпуска для существующего агента.
+func (a *EnrollAPI) reissue(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !ValidAgentID(id) {
+		writeJSON(w, http.StatusNotFound, errorJSON{Error: "not_found"})
+		return
+	}
+	var in struct {
+		TTLMinutes int `json:"ttl_minutes"`
+	}
+	if r.ContentLength != 0 && !decode(w, r, &in) {
+		return
+	}
+	if in.TTLMinutes == 0 {
+		in.TTLMinutes = 60
+	}
+	is, err := a.Service.IssueForAgent(r.Context(), actorOf(r, a.ClientIP), id, time.Duration(in.TTLMinutes)*time.Minute)
 	if err != nil {
 		a.fail(w, r, err)
 		return

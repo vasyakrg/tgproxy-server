@@ -256,6 +256,21 @@ func (s *ReverseStream) detach(agentID string, mc *mtConn) {
 	}
 }
 
+// DropAgent рвёт все MTProto-соединения агента вместе с их стримами (отзыв сертификата).
+// Возвращает число закрытых соединений.
+func (s *ReverseStream) DropAgent(agentID string) int {
+	s.mu.Lock()
+	var list []*mtConn
+	if a := s.agents[agentID]; a != nil {
+		list = slices.Clone(a.conns)
+	}
+	s.mu.Unlock()
+	for _, mc := range list {
+		s.detach(agentID, mc)
+	}
+	return len(list)
+}
+
 // Conns — число MTProto-соединений агента.
 func (s *ReverseStream) Conns(agentID string) int {
 	s.mu.Lock()

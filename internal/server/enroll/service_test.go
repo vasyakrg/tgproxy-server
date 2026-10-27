@@ -41,6 +41,8 @@ type fixture struct {
 	n     int
 	pkgs  CachePackages // подписанный релиз в temp-кэше
 	deb   []byte
+	deny  *pki.Denylist
+	drops []string
 }
 
 type fakeClock struct {
@@ -85,8 +87,12 @@ func newFixture(t *testing.T) *fixture {
 	f.logs = sb
 	logger := slog.New(slog.NewTextHandler(sb, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	f.pkgs, f.deb = newRelease(t, "1.2.3")
+	if f.deny, err = pki.NewDenylist(context.Background(), st.Certs()); err != nil {
+		t.Fatal(err)
+	}
 	f.svc, err = New(Config{
-		Packages:    f.pkgs,
+		Packages: f.pkgs, Revoker: f.deny,
+		DropConns:   func(id string) { f.mu.Lock(); f.drops = append(f.drops, id); f.mu.Unlock() },
 		Enrollments: st.Enrollments(), Agents: st.Agents(), Audit: st.Audit(), CA: ca,
 		GatewayURL: "https://tgp.example.com:8444", Logger: logger, Now: f.clock.now,
 		Notify:  func(_ context.Context, id, _ string) { f.mu.Lock(); f.notif = append(f.notif, id); f.mu.Unlock() },

@@ -43,6 +43,7 @@ type agentsScreen struct {
 //	GET|POST /agents/{id}/weight         вес в балансировке (1..100)
 //	GET  /agents/{id}/more               сведения об агенте
 //	GET|POST /agents/{id}/emergency      аварийное обновление по SSH (подтверждение, затем задача)
+//	GET|POST /agents/{id}/enroll-token   новый токен подключения для существующего агента
 //	GET|POST /agents/{id}/delete         подтверждение и удаление
 //	GET  /agents/new                     мастер (?mode=ssh|nat)
 //	POST /agents/new/ssh[/confirm]       ветка SSH
@@ -74,6 +75,8 @@ func MountAgents(rt AgentsRouter, d AgentsDeps) {
 	m("GET /agents/{id}/more", s.more)
 	m("GET /agents/{id}/emergency", s.emergencyConfirm)
 	m("POST /agents/{id}/emergency", s.emergencyApply)
+	m("GET /agents/{id}/enroll-token", s.reissueForm)
+	m("POST /agents/{id}/enroll-token", s.reissueIssue)
 	m("GET /agents/{id}/delete", s.deleteConfirm)
 	m("POST /agents/{id}/delete", s.remove)
 	s.mountRollout(m)
@@ -516,7 +519,7 @@ func (s *agentsScreen) more(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	renderFragment(w, r, http.StatusOK, MoreCard(MoreVM{ //nolint:contextcheck // templ
-		Row: row, CanRemove: s.d.Service.Capabilities().Remove, CanEmergency: s.canEmergency(v),
+		Row: row, CanRemove: s.d.Service.Capabilities().Remove, CanEmergency: s.canEmergency(v), CanReissue: s.d.Enroll.Configured(),
 	}))
 }
 

@@ -199,6 +199,14 @@ func (s *Server) initTransport(ctx context.Context, cfg *config.ServerConfig) er
 	return nil
 }
 
+// dropConns рвёт живые reverse-соединения агента (Bot API и MTProto) после отзыва сертификатов.
+func (p *pkiState) dropConns(agentID string) {
+	p.pool.DropAgent(agentID)
+	if p.mtpool != nil {
+		p.mtpool.DropAgent(agentID)
+	}
+}
+
 func (s *Server) setReverseConns(id string, n int) {
 	if s.obs != nil && s.obs.m != nil {
 		s.obs.m.SetAgentReverseConns(id, n)
@@ -316,7 +324,7 @@ func (s *Server) wirePKI(cfg *config.ServerConfig) error {
 		svc, err := enroll.New(enroll.Config{
 			Enrollments: s.st.Enrollments(), Agents: s.st.Agents(), Audit: s.st.Audit(), CA: p.auth,
 			GatewayURL: gwURL, Logger: s.logger, Notify: s.onEnrolled, Observe: s.obs.m.EnrollAttempt,
-			Packages: pkgs,
+			Packages: pkgs, Revoker: p.deny, DropConns: p.dropConns, Refresh: s.reg.Refresh,
 		})
 		if err != nil {
 			return fmt.Errorf("app: enroll: %w", err)

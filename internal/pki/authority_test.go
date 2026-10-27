@@ -428,6 +428,28 @@ func TestDenylistRevokeAgentAndRefresh(t *testing.T) {
 	}
 }
 
+func TestDenylistRevokeAgentExcept(t *testing.T) {
+	a, repo, _ := newAuthority(t)
+	ctx := context.Background()
+	var serials []string
+	for range 3 {
+		csr, _, _ := NewAgentCSR("a1")
+		_, serial, err := a.SignAgentCSR(ctx, csr, "a1", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serials = append(serials, serial)
+	}
+	d, _ := NewDenylist(ctx, repo)
+	n, err := d.RevokeAgentExcept(ctx, "a1", serials[2], "reenroll")
+	if err != nil || n != 2 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if !d.IsDenied(serials[0]) || !d.IsDenied(serials[1]) || d.IsDenied(serials[2]) {
+		t.Fatal("denylist: старые должны быть отозваны, оставляемый — нет")
+	}
+}
+
 func TestDenylistErrors(t *testing.T) {
 	ctx := context.Background()
 	boom := errors.New("boom")

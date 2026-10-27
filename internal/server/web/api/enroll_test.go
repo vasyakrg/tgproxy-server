@@ -37,7 +37,11 @@ func (f *fakeIssuer) IssueFor(ctx context.Context, req enroll.IssueRequest) (enr
 	h := sha256.Sum256([]byte(fmt.Sprintf("%s%d", enrollToken, len(f.reqs))))
 	id := fmt.Sprintf("%016x", len(f.reqs))
 	exp := t0.Add(req.TTL)
-	err := f.repo.Create(ctx, store.Enrollment{ID: id, TokenHash: h[:], Name: req.Name, Weight: req.Weight, CreatedBy: req.CreatedBy, CreatedAt: t0, ExpiresAt: exp})
+	name := req.Name
+	if req.AgentID != "" {
+		name = req.AgentID
+	}
+	err := f.repo.Create(ctx, store.Enrollment{ID: id, TokenHash: h[:], Name: name, Weight: req.Weight, CreatedBy: req.CreatedBy, CreatedAt: t0, ExpiresAt: exp, AgentID: req.AgentID})
 	return enroll.Issued{ID: id, Token: enrollToken, Cmdline: "sudo TGP_ENROLL_TOKEN=" + enrollToken + " tgproxy agent enroll", CmdlineInstalled: "tgproxy agent enroll", ExpiresAt: exp}, err
 }
 
@@ -283,5 +287,147 @@ func TestEnrollStatusMatching(t *testing.T) {
 	}
 	if _, err = api.NewEnrollService(api.EnrollConfig{}).Status(ctx, "a1"); !errors.Is(err, api.ErrNotConfigured) {
 		t.Fatalf("not configured: %v", err)
+	}
+}
+
+func TestEnrollReissueAPI(t *testing.T) {
+	mux, fi, st, logs := newEnrollEnv(t)
+	rec := doJSON(mux, "POST", "/api/v1/agents/home/enroll-token", `{"ttl_minutes":30}`)
+	if rec.Code != 201 {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	var created map[string]string
+	decode(t, rec, &created)
+	if created["cmdline_installed"] == "" || !strings.Contains(created["cmdline"], enrollToken) || created["id"] == "" || created["expires_at"] == "" || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("%v %v", created, rec.Header())
+	}
+	if r := fi.reqs[0]; r.AgentID != "home" || r.TTL != 30*time.Minute || r.Name != "" {
+		t.Errorf("req %+v", r)
+	}
+	p, _ := st.Enrollments().ListPending(context.Background(), t0)
+	if len(p) != 1 || p[0].AgentID != "home" {
+		t.Fatalf("pending %+v", p)
+	}
+	if strings.Contains(logs.String(), enrollToken) {
+		t.Error("токен в логах")
+	}
+	// без тела — TTL по умолчанию 60 минут
+	if c := doJSON(mux, "POST", "/api/v1/agents/home/enroll-token", "").Code; c != 201 || fi.reqs[1].TTL != time.Hour {
+		t.Errorf("пустое тело: %d %+v", c, fi.reqs[1])
+	}
+	for _, c := range []struct {
+		path, body string
+		want       int
+	}{
+		{"/api/v1/agents/home/enroll-token", `{"ttl_minutes":99999}`, 422},
+		{"/api/v1/agents/home/enroll-token", `{"ttl_minutes":-5}`, 422},
+		{"/api/v1/agents/home/enroll-token", `{"x":1}`, 400},
+		{"/api/v1/agents/BAD%20ID/enroll-token", `{}`, 404},
+	} {
+		if got := doJSON(mux, "POST", c.path, c.body).Code; got != c.want {
+			t.Errorf("%s %s: %d want %d", c.path, c.body, got, c.want)
+		}
+	}
+	n := len(fi.reqs)
+	fi.err = fmt.Errorf("agent: %w", store.ErrNotFound)
+	if c := doJSON(mux, "POST", "/api/v1/agents/ghost/enroll-token", `{}`).Code; c != 404 {
+		t.Errorf("нет агента: %d", c)
+	}
+	fi.err = enroll.ErrReenrollUnavailable
+	if c := doJSON(mux, "POST", "/api/v1/agents/home/enroll-token", `{}`).Code; c != http.StatusNotImplemented {
+		t.Errorf("перевыпуск не настроен: %d", c)
+	}
+	if len(fi.reqs) != n+2 {
+		t.Errorf("issuer вызван при невалидном вводе: %d", len(fi.reqs))
+	}
+}
+
+func TestEnrollReissueAuthAndCSRF(t *testing.T) {
+	f := newAcFx(t)
+	fi := &fakeIssuer{repo: f.st.Enrollments()}
+	svc := api.NewEnrollService(api.EnrollConfig{Issuer: fi, Enrollments: f.st.Enrollments(), Audit: f.st.Audit(), Now: func() time.Time { return t0 }})
+	(&api.EnrollAPI{Service: svc}).Routes(f.mux, f.wrap)
+	if code, _, _ := f.call("POST", "/api/v1/agents/home/enroll-token", `{}`, false); code != 401 {
+		t.Errorf("без сессии: %d", code)
+	}
+	if code, _, _ := f.call("POST", "/api/v1/agents/home/enroll-token", `{}`, true, "Sec-Fetch-Site", "cross-site"); code != 403 {
+		t.Errorf("cross-site: %d", code)
+	}
+	if len(fi.reqs) != 0 {
+		t.Fatalf("токен выпущен без авторизации/CSRF: %+v", fi.reqs)
+	}
+	code, body, _ := f.call("POST", "/api/v1/agents/home/enroll-token", `{"ttl_minutes":15}`, true)
+	if code != 201 || fi.reqs[0].CreatedBy != "alice" || fi.reqs[0].AgentID != "home" {
+		t.Fatalf("%d %s %+v", code, body, fi.reqs)
+	}
+}
+
+func TestEnrollStatusReissue(t *testing.T) {
+	st := memtest.New()
+	ctx := context.Background()
+	repo := st.Enrollments()
+	if err := repo.Create(ctx, store.Enrollment{ID: "r1", TokenHash: tokHash("r1"), Name: "home", Weight: 5, CreatedAt: t0, ExpiresAt: t0.Add(time.Hour), AgentID: "home"}); err != nil {
+		t.Fatal(err)
+	}
+	agent := func(up bool, seen time.Time) fakeAgentSrc {
+		return fakeAgentSrc{{Agent: store.Agent{ID: "home", Name: "Home", Mode: store.ModeReverse, CreatedAt: t0.Add(-48 * time.Hour)}, Up: up, LastSeen: seen}}
+	}
+	svc := func(src api.AgentSource) *api.EnrollService {
+		return api.NewEnrollService(api.EnrollConfig{Enrollments: repo, Agents: src, Now: func() time.Time { return t0.Add(time.Minute) }})
+	}
+	got, _ := svc(agent(true, t0.Add(30*time.Second))).Status(ctx, "r1")
+	if got.State != api.EnrollWaiting || !got.Reissue || got.AgentID != "home" {
+		t.Fatalf("waiting: %+v", got)
+	}
+	if _, err := repo.Consume(ctx, tokHash("r1"), t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	// агент существовал и «в работе» по старому соединению — это ещё не подключение по новому токену
+	if got, _ = svc(agent(true, t0.Add(30*time.Second))).Status(ctx, "r1"); got.State != api.EnrollEnrolled || got.AgentID != "home" {
+		t.Fatalf("старое наблюдение: %+v", got)
+	}
+	if got, _ = svc(agent(false, t0.Add(2*time.Minute))).Status(ctx, "r1"); got.State != api.EnrollEnrolled {
+		t.Fatalf("down: %+v", got)
+	}
+	if got, _ = svc(agent(true, t0.Add(2*time.Minute))).Status(ctx, "r1"); got.State != api.EnrollConnected || got.AgentID != "home" {
+		t.Fatalf("connected: %+v", got)
+	}
+}
+
+func TestEnrollRevokeUsedTokenMessage(t *testing.T) {
+	st := memtest.New()
+	ctx := context.Background()
+	repo := st.Enrollments()
+	mk := func(id, name, agentID string) {
+		t.Helper()
+		if err := repo.Create(ctx, store.Enrollment{ID: id, TokenHash: tokHash(id), Name: name, Weight: 1, CreatedAt: t0, ExpiresAt: t0.Add(time.Hour), AgentID: agentID}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.Consume(ctx, tokHash(id), t0.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("u1", "waw-2", "")
+	mk("u2", "home", "home")
+	mk("u3", "lost", "lost")
+	src := fakeAgentSrc{
+		{Agent: store.Agent{ID: "waw-2", Name: "waw-2", Mode: store.ModeReverse, CreatedAt: t0.Add(time.Minute)}},
+		{Agent: store.Agent{ID: "home", Name: "Home", Mode: store.ModeReverse, CreatedAt: t0.Add(-time.Hour)}},
+	}
+	svc := api.NewEnrollService(api.EnrollConfig{Enrollments: repo, Agents: src, Now: func() time.Time { return t0.Add(2 * time.Minute) }})
+	for id, name := range map[string]string{"u1": "waw-2", "u2": "Home"} {
+		err := svc.Revoke(ctx, api.Actor{}, id, true)
+		var used *api.EnrollUsedError
+		if !errors.As(err, &used) || used.AgentName != name || !errors.Is(err, store.ErrNotFound) || !strings.Contains(err.Error(), "«"+name+"»") {
+			t.Errorf("%s: %v", id, err)
+		}
+	}
+	// использован, но агента уже нет → прежнее «не найден»
+	var used *api.EnrollUsedError
+	if err := svc.Revoke(ctx, api.Actor{}, "u3", true); !errors.Is(err, store.ErrNotFound) || errors.As(err, &used) {
+		t.Errorf("u3: %v", err)
+	}
+	if err := svc.Revoke(ctx, api.Actor{}, "nope", true); !errors.Is(err, store.ErrNotFound) || errors.As(err, &used) {
+		t.Errorf("nope: %v", err)
 	}
 }

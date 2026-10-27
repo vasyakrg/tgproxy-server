@@ -125,6 +125,54 @@ func TestAgentsEnrollToken(t *testing.T) {
 	}
 }
 
+func TestAgentsEnrollTokenForExistingAgent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := writeServerCfg(t, dir, true)
+	writeSignedPackage(t, dir, cfg, "1.2.3")
+	if _, err := run(t, "pki", "init", "-c", cfg); err != nil {
+		t.Fatal(err)
+	}
+	// агента нет → понятная ошибка, токен не выдан
+	if _, err := run(t, "agents", "enroll-token", "-c", cfg, "--agent", "ghost", "--installed"); err == nil || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("missing agent: %v", err)
+	}
+	if out, _ := run(t, "agents", "enroll-token", "-c", cfg, "--list"); !strings.Contains(out, "ожидающих токенов нет") {
+		t.Fatalf("token issued for missing agent: %q", out)
+	}
+	sc, err := config.LoadServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := app.OpenSQLite(context.Background(), sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Agents().Create(context.Background(), store.Agent{ID: "home", Name: "Home", Mode: store.ModeReverse, Weight: 42}); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	out, err := run(t, "agents", "enroll-token", "-c", cfg, "--agent", "home", "--installed")
+	if err != nil || !strings.Contains(out, "sudo tgproxy agent enroll") || strings.Contains(out, "curl") {
+		t.Fatalf("--agent --installed: %v %q", err, out)
+	}
+	out, err = run(t, "agents", "enroll-token", "-c", cfg, "--agent", "home")
+	if err != nil || !strings.Contains(out, "apt-get install") {
+		t.Fatalf("--agent: %v %q", err, out)
+	}
+	if out, err = run(t, "agents", "enroll-token", "-c", cfg, "--list"); err != nil || strings.Count(out, "home") != 2 || !strings.Contains(out, "42") {
+		t.Fatalf("list: %v %q", err, out)
+	}
+	for _, bad := range [][]string{
+		{"--agent", "home", "--name", "x"},
+		{"--agent", "home", "--weight", "5"},
+		{"--agent", "home", "--list"},
+	} {
+		if _, err := run(t, append([]string{"agents", "enroll-token", "-c", cfg}, bad...)...); err == nil {
+			t.Fatalf("%v must fail", bad)
+		}
+	}
+}
+
 func TestAgentsEnrollTokenListRevoke(t *testing.T) {
 	dir := t.TempDir()
 	cfg := writeServerCfg(t, dir, true)

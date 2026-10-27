@@ -74,6 +74,10 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "invalid or expired token")
 		return
 	}
+	if e.AgentID != "" {
+		s.reenroll(w, r, ip, e, req.CSR)
+		return
+	}
 	agentID, err := s.createAgent(r, e)
 	if err != nil {
 		s.fail(w, r, ip, "create agent", err)
@@ -91,9 +95,68 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Notify != nil {
 		s.cfg.Notify(r.Context(), agentID, e.Name)
 	}
+	s.respond(w, certPEM, agentID)
+}
+
+func (s *Service) respond(w http.ResponseWriter, certPEM []byte, agentID string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(Response{AgentID: agentID, Cert: string(certPEM), CA: string(s.cfg.CA.CertPEM())})
+}
+
+// reenroll — повторное подключение существующего агента по токену перевыпуска (e.AgentID).
+// Токен к этому моменту уже погашен атомарно (Consume): если агент за время жизни токена
+// удалён, токен остаётся сожжённым — подписывать некому и нечем, а возвращать погашенный токен в
+// оборот нельзя (он одноразовый); админ выпустит новый. Порядок: подпись нового сертификата →
+// отзыв всех прежних (новый ключ создан на хосте, старый мог утечь) → режим reverse → разрыв
+// живых соединений. Если подпись не удалась, старые сертификаты остаются в силе.
+func (s *Service) reenroll(w http.ResponseWriter, r *http.Request, ip string, e store.Enrollment, csr string) {
+	ctx := r.Context()
+	a, err := s.cfg.Agents.Get(ctx, e.AgentID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		s.observe("agent_gone")
+		s.audit(ctx, "", "enroll.denied", e.AgentID, ip, "agent removed; enrollment="+e.ID)
+		writeErr(w, http.StatusGone, "agent was removed; token is spent, issue a new one")
+		return
+	case err != nil:
+		s.fail(w, r, ip, "get agent", err)
+		return
+	}
+	if s.cfg.Revoker == nil {
+		s.fail(w, r, ip, "revoker not configured", ErrReenrollUnavailable)
+		return
+	}
+	certPEM, serial, err := s.cfg.CA.SignAgentCSR(ctx, []byte(csr), a.ID, 0)
+	if err != nil {
+		s.fail(w, r, ip, "sign csr", err)
+		return
+	}
+	revoked, err := s.cfg.Revoker.RevokeAgentExcept(ctx, a.ID, serial, ReasonReenroll)
+	if err != nil {
+		s.fail(w, r, ip, "revoke old certs", err)
+		return
+	}
+	prevMode := a.Mode
+	if a.Mode != store.ModeReverse || a.URL != "" {
+		a.Mode, a.URL = store.ModeReverse, ""
+		if _, err := s.cfg.Agents.Update(ctx, a); err != nil {
+			s.fail(w, r, ip, "update agent", err)
+			return
+		}
+	}
+	if s.cfg.DropConns != nil {
+		s.cfg.DropConns(a.ID)
+	}
+	if s.cfg.Refresh != nil {
+		if err := s.cfg.Refresh(ctx); err != nil {
+			s.log.Warn("enroll: registry refresh failed", "agent", a.ID, "err", err)
+		}
+	}
+	s.observe("ok")
+	s.audit(ctx, "", "agent.reenroll", a.ID, ip, fmt.Sprintf("enrollment=%s revoked=%d prev_mode=%s", e.ID, revoked, prevMode))
+	s.log.Info("agent re-enrolled", "agent", a.ID, "revoked", revoked, "prev_mode", prevMode, "ip", ip)
+	s.respond(w, certPEM, a.ID)
 }
 
 func (s *Service) fail(w http.ResponseWriter, r *http.Request, ip, stage string, err error) {
