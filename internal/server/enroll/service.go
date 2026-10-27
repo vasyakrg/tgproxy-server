@@ -224,7 +224,10 @@ func (s *Service) installCmd(token string, pkg PackageInfo) string {
 		fmt.Sprintf(`(cd "$T" && echo '%s  %s' | sha256sum -c -)`, pkg.SHA256, deb),
 		fmt.Sprintf(`$S apt-get install -y "$T/%s"`, deb),
 		s.enrollCmdAs(token, "$S"),
-		"$S systemctl enable --now tgproxy-agent",
+		// restart, а не enable --now: если агент уже работал (повторный enroll), postinst
+		// перезапустил его со старым конфигом, и только restart применит записанный enroll.
+		"$S systemctl enable tgproxy-agent",
+		"$S systemctl restart tgproxy-agent",
 		")",
 	}
 	return strings.Join(lines, "\n")

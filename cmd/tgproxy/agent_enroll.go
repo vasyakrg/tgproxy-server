@@ -47,7 +47,7 @@ func newAgentEnrollCmd() *cobra.Command {
 				return err
 			}
 			updHint := enableUpdatePath(cmd.Context())
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "агент %q зарегистрирован; ключ и сертификаты: %s, %s, %s\nконфиг: %s (mode: reverse)\nзапуск: systemctl enable --now tgproxy-agent\n%s",
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "агент %q зарегистрирован; ключ и сертификаты: %s, %s, %s\nконфиг: %s (mode: reverse)\nзапуск: systemctl enable tgproxy-agent && systemctl restart tgproxy-agent\n%s",
 				res.AgentID, res.KeyFile, res.CertFile, res.CAFile, res.ConfigPath, updHint)
 			return nil
 		},

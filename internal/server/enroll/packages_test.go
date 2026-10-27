@@ -262,11 +262,20 @@ func TestInstallCmd(t *testing.T) {
 		`command -v curl >/dev/null || { $S apt-get update -qq && $S apt-get install -y -qq curl ca-certificates; }`,
 		"-----BEGIN CERTIFICATE-----\\n",
 		"printf %s '" + is.Token + "' | $S tgproxy agent enroll --token-stdin --server https://tgp.example.com:8444 --ca-fingerprint " + f.ca.CAFingerprint(),
-		"$S systemctl enable --now tgproxy-agent",
+		// restart, а не enable --now: на хосте с уже запущенным агентом (повторный enroll)
+		// postinst перезапускает его со старым конфигом, а enable --now запущенный сервис не трогает.
+		"$S systemctl enable tgproxy-agent",
+		"$S systemctl restart tgproxy-agent",
 	} {
 		if !strings.Contains(is.Cmdline, want) {
 			t.Errorf("cmdline lacks %q\n%s", want, is.Cmdline)
 		}
+	}
+	if strings.Index(is.Cmdline, "tgproxy agent enroll") > strings.Index(is.Cmdline, "systemctl restart tgproxy-agent") {
+		t.Error("restart must follow enroll")
+	}
+	if strings.Contains(is.Cmdline, "enable --now") {
+		t.Error("enable --now не перезапускает уже работающего агента")
 	}
 	for _, bad := range []string{" -k ", "--insecure", "--cacert-", "-H 'Authorization", "TGP_ENROLL_TOKEN"} {
 		if strings.Contains(is.Cmdline, bad) {
