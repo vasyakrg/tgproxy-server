@@ -170,7 +170,7 @@ func (o *recObserver) Traffic(id int64, _ string, n uint, fromTG bool) {
 		o.add("traffic:" + strconv.FormatInt(id, 10) + ":" + strconv.FormatBool(fromTG))
 	}
 }
-func (o *recObserver) Finish(id int64, _ string) { o.add("finish:" + strconv.FormatInt(id, 10)) }
+func (o *recObserver) Finish(id int64, _, _, _ string) { o.add("finish:" + strconv.FormatInt(id, 10)) }
 func (o *recObserver) all() []string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -743,7 +743,7 @@ func TestNew_Validation(t *testing.T) {
 
 func TestEventSink_ReplayWithoutStartIsIgnored(t *testing.T) {
 	var calls atomic.Int32
-	sink := newEventSink(1, nil, func(netip.Addr) { calls.Add(1) })
+	sink := newEventSink(1, nil, func(netip.Addr) { calls.Add(1) }, nil)
 	sink.Send(context.Background(), mtglib.NewEventReplayAttack("unknown"))
 	sink.Send(context.Background(), mtglib.NewEventStart("s", net.ParseIP("::ffff:198.51.100.9")))
 	sink.Send(context.Background(), mtglib.NewEventTraffic("s", 1, true))

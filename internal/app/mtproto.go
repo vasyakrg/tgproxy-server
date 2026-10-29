@@ -17,6 +17,7 @@ import (
 	"github.com/vasyakrg/tgproxy-server/internal/metrics"
 	"github.com/vasyakrg/tgproxy-server/internal/mtproto"
 	"github.com/vasyakrg/tgproxy-server/internal/mtproto/mux"
+	"github.com/vasyakrg/tgproxy-server/internal/mtproto/trace"
 	"github.com/vasyakrg/tgproxy-server/internal/mtproto/upstream"
 	"github.com/vasyakrg/tgproxy-server/internal/pki"
 	"github.com/vasyakrg/tgproxy-server/internal/redact"
@@ -43,8 +44,9 @@ type mtprotoState struct {
 	names    *secretNames
 	mobs     *mtproto.MetricsObserver
 	journal  *mtproto.Journal
-	dcs      *dcCounters // стримы/ошибки по (agent, dc) для матрицы UI
-	listener string      // метка tgp_mtproto_client_conns: shared|dedicated
+	trace    *trace.Registry // агент и причина закрытия для журнала
+	dcs      *dcCounters     // стримы/ошибки по (agent, dc) для матрицы UI
+	listener string          // метка tgp_mtproto_client_conns: shared|dedicated
 }
 
 // Route реализует mux.Router: до создания Manager MTProto недоступен (fallthrough).
@@ -187,12 +189,14 @@ func (s *Server) wireMTProto(cfg *config.ServerConfig) error {
 	m.journal = mtproto.NewJournal(s.st.MTProtoSessions(), s.logger)
 	s.obs.coll.SetMTProto(m.journal)
 	m.dcs = newDCCounters(s.obs.m)
+	m.trace = &trace.Registry{}
 	m.network, err = upstream.New(upstream.Options{
 		Picker:      upstream.KeyedPicker{K: m.keyed},
 		Streams:     s.tr,
 		Resolve:     s.reg.Ref,
 		DialTimeout: cfg.MTProto.AgentPool.DialTimeout,
 		Metrics:     m.dcs,
+		Trace:       m.trace,
 	})
 	if err != nil {
 		return fmt.Errorf("app: mtproto network: %w", err)
@@ -393,6 +397,7 @@ func (s *Server) startMTProto(cfg *config.ServerConfig, proxyLn net.Listener) (n
 		Available: s.mt.available.Load,
 		OnReplay:  s.onMTProtoReplay,
 		Observer:  mtproto.MultiObserver(s.mt.mobs, s.mt.journal),
+		Trace:     s.mt.trace,
 		Logger:    s.logger, Config: mc,
 	})
 	if err != nil {

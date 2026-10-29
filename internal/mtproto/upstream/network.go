@@ -14,6 +14,7 @@ import (
 
 	"github.com/9seconds/mtg/v2/essentials"
 
+	"github.com/vasyakrg/tgproxy-server/internal/mtproto/trace"
 	"github.com/vasyakrg/tgproxy-server/internal/server/balancer"
 	"github.com/vasyakrg/tgproxy-server/internal/transport"
 )
@@ -87,6 +88,8 @@ type Options struct {
 	RetryMemory time.Duration
 	Now         func() time.Time
 	Metrics     Metrics // nil — без метрик
+	// Trace — диагностика клиентского соединения текущей горутины (nil — без неё).
+	Trace *trace.Registry
 }
 
 // Network реализует mtglib.Network.
@@ -159,12 +162,14 @@ func (n *Network) DialContext(ctx context.Context, network, address string) (ess
 	}
 	agent := lease.Agent()
 	name := string(agent)
+	tr := n.o.Trace.Current()
 	ref, ok := n.o.Resolve(agent)
 	if !ok {
 		lease.Report(balancer.Result{TransportError: true})
 		lease.Release()
 		n.remember(dc, agent)
 		n.o.Metrics.MTProtoUpstreamError(name, dc, phaseNoAgent)
+		tr.Dial(name, false)
 		return nil, fmt.Errorf("%w: %s", ErrNoAgent, agent)
 	}
 
@@ -184,11 +189,13 @@ func (n *Network) DialContext(ctx context.Context, network, address string) (ess
 			}
 			n.o.Metrics.MTProtoUpstreamError(name, dc, phase)
 		}
+		tr.Dial(name, false)
 		return nil, err
 	}
 	lease.Report(balancer.Result{Latency: n.o.Now().Sub(start)})
 	n.o.Metrics.MTProtoStreams(name, dc, 1)
-	return &leaseConn{Conn: conn, lease: lease, m: n.o.Metrics, agent: name, dc: dc}, nil
+	tr.Dial(name, true)
+	return &leaseConn{Conn: conn, lease: lease, m: n.o.Metrics, agent: name, dc: dc, tr: tr}, nil
 }
 
 // pick выбирает агента, исключая недавно упавшего для этого DC. Mtg вызывает

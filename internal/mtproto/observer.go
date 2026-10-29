@@ -95,7 +95,7 @@ func (o *MetricsObserver) ConnectedToDC(secretID int64, streamID string, _ int) 
 func (o *MetricsObserver) Traffic(int64, string, uint, bool) {}
 
 // Finish — Observer.
-func (o *MetricsObserver) Finish(secretID int64, streamID string) {
+func (o *MetricsObserver) Finish(secretID int64, streamID, _, _ string) {
 	k := obsKey{secretID, streamID}
 	o.mu.Lock()
 	s := o.live[k]
@@ -178,8 +178,8 @@ func (m multiObserver) Traffic(id int64, s string, n uint, fromTelegram bool) {
 	}
 }
 
-func (m multiObserver) Finish(id int64, s string) {
+func (m multiObserver) Finish(id int64, s, reason, agent string) {
 	for _, o := range m {
-		o.Finish(id, s)
+		o.Finish(id, s, reason, agent)
 	}
 }

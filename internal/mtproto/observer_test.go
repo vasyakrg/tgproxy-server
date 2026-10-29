@@ -44,11 +44,11 @@ func TestMetricsObserverLifecycle(t *testing.T) {
 	o.ConnectedToDC(1, "s1", 4) // повтор не считается
 	o.Traffic(1, "s1", 10, true)
 	now = now.Add(3 * time.Second)
-	o.Finish(1, "s1")
+	o.Finish(1, "s1", "", "")
 
 	o.Start(9, "s2", ip) // неизвестный секрет, до DC не дошёл
-	o.Finish(9, "s2")
-	o.Finish(9, "s2") // повторный Finish игнорируется
+	o.Finish(9, "s2", "", "")
+	o.Finish(9, "s2", "", "") // повторный Finish игнорируется
 
 	if got := rec.conns; len(got) != 2 || got[0] != "alice:ok" || got[1] != "unknown:closed" {
 		t.Fatalf("conns = %v", got)
@@ -80,10 +80,10 @@ type seqObs struct {
 	log  *[]string
 }
 
-func (s seqObs) Start(int64, string, netip.Addr)   { *s.log = append(*s.log, s.name+".start") }
-func (s seqObs) ConnectedToDC(int64, string, int)  { *s.log = append(*s.log, s.name+".dc") }
-func (s seqObs) Traffic(int64, string, uint, bool) { *s.log = append(*s.log, s.name+".traffic") }
-func (s seqObs) Finish(int64, string)              { *s.log = append(*s.log, s.name+".finish") }
+func (s seqObs) Start(int64, string, netip.Addr)      { *s.log = append(*s.log, s.name+".start") }
+func (s seqObs) ConnectedToDC(int64, string, int)     { *s.log = append(*s.log, s.name+".dc") }
+func (s seqObs) Traffic(int64, string, uint, bool)    { *s.log = append(*s.log, s.name+".traffic") }
+func (s seqObs) Finish(int64, string, string, string) { *s.log = append(*s.log, s.name+".finish") }
 
 func TestMultiObserver(t *testing.T) {
 	if MultiObserver() != nil || MultiObserver(nil, nil) != nil {
@@ -98,7 +98,7 @@ func TestMultiObserver(t *testing.T) {
 	m.Start(1, "s", netip.Addr{})
 	m.ConnectedToDC(1, "s", 2)
 	m.Traffic(1, "s", 1, true)
-	m.Finish(1, "s")
+	m.Finish(1, "s", "", "")
 	want := []string{"a.start", "b.start", "a.dc", "b.dc", "a.traffic", "b.traffic", "a.finish", "b.finish"}
 	if len(log) != len(want) {
 		t.Fatalf("log = %v", log)
@@ -119,9 +119,9 @@ func TestMetricsObserverActive(t *testing.T) {
 	if o.Active(1) != 2 || o.Active(2) != 1 || o.Active(3) != 0 {
 		t.Fatalf("active = %d %d %d", o.Active(1), o.Active(2), o.Active(3))
 	}
-	o.Finish(1, "a")
-	o.Finish(1, "a") // повторный Finish не уменьшает
-	o.Finish(2, "c")
+	o.Finish(1, "a", "", "")
+	o.Finish(1, "a", "", "") // повторный Finish не уменьшает
+	o.Finish(2, "c", "", "")
 	if o.Active(1) != 1 || o.Active(2) != 0 || len(o.active) != 1 {
 		t.Fatalf("active after finish = %d %d %v", o.Active(1), o.Active(2), o.active)
 	}

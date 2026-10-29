@@ -261,6 +261,7 @@ func (blockAll) Shutdown()            {}
 type dcConn struct {
 	dc     int // номер DC из handshake (после abs() у mtg)
 	closed chan struct{}
+	conn   net.Conn // закрытие — «DC завершил соединение»
 
 	mu       sync.Mutex
 	received []byte
@@ -316,6 +317,7 @@ func (d *fakeDC) handle(c net.Conn) {
 	dc := &dcConn{
 		dc:     int(int16(binary.LittleEndian.Uint16(dec[60:62]))),
 		closed: make(chan struct{}),
+		conn:   c,
 	}
 	defer close(dc.closed)
 	d.accepted <- dc

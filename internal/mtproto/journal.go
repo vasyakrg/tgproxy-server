@@ -17,9 +17,6 @@ const (
 	DefaultJournalQueue    = 100_000
 	DefaultJournalMaxAge   = 30 * 24 * time.Hour // как error_events (history.DefaultErrorAge)
 	DefaultJournalPruneGap = 5 * time.Minute
-
-	// journalCloseReason — mtg не сообщает причину закрытия.
-	journalCloseReason = "closed"
 )
 
 type sessKey struct {
@@ -38,7 +35,6 @@ type session struct {
 // Journal — Observer, собирающий завершённые соединения в mtproto_sessions.
 // Горячий путь (методы Observer) в БД не пишет и не блокируется: завершённые
 // сессии попадают в ограниченную очередь, переполнение увеличивает Dropped().
-// Поле агента в записи пустое: события mtg не сообщают, через какого агента идёт relay.
 // Также реализует history.MTProtoCounters.
 type Journal struct {
 	Repo store.MTProtoSessionRepo
@@ -130,7 +126,7 @@ func (j *Journal) Traffic(secretID int64, streamID string, n uint, fromTelegram 
 }
 
 // Finish — Observer: сессия уходит в очередь записи.
-func (j *Journal) Finish(secretID int64, streamID string) {
+func (j *Journal) Finish(secretID int64, streamID, reason, agent string) {
 	v, ok := j.active.LoadAndDelete(sessKey{secretID, streamID})
 	if !ok {
 		return
@@ -144,7 +140,8 @@ func (j *Journal) Finish(secretID int64, streamID string) {
 		DC:          int(s.dc.Load()),
 		BytesIn:     s.bytesIn.Load(),
 		BytesOut:    s.bytesOut.Load(),
-		CloseReason: journalCloseReason,
+		AgentID:     agent,
+		CloseReason: reason,
 	}
 	if s.ip.IsValid() {
 		rec.ClientIP = s.ip.String()

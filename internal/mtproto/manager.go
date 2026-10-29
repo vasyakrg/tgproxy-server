@@ -20,6 +20,7 @@ import (
 	"github.com/9seconds/mtg/v2/mtglib"
 
 	"github.com/vasyakrg/tgproxy-server/internal/config"
+	"github.com/vasyakrg/tgproxy-server/internal/mtproto/trace"
 	"github.com/vasyakrg/tgproxy-server/internal/store"
 )
 
@@ -60,8 +61,10 @@ type Options struct {
 	// OnReplay вызывается при повторе ClientHello (→ bans.Record mtproto_replay).
 	OnReplay func(ip netip.Addr)
 	Observer Observer
-	Logger   *slog.Logger
-	Config   config.MTProtoConfig
+	// Trace — регистр диагностики соединений, общий с upstream.Network (nil — без неё).
+	Trace  *trace.Registry
+	Logger *slog.Logger
+	Config config.MTProtoConfig
 
 	// PollInterval — период опроса версии (по умолчанию DefaultPollInterval).
 	PollInterval time.Duration
@@ -364,7 +367,7 @@ func (m *Manager) newInstance(s store.MTProtoSecret) (*instance, error) {
 		AntiReplayCache:             m.cache,
 		IPBlocklist:                 ipblocklist.NewNoop(),
 		IPAllowlist:                 ipblocklist.NewNoop(),
-		EventStream:                 newEventSink(s.ID, m.o.Observer, m.o.OnReplay),
+		EventStream:                 newEventSink(s.ID, m.o.Observer, m.o.OnReplay, m.o.Trace),
 		Logger:                      newMTGLogger(m.logger, inst.key),
 		PreferIP:                    "only-ipv4",
 		AllowFallbackOnUnknownDC:    true,
@@ -443,5 +446,8 @@ func (s *snapshot) Serve(idx int, conn net.Conn) {
 		return
 	}
 	defer in.conns.leave(conn)
-	in.proxy.ServeConn(ec)
+	// ServeConn, Dial и события mtg идут в этой горутине (см. пакет trace).
+	tr, unbind := s.m.o.Trace.Bind()
+	defer unbind()
+	in.proxy.ServeConn(tr.WrapClient(ec))
 }

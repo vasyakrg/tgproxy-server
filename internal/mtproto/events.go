@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"github.com/9seconds/mtg/v2/mtglib"
+
+	"github.com/vasyakrg/tgproxy-server/internal/mtproto/trace"
 )
 
 // Observer получает события соединений с разметкой по секрету. Методы
@@ -17,8 +19,9 @@ type Observer interface {
 	ConnectedToDC(secretID int64, streamID string, dc int)
 	// Traffic — байты на стороне Telegram: fromTelegram=true — от Telegram клиенту.
 	Traffic(secretID int64, streamID string, n uint, fromTelegram bool)
-	// Finish — соединение завершено (причины закрытия mtg не сообщает).
-	Finish(secretID int64, streamID string)
+	// Finish — соединение завершено: reason — trace.Reason* (кто завершил relay),
+	// agent — агент последней попытки стрима ("" — до Dial не дошло).
+	Finish(secretID int64, streamID, reason, agent string)
 }
 
 // eventSink — mtglib.EventStream одного инстанса: события mtg не несут secret id,
@@ -28,13 +31,14 @@ type eventSink struct {
 	secretID int64
 	obs      Observer
 	onReplay func(netip.Addr)
+	trace    *trace.Registry
 
 	mu      sync.Mutex
 	clients map[string]netip.Addr
 }
 
-func newEventSink(secretID int64, obs Observer, onReplay func(netip.Addr)) *eventSink {
-	return &eventSink{secretID: secretID, obs: obs, onReplay: onReplay, clients: make(map[string]netip.Addr)}
+func newEventSink(secretID int64, obs Observer, onReplay func(netip.Addr), tr *trace.Registry) *eventSink {
+	return &eventSink{secretID: secretID, obs: obs, onReplay: onReplay, trace: tr, clients: make(map[string]netip.Addr)}
 }
 
 func (e *eventSink) Send(_ context.Context, ev mtglib.Event) {
@@ -68,7 +72,8 @@ func (e *eventSink) Send(_ context.Context, ev mtglib.Event) {
 		delete(e.clients, v.StreamID())
 		e.mu.Unlock()
 		if e.obs != nil {
-			e.obs.Finish(e.secretID, v.StreamID())
+			tr := e.trace.Current()
+			e.obs.Finish(e.secretID, v.StreamID(), tr.Reason(), tr.Agent())
 		}
 	}
 }

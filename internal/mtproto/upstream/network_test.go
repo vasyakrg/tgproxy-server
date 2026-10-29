@@ -17,6 +17,7 @@ import (
 	"github.com/9seconds/mtg/v2/essentials"
 	"github.com/9seconds/mtg/v2/mtglib"
 
+	"github.com/vasyakrg/tgproxy-server/internal/mtproto/trace"
 	"github.com/vasyakrg/tgproxy-server/internal/server/balancer"
 	"github.com/vasyakrg/tgproxy-server/internal/tgapi"
 	"github.com/vasyakrg/tgproxy-server/internal/transport"
@@ -450,4 +451,28 @@ func getReq(t *testing.T, url string) *http.Request {
 	r, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	req.NoError(t, err)
 	return r
+}
+
+func TestDial_TraceAgentAndUpstreamClose(t *testing.T) {
+	p := &fakePicker{agents: []string{"a", "b"}}
+	s := &fakeStreams{conn: func() net.Conn { return &halfConn{Conn: pipeConn()} }, fail: map[string]error{"a": errors.New("boom")}}
+	reg := &trace.Registry{}
+	n, err := New(Options{Picker: p, Streams: s, Resolve: resolve, DialTimeout: time.Second, Trace: reg})
+	req.NoError(t, err)
+	tr, unbind := reg.Bind()
+	defer unbind()
+
+	_, err = n.Dial("tcp", dc2Addr)
+	req.Error(t, err)
+	req.Equal(t, "a", tr.Agent())
+	req.Equal(t, trace.ReasonDialFailed, tr.Reason())
+
+	c, err := n.Dial("tcp", dc2Addr)
+	req.NoError(t, err)
+	req.Equal(t, "b", tr.Agent())
+	_ = c.(*leaseConn).Conn.Close() // DC/агент закрыл стрим
+	_, rerr := c.Read(make([]byte, 1))
+	req.Error(t, rerr)
+	req.NoError(t, c.CloseWrite()) // mtg: pump Telegram → клиент завершён
+	req.Equal(t, trace.ReasonServer, tr.Reason(), "io.ErrClosedPipe закрытого pipe — локальное закрытие")
 }

@@ -67,8 +67,8 @@ func TestJournalSessionFields(t *testing.T) {
 		t.Fatalf("active=%d", j.ActiveConns())
 	}
 	now = now.Add(3 * time.Second)
-	j.Finish(7, "s1")
-	j.Finish(7, "s1") // повторный Finish безвреден
+	j.Finish(7, "s1", "upstream_eof", "kz1")
+	j.Finish(7, "s1", "client_eof", "") // повторный Finish безвреден
 	if j.ActiveConns() != 0 {
 		t.Fatalf("active=%d", j.ActiveConns())
 	}
@@ -78,7 +78,7 @@ func TestJournalSessionFields(t *testing.T) {
 	got := repo.batches[0][0]
 	want := store.MTProtoSession{
 		StartedAt: now.Add(-3 * time.Second), EndedAt: now, ClientIP: "1.2.3.4",
-		SecretID: 7, DC: 4, BytesIn: 100, BytesOut: 250, CloseReason: "closed",
+		SecretID: 7, DC: 4, AgentID: "kz1", BytesIn: 100, BytesOut: 250, CloseReason: "upstream_eof",
 	}
 	if got != want {
 		t.Fatalf("got %+v want %+v", got, want)
@@ -94,7 +94,7 @@ func TestJournal10kOneBatch(t *testing.T) {
 	for i := range 10_000 {
 		id := fmt.Sprint(i)
 		j.Start(1, id, netip.MustParseAddr("10.0.0.1"))
-		j.Finish(1, id)
+		j.Finish(1, id, "", "")
 	}
 	if err := j.FlushNow(context.Background()); err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestJournalOverflowDoesNotBlock(t *testing.T) {
 		for i := range 100 {
 			id := fmt.Sprint(i)
 			j.Start(1, id, netip.Addr{})
-			j.Finish(1, id)
+			j.Finish(1, id, "", "")
 		}
 	}()
 	select {
@@ -136,7 +136,7 @@ func TestJournalFailedFlushRequeues(t *testing.T) {
 	for i := range 3 {
 		id := fmt.Sprint(i)
 		j.Start(1, id, netip.Addr{})
-		j.Finish(1, id)
+		j.Finish(1, id, "", "")
 	}
 	if err := j.FlushNow(context.Background()); err == nil {
 		t.Fatal("ожидалась ошибка")
@@ -160,7 +160,7 @@ func TestJournalRunFlushesPeriodicallyAndOnStop(t *testing.T) {
 	go func() { j.Run(ctx); close(done) }()
 
 	j.Start(1, "a", netip.Addr{})
-	j.Finish(1, "a")
+	j.Finish(1, "a", "", "")
 	deadline := time.Now().Add(2 * time.Second)
 	for repo.total() < 1 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
@@ -169,7 +169,7 @@ func TestJournalRunFlushesPeriodicallyAndOnStop(t *testing.T) {
 		t.Fatal("периодический сброс не сработал")
 	}
 	j.Start(1, "b", netip.Addr{})
-	j.Finish(1, "b")
+	j.Finish(1, "b", "", "")
 	cancel()
 	<-done
 	if repo.total() != 2 {
@@ -215,7 +215,7 @@ func TestJournalConcurrentRace(t *testing.T) {
 				j.ConnectedToDC(int64(w), id, 2)
 				j.Traffic(int64(w), id, 10, i%2 == 0)
 				_ = j.FlushNow(context.Background())
-				j.Finish(int64(w), id)
+				j.Finish(int64(w), id, "", "")
 			}
 		}()
 	}

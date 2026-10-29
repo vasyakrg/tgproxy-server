@@ -249,7 +249,21 @@ ReadWritePaths=/data/tgproxy/agent
    - `upstream_errors_total{phase="timeout"|"dial"}` у одного агента: агент не достаёт DC (фаервол, маршрут); логи агента `mtproto dial failed`/`mtproto dial timeout`.
    - `phase="no_agent"`: для DC нет подходящего агента (все `down`, draining, без проб — первая проба идёт при старте агента и далее раз в `dc_probe_interval`).
    - Обрыв всех соединений агента при перезапуске/обновлении агента — штатно: клиент Telegram переподключается сам.
-   - Журнал соединений (`mtproto_sessions`: время, IP, секрет, DC, байты) хранится 30 суток; поле агента и причина закрытия в нём не заполняются.
+   - Журнал соединений (`mtproto_sessions`: время, IP, секрет, DC, агент, байты, причина закрытия) хранится 30 суток. `close_reason` — какая сторона завершила relay первой:
+
+     | `close_reason` | Что произошло |
+     |---|---|
+     | `client_eof` | клиент закрыл соединение (FIN) |
+     | `client_error` | ошибка сокета клиента: RST, обрыв, клиент не принимает данные |
+     | `upstream_eof` | агент или DC завершил стрим (в т.ч. `idle_timeout`/`max_duration` агента) |
+     | `upstream_error` | ошибка стрима к агенту (обрыв h2, сброс стрима) |
+     | `idle_timeout` | нет трафика `mtproto.idle_timeout` (mtg) |
+     | `server_close` | соединение закрыл сервер: отзыв секрета, остановка, рестарт |
+     | `dial_failed` | ни один агент не открыл стрим к DC (`agent_id` — последняя попытка) |
+     | `not_connected` | завершено до выбора агента (FakeTLS/obfuscated рукопожатие) |
+     | `closed` | причина не определена |
+
+     Разбор зависшего клиента: `sqlite3 -readonly /var/lib/tgproxy/tgproxy.db "select datetime(started_at/1000,'unixepoch'), (ended_at-started_at)/1000, dc, agent_id, bytes_in, bytes_out, close_reason from mtproto_sessions where client_ip='<ip>' order by id desc limit 50"`.
 
 ### Признаки блокировки и переход на dedicated IP
 
