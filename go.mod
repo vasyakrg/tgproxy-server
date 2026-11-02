@@ -1,6 +1,6 @@
 module github.com/vasyakrg/tgproxy-server
 
-go 1.26.0
+go 1.26.9
 
 toolchain go1.27.3
 
@@ -8,13 +8,13 @@ require (
 	aead.dev/minisign v0.3.0
 	github.com/9seconds/mtg/v2 v2.2.8
 	github.com/a-h/templ v0.3.1100
-	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc
+	github.com/boombuler/barcode v1.1.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/maxmind/mmdbwriter v1.2.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/oschwald/maxminddb-golang/v2 v2.8.0
-	github.com/pires/go-proxyproto v0.11.0
-	github.com/pkg/sftp v1.13.9
+	github.com/pires/go-proxyproto v0.16.0
+	github.com/pkg/sftp v1.13.12
 	github.com/pquerna/otp v1.5.0
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/prometheus/client_golang v1.25.0
@@ -22,9 +22,9 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/tsenart/vegeta/v12 v12.13.0
 	go.uber.org/goleak v1.3.0
-	go.yaml.in/yaml/v3 v3.0.5
+	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/crypto v0.58.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/term v0.47.0
 	golang.org/x/time v0.16.0
 	modernc.org/sqlite v1.61.0
