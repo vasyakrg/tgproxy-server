@@ -8,7 +8,7 @@
 
 | Компонент | Версия | Примечание |
 |---|---|---|
-| github.com/9seconds/mtg/v2 | **v2.2.8** (pin, без `@latest`) | MIT, `go 1.26` — совместимо с `go.mod`; импортируются только `mtglib`, `antireplay`, `ipblocklist`, `events`, `essentials`; пакет `network` — нет |
+| github.com/9seconds/mtg/v2 | **v2.3.0** (pin, без `@latest`) | MIT, `go 1.26` — совместимо с `go.mod`; импортируются только `mtglib`, `antireplay`, `ipblocklist`, `events`, `essentials`; пакет `network` — нет |
 | транзитивные | `panjf2000/ants/v2`, `pires/go-proxyproto`, `OneOfOne/xxhash`, `tylertreat/BoomFilters` | лицензии и `govulncheck` — в M9-T0 |
 
 Обновление mtg — только отдельной задачей с прогоном контракт-тестов M9-T0.
@@ -245,7 +245,7 @@
 | Риск | Мера |
 |---|---|
 | HOL и лимиты h2 при тысячах стримов (медиа тормозит Bot API) | отдельный пул TCP (dial) и класс соединений ALPN (reverse); `MaxConcurrentStreams` 500, окна ≥4 МБ, динамический пул; нагрузочный smoke M13-T5 с контролем p95 Bot API; запасной вариант — TLS-соединение на сессию с пулом прогретых |
-| Нестабильный API mtg, скрытое поведение (panic на `RemoteAddr`, `Shutdown`) | pin v2.2.8, адаптер в `internal/mtproto`, контракт-тесты M9-T0 до любой реализации |
+| Нестабильный API mtg, скрытое поведение (panic на `RemoteAddr`, `Shutdown`) | pin v2.3.0, адаптер в `internal/mtproto`, контракт-тесты M9-T0 до любой реализации |
 | Рассинхрон таблиц DC (mtg vs агент) | тест эквивалентности в M10-T4; обновление таблицы только релизом |
 | Расхождение времени клиент/сервер → массовые отказы рукопожатия | окно `time_skew` 2m, NTP-проверка при старте, метрика `handshake_failures_total{reason="time_skew"}` |
 | Двойная проверка replay (mux + mtg) даёт ложные повторы | replay проверяется только в mtg (общий кэш); mux в кэш не пишет — тест в M10-T3 |

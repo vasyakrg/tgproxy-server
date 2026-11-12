@@ -3,7 +3,7 @@ tgproxy-server — уведомления о стороннем ПО (MTProto-п
 Компоненты ниже входят в бинарь сервера. Полные тексты лицензий лежат в
 исходниках модулей (файл LICENSE) и должны сопровождать распространяемые копии.
 
-1. github.com/9seconds/mtg/v2 v2.2.8 — MIT License
+1. github.com/9seconds/mtg/v2 v2.3.0 — MIT License
    Copyright (c) 2018 Sergey Arkhipov
    https://github.com/9seconds/mtg
    Используются пакеты mtglib, antireplay, ipblocklist, events, essentials.

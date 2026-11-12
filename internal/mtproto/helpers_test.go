@@ -559,7 +559,7 @@ func newHarness(t *testing.T, cfg harnessCfg) *harness {
 		TolerateTimeSkewness:        cfg.skew,
 		IdleTimeout:                 time.Minute,
 		HandshakeTimeout:            testTimeout,
-		DomainFrontingIP:            "127.0.0.1",
+		DomainFrontingHost:          "127.0.0.1",
 		DomainFrontingPort:          uint(cfg.frontingPort),
 		DomainFrontingProxyProtocol: cfg.frontingPP,
 	}

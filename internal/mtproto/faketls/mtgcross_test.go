@@ -84,7 +84,7 @@ func TestMatchAgreesWithMTG(t *testing.T) {
 		TolerateTimeSkewness: skew,
 		IdleTimeout:          time.Minute,
 		HandshakeTimeout:     5 * time.Second,
-		DomainFrontingIP:     "127.0.0.1",
+		DomainFrontingHost:   "127.0.0.1",
 		DomainFrontingPort:   1,
 	})
 	if err != nil {
