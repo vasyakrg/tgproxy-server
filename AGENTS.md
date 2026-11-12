@@ -2,7 +2,7 @@
 
 Прокси для Telegram Bot API: один бинарь `tgproxy` (режимы `server` и `agent`), связь server ↔ agent по mTLS в режимах `dial` (сервер звонит агенту) и `reverse` (агент за NAT сам подключается к `agent_gateway`). Плюс beta-режим MTProto-прокси для клиентов Telegram (FakeTLS). Состояние — SQLite, админка — templ + htmx, поставка — deb + подписанные minisign релизы с самообновлением.
 
-Текущая версия — v0.2.3. Статус: MTProto beta и по умолчанию выключен (`mtproto.enabled: false`).
+Версия — из тега (`git describe --tags`), релизы публикуются в GitHub Releases. Статус: MTProto beta и по умолчанию выключен (`mtproto.enabled: false`).
 
 ## Источник правды
 
