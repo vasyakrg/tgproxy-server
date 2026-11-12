@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -492,36 +493,60 @@ func TestStreamDialErrors(t *testing.T) {
 }
 
 // Bot API-запросы (Dial) и MTProto-стримы (DialStream) идут по разным TCP:
-// 500 стримов не занимают соединение Bot API.
+// 500 стримов не занимают соединение Bot API и умещаются в одно TCP стримов.
+//
+// Прогрев обязателен. Пока идёт TLS-рукопожатие, клиент Go считает, что
+// соединение держит initialMaxConcurrentStreams (100) потоков: бурст из 500
+// первых запросов открывает до ceil(500/100) = 5 TCP и провоцирует гонку
+// рукопожатий (в логах http2 — «no cached connection was available», часть
+// стримов падает с reset/broken pipe). Один стрим до бурста фиксирует
+// соединение и доносит до транспорт SETTINGS агента (лимит 500), после чего
+// остальные стримы помещаются в него же.
 func TestStreamSeparateTCPFromBotAPI(t *testing.T) {
 	const n = 500
 	e := newEnv(t)
 	var (
 		mu       sync.Mutex
-		streamRA = map[string]bool{}
-		botRA    = map[string]bool{}
-		started  sync.WaitGroup
+		streamRA = map[string]bool{} // TCP, по которым пришли MTProto-стримы
+		botRA    = map[string]bool{} // TCP, по которым пришли Bot API-запросы
 	)
-	started.Add(n)
+	var seen atomic.Int64 // сколько MTProto-стримов дошло до агента
+	// waitStreams ждёт, пока агент примет want стримов: ожидание ограничено
+	// дедлайном, иначе тест висел бы навсегда, если стрим не открылся.
+	waitStreams := func(want int, d time.Duration) {
+		t.Helper()
+		deadline := time.Now().Add(d)
+		for seen.Load() < int64(want) {
+			if time.Now().After(deadline) {
+				t.Fatalf("агент принял %d MTProto-стримов из %d за %s", seen.Load(), want, d)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 	ref := e.streamAgent(t, "a1", n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
 		if r.URL.Path == "/tg/ping" {
+			mu.Lock()
 			botRA[r.RemoteAddr] = true
 			mu.Unlock()
 			w.Header().Set(tgapi.HeaderSource, tgapi.SourceTelegram)
 			_, _ = w.Write([]byte("{}"))
 			return
 		}
+		mu.Lock()
 		streamRA[r.RemoteAddr] = true
 		mu.Unlock()
+		seen.Add(1)
 		accept(w)
-		started.Done()
 		<-r.Context().Done()
 	}))
 	st := e.streams(t)
 	dial := e.dial(t)
 
-	conns := make([]net.Conn, n)
+	// Прогрев: фиксирует одно TCP и доносит до транспорта SETTINGS агента.
+	open(t, st, ref, 2)
+	waitStreams(1, 10*time.Second)
+
+	conns := make([]net.Conn, n-1)
 	var wg sync.WaitGroup
 	for i := range conns {
 		wg.Add(1)
@@ -545,10 +570,13 @@ func TestStreamSeparateTCPFromBotAPI(t *testing.T) {
 			}
 		}
 	})
-	started.Wait()
+	waitStreams(n, 15*time.Second)
 
 	for range 3 {
-		resp, _ := do(t, dial, ref, http.MethodGet, "/tg/ping", nil)
+		resp, outcome := do(t, dial, ref, http.MethodGet, "/tg/ping", nil)
+		if resp == nil {
+			t.Fatalf("Bot API-запрос не удался: %+v", outcome)
+		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 	}
@@ -562,9 +590,10 @@ func TestStreamSeparateTCPFromBotAPI(t *testing.T) {
 			t.Fatalf("Bot API и MTProto делят TCP-соединение %s", a)
 		}
 	}
-	// 500 стримов при лимите агента 500 умещаются в небольшое число соединений.
-	if len(streamRA) > 4 {
-		t.Fatalf("слишком много TCP под стримы: %d", len(streamRA))
+	// После прогрева все 500 стримов умещаются в одно TCP (лимит агента 500);
+	// +1 — запас на гонку у границы лимита.
+	if got := len(streamRA); got > 2 {
+		t.Fatalf("стримы заняли %d TCP после прогрева, ждали 1–2", got)
 	}
 }
 
