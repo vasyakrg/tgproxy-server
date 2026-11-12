@@ -374,7 +374,7 @@ func (m *Manager) newInstance(s store.MTProtoSecret) (*instance, error) {
 		TolerateTimeSkewness:        c.TimeSkew,
 		IdleTimeout:                 c.IdleTimeout,
 		HandshakeTimeout:            c.HandshakeTimeout,
-		DomainFrontingIP:            m.o.FrontingAddr.IP.String(),
+		DomainFrontingHost:          m.o.FrontingAddr.IP.String(),
 		DomainFrontingPort:          uint(m.o.FrontingAddr.Port), //nolint:gosec // порт TCP ≥ 0
 		DomainFrontingProxyProtocol: true,
 	})

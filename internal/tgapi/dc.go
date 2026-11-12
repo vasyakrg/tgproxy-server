@@ -6,7 +6,7 @@ import (
 )
 
 // Вшитая таблица адресов дата-центров Telegram. Источник — публичные адреса
-// ядра сети (совпадают с essentials.TelegramCoreAddresses в mtg v2.2.8;
+// ядра сети (совпадают с essentials.TelegramCoreAddresses в mtg v2.3.0;
 // сверка — в internal/mtproto, tgapi не импортирует mtg). Порт всегда 443.
 // Обновляется только релизом.
 var dcTable = map[int]struct{ v4, v6 []netip.AddrPort }{

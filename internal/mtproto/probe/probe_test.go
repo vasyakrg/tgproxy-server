@@ -292,7 +292,7 @@ func startProxy(t *testing.T, secret mtglib.Secret, dcAddr string, frontPort int
 		PreferIP:           "only-ipv4",
 		IdleTimeout:        time.Minute,
 		HandshakeTimeout:   5 * time.Second,
-		DomainFrontingIP:   "127.0.0.1",
+		DomainFrontingHost: "127.0.0.1",
 		DomainFrontingPort: uint(frontPort),
 	})
 	if err != nil {
@@ -342,7 +342,7 @@ func TestRun_ThroughRealMTG(t *testing.T) {
 	if _, err := RunDC(ctxT(t, 10*time.Second), addr, secret.Key, front, -4); err != nil {
 		t.Fatal(err)
 	}
-	if dc.LastDC() != 4 { // mtg берёт abs(dc) при переподключении к DC
+	if dc.LastDC() != -4 { // mtg сохраняет знак media-DC в рукопожатии к Telegram
 		t.Fatalf("media DC: %d", dc.LastDC())
 	}
 }

@@ -1,6 +1,6 @@
 package mtproto
 
-// Контракт-тесты mtg v2.2.8 (M9-T0): фиксируют поведение, на которое опирается
+// Контракт-тесты mtg v2.3.0 (M9-T0): фиксируют поведение, на которое опирается
 // docs/mtproto.md. Настоящий mtglib.Proxy, fake-DC и fronting-листенер на
 // loopback, Network — фейковый. При обновлении mtg падают первыми.
 
@@ -199,29 +199,31 @@ func TestContract_NextAddressOnDialError(t *testing.T) {
 	waitClosed(t, done, "ServeConn")
 }
 
-// Знак DC теряется: mtg берёт abs() (media-DC → тот же DC), к Telegram всегда
-// идёт положительный номер; неизвестный DC → fallback на DC2 или закрытие.
+// Знак DC сохраняется (mtg ≥2.3.0): адреса берутся по abs(dc) (media-DC −2 →
+// адреса DC 2), но в рукопожатии к Telegram и в событиях номер остаётся
+// отрицательным. Неизвестный DC → fallback на DC 2 (со знаком) или закрытие.
 func TestContract_NegativeAndUnknownDC(t *testing.T) {
 	cases := []struct {
-		name     string
-		dc       int
-		fallback bool
-		wantDC   int // 0 — Dial не должно быть
+		name       string
+		dc         int
+		fallback   bool
+		wantDialDC int // DC, по адресам которого идёт Dial; 0 — Dial не должно быть
+		wantDC     int // номер в рукопожатии к Telegram и в EventConnectedToDC
 	}{
-		{"media-dc2", -2, false, 2},
-		{"media-dc1", -1, false, 1},
-		{"media-dc5", -5, false, 5},
-		{"zero-defaults-to-2", 0, false, 2},
-		{"unknown-fallback", 9, true, 2},
-		{"unknown-negative-fallback", -9, true, 2},
-		{"unknown-no-fallback", 9, false, 0},
-		{"int16-min-no-fallback", -32768, false, 0},
+		{"media-dc2", -2, false, 2, -2},
+		{"media-dc1", -1, false, 1, -1},
+		{"media-dc5", -5, false, 5, -5},
+		{"zero-defaults-to-2", 0, false, 2, 2},
+		{"unknown-fallback", 9, true, 2, 2},
+		{"unknown-negative-fallback", -9, true, 2, -2},
+		{"unknown-no-fallback", 9, false, 0, 0},
+		{"int16-min-no-fallback", -32768, false, 0, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, harnessCfg{preferIP: "only-ipv4", allowFallback: tc.fallback})
 			s, done := h.connect(tc.dc)
-			if tc.wantDC == 0 {
+			if tc.wantDialDC == 0 {
 				waitClosed(t, done, "закрытие при неизвестном DC без fallback")
 				if d := h.net.dialLog(); len(d) != 0 {
 					t.Fatalf("Dial при неизвестном DC без fallback: %v", d)
@@ -230,11 +232,11 @@ func TestContract_NegativeAndUnknownDC(t *testing.T) {
 			}
 			s.roundtrip(t, []byte("ping"))
 			dials := h.net.dialLog()
-			if len(dials) != 1 || !slices.Contains(v4Addrs(tc.wantDC), dials[0].Address) {
-				t.Fatalf("Dial %v вне адресов DC %d", dials, tc.wantDC)
+			if len(dials) != 1 || !slices.Contains(v4Addrs(tc.wantDialDC), dials[0].Address) {
+				t.Fatalf("Dial %v вне адресов DC %d", dials, tc.wantDialDC)
 			}
 			if got := h.dc.waitConn(t).dc; got != tc.wantDC {
-				t.Fatalf("к Telegram ушёл DC %d, ждали %d (знак не передаётся)", got, tc.wantDC)
+				t.Fatalf("к Telegram ушёл DC %d, ждали %d (знак media-DC сохраняется)", got, tc.wantDC)
 			}
 			c, _ := findEvent[mtglib.EventConnectedToDC](h.events.snapshot())
 			if c.DC != tc.wantDC {

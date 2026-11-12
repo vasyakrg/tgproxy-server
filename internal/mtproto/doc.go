@@ -1,6 +1,6 @@
 // Package mtproto — серверная часть MTProto-прокси tgproxy (docs/mtproto.md).
 //
-// Пакет закрывает github.com/9seconds/mtg/v2 (pin v2.2.8) тонким адаптером:
+// Пакет закрывает github.com/9seconds/mtg/v2 (pin v2.3.0) тонким адаптером:
 // Manager держит по инстансу mtglib.Proxy на секрет, Network реализуется через
 // агентов, FakeTLS-разводка и лимиты делаются до передачи соединения в mtg.
 //

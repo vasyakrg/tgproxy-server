@@ -1,5 +1,5 @@
 // Package faketls разбирает первую TLS-запись FakeTLS-клиента MTProto и
-// определяет, какому секрету она принадлежит. Алгоритм совпадает с mtg v2.2.8
+// определяет, какому секрету она принадлежит. Алгоритм совпадает с mtg v2.3.0
 // (mtglib/internal/tls/fake): HMAC-SHA256(key, ClientHello с обнулённым random),
 // timestamp в последних 4 байтах random.
 package faketls

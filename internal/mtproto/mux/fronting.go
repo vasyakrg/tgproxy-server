@@ -12,7 +12,7 @@ import (
 var errNotProxyV2 = errors.New("mux: ожидался PROXY v2 с командой PROXY и TCP-адресом")
 
 // FrontingAddr — адрес внутреннего fronting-листенера (127.0.0.1:порт) для
-// mtg (DomainFrontingIP/Port, ProxyProtocol=true).
+// mtg (DomainFrontingHost/Port, ProxyProtocol=true).
 func (l *Listener) FrontingAddr() *net.TCPAddr {
 	return l.front.Addr().(*net.TCPAddr)
 }

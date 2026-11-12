@@ -137,8 +137,10 @@ func (r *mtprotoRelay) serve(w http.ResponseWriter, req *http.Request) {
 		writeAgentError(w, http.StatusNotFound, "", "tgproxy: not found")
 		return
 	}
-	// Отрицательные номера (media) сервер не присылает: mtg отбрасывает знак.
-	// Принимать их агенту незачем — fail-closed, как и 0/мусор.
+	// Отрицательные номера (media) сервер не присылает: upstream.Network
+	// сопоставляет адрес DC с абсолютным номером, а знак media-DC mtg сохраняет
+	// в рукопожатии к Telegram (сам агент его не видит). Принимать отрицательные
+	// агенту незачем — fail-closed, как и 0/мусор.
 	dc, err := strconv.Atoi(req.PathValue("dc"))
 	if err != nil || dc <= 0 {
 		writeAgentError(w, http.StatusBadRequest, "", "tgproxy: mtproto: bad dc")
