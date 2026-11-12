@@ -246,13 +246,21 @@ if [ -n "${PROD_MTPROTO_LINK:-}" ]; then
 fi
 
 # ---------- 6. агенты (только чтение) ----------
+# stderr удалённой команды — отдельно: sshd/bash пишут туда предупреждения локали (setlocale),
+# и в общем потоке они сбивают разбор статуса. Успех — stderr игнорируется, ошибка — показывается.
 rc=0
 for h in ${PROD_AGENT_HOSTS:-}; do
-  st="$(rssh "$h" "$AGENT_USER" "systemctl is-active tgproxy-agent; dpkg-query -W -f='\${Version}' tgproxy" 2>&1 | tr '\n' ' ' || true)"
-  case "$st" in
-    active\ *) log "агент $h: $st" ;;
-    *) warn "агент $h: $st"; rc=1 ;;
-  esac
+  err="$(mktemp)"
+  if st="$(rssh "$h" "$AGENT_USER" "systemctl is-active tgproxy-agent; dpkg-query -W -f='\${Version}' tgproxy" 2>"$err" | tr '\n' ' ')"; then
+    case "$st" in
+      active\ *) log "агент $h: $st" ;;
+      *) warn "агент $h: $st"; rc=1 ;;
+    esac
+  else
+    warn "агент $h: ssh/команда не удалась: $(tr '\n' ' ' < "$err")"
+    rc=1
+  fi
+  rm -f -- "$err"
 done
 
 # ---------- 7. агенты: что дальше ----------
